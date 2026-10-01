@@ -1,0 +1,44 @@
+{% extends "base.jinja" %}
+{% set narrow = true %}
+{% block title %}نوبت ثبت شد — {{ clinic }}{% endblock %}
+{% block body %}
+<div class="card center" style="margin-top:18px">
+  <div style="font-size:34px">✓</div>
+  <h1 style="margin-bottom:.2em">نوبت شما ثبت شد</h1>
+  <p class="muted">{{ appt.full_name }} عزیز، به {{ clinic }} خوش میایم.</p>
+
+  <div style="margin:16px 0">
+    <div class="tiny muted" style="margin-bottom:6px">کد پیگیری</div>
+    <div class="code">{{ appt.tracking_code }}</div>
+  </div>
+
+  <div class="table-wrap" style="text-align:right">
+    <table>
+      <tbody>
+        <tr><th>روز و تاریخ</th><td>{{ appt.day.long }}</td></tr>
+        <tr><th>ساعت</th><td>{{ appt.time_fa }} — کابین {{ appt.cabin_fa }}</td></tr>
+        <tr><th>وضعیت</th><td><span class="tag {{ appt.status }}">{{ status_labels[appt.status] }}</span></td></tr>
+        {% if appt.orthopedist %}<tr><th>پزشک ارتوپد</th><td>{{ appt.orthopedist }}</td></tr>{% endif %}
+        {% if appt.note %}<tr><th>توضیح شما</th><td>{{ appt.note }}</td></tr>{% endif %}
+        <tr><th>آدرس</th><td>{{ address }}</td></tr>
+        <tr><th>تلفن</th><td>{{ phone_disp }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="notice info" style="margin-top:16px;text-align:right">
+    <b>پیامک یادآوری:</b>
+    {% if reminder %}
+      یک پیامک تأیید حضور برای شما ثبت شد ({{ reminder.status }}).
+      اگر تا {{ fa(lead_min) }} دقیقه‌ی مانده به نوبت پیامک رسید،
+      در صورت حضور قطعی عدد <b>۱</b> و در صورت عدم حضور عدد <b>۲</b> را پاسخ کنید.
+    {% else %}
+      حدود {{ fa(lead_min) }} دقیقه پیش از نوبت پیامک تأیید می‌آید؛
+      در صورت حضور قطعی عدد <b>۱</b> را پاسخ کنید تا در لیست مطب «حضور قطعی ✓» بخورد.
+    {% endif %}
+  </div>
+
+  <p class="tiny muted">لطفاً ۱۰ دقیقه زودتر برسید. برای لغو یا جابه‌جایی به
+    <a href="/booking/reserve">جدول نوبت‌ها</a> بروید یا تماس بگیرید.</p>
+</div>
+{% endblock %}

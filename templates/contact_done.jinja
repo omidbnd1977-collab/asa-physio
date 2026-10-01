@@ -1,0 +1,11 @@
+{% extends "base.jinja" %}
+{% set narrow = true %}
+{% block title %}درخواست ثبت شد — {{ clinic }}{% endblock %}
+{% block body %}
+<div class="card center" style="margin-top:22px">
+  <div style="font-size:30px">✓</div>
+  <h1>درخواست شما ثبت شد</h1>
+  <p class="muted">در تب «درخواست‌های سایت» پنل پزشک قرار می‌گیرد و با شما تماس می‌گیریم.</p>
+  <a class="btn" href="/booking">رزرو نوبت</a>
+</div>
+{% endblock %}

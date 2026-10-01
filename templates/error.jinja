@@ -1,0 +1,12 @@
+{% extends "base.jinja" %}
+{% set narrow = true %}
+{% block title %}{{ status }} — {{ clinic }}{% endblock %}
+{% block body %}
+<div class="card" style="margin-top:22px">
+  <h1>{{ status }}</h1>
+  <p>{{ message }}</p>
+  <p class="mono muted tiny">code: {{ code }}</p>
+  <a class="btn ghost" href="/">بازگشت به خانه</a>
+  <a class="btn ghost" href="/booking">رزرو نوبت</a>
+</div>
+{% endblock %}

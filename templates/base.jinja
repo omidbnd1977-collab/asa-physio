@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="csrf-token" content="{{ csrf }}">
+<title>{% block title %}{{ clinic }}{% endblock %}</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap bar">
+    <a class="brand" href="/">
+      <span class="mark">آ</span>
+      <span class="who"><b>{{ clinic }}</b><span>فیزیوتراپی و توانبخشی</span></span>
+    </a>
+    <nav class="links">
+      {% if is_admin %}<a href="/admin">پنل پزشک</a>{% endif %}
+      {% if patient %}
+        <a href="/booking/reserve">نوبت‌های من</a>
+        <a href="/booking/logout">خروج</a>
+      {% else %}
+        <a href="/booking">رزرو نوبت</a>
+        <a href="/booking/login">ورود بیماران قبلی</a>
+      {% endif %}
+      <span class="pill-env" title="APP_ENV">{{ env }}</span>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="wrap{% if narrow %} wrap-narrow{% endif %}">
+    {% block body %}{% endblock %}
+  </div>
+</main>
+
+<footer class="foot">
+  <div class="wrap row">
+    <span>{{ clinic }} · {{ address }}</span>
+    <span class="spacer"></span>
+    <span>{{ phone_disp }}</span>
+    <span class="muted">ساعت کاری {{ slot_times|first }} تا {{ slot_times[-1] }} (آخرین نوبت)</span>
+  </div>
+</footer>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+{% block scripts %}{% endblock %}
+</body>
+</html>

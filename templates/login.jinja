@@ -1,0 +1,34 @@
+{% extends "base.jinja" %}
+{% set narrow = true %}
+{% block title %}ورود بیماران — {{ clinic }}{% endblock %}
+{% block body %}
+<div class="card" style="margin-top:18px">
+  <h1>ورود بیماران قبلی</h1>
+  <p class="muted tiny">کد ملی + تاریخ تولد باید هر دو با رکورد ثبت‌نام یکی باشند.</p>
+  <div id="login-box"></div>
+
+  <form method="post" action="/booking/login" id="login-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <div class="field">
+      <label for="national_code">کد ملی</label>
+      <input id="national_code" name="national_code" required inputmode="numeric" maxlength="10"
+             class="digits" placeholder="۱۰ رقم">
+    </div>
+    <div class="field">
+      <label>تاریخ تولد (شمسی)</label>
+      <div class="three">
+        <input name="birth_year" required inputmode="numeric" maxlength="4" class="digits auto-next" placeholder="سال">
+        <input name="birth_month" required inputmode="numeric" maxlength="2" class="digits auto-next" placeholder="ماه">
+        <input name="birth_day" required inputmode="numeric" maxlength="2" class="digits" placeholder="روز">
+      </div>
+    </div>
+    <button class="btn big" type="submit">ورود</button>
+  </form>
+
+  <hr>
+  <p class="tiny muted">یادتان نیست؟ <a href="/booking/register">ثبت‌نام</a> را دوباره انجام
+    دهید — رکورد به‌روز می‌شود و نوبت‌های قبلی سر جایشان می‌مانند.
+    پس از چند تلاشِ اشتباه، ورود برای آن کد ملی موقتاً قفل می‌شود.</p>
+</div>
+{% endblock %}
+{% block scripts %}<script src="/static/site.js"></script>{% endblock %}

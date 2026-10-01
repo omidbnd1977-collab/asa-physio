@@ -1,0 +1,367 @@
+{% extends "base.jinja" %}
+{% block title %}پنل پزشک — {{ clinic }}{% endblock %}
+{% block body %}
+<div class="flex" style="margin:14px 0 12px">
+  <h1 style="margin:0">پنل پزشک</h1>
+  <span class="tag">{{ systems.tz }}</span>
+  <span class="tiny muted">{{ systems.server_now }}</span>
+  <span class="spacer"></span>
+  <a class="btn ghost mini" href="/booking/reserve" target="_blank">نمای بیمار</a>
+  <a class="btn ghost mini" href="/admin/logout">خروج</a>
+</div>
+
+<div class="grid cols-4" style="margin-bottom:14px">
+  <div class="stat"><div class="k">نوبت امروز</div><div class="v">{{ fa(stats.today) }}</div>
+    <div class="s">ظرفیت روز {{ fa(stats.capacity_day) }}</div></div>
+  <div class="stat"><div class="k">حضور قطعی</div><div class="v">{{ fa(stats.coming) }}</div>
+    <div class="s">از پاسخ «۱» به پیامک</div></div>
+  <div class="stat"><div class="k">جلسات انجام‌شده</div><div class="v">{{ fa(stats.sessions_counter) }}</div>
+    <div class="s">شمارنده‌ی لایه ۱۴ · {{ fa(stats.done) }} نوبتِ «انجام شد»</div></div>
+  <div class="stat"><div class="k">هزینه‌ی پیامک ماه</div><div class="v">${{ fa(stats.month_cost) }}</div>
+    <div class="progress{% if stats.month_cost > stats.budget %} over{% endif %}">
+      <i style="width:{{ [100, (stats.month_cost / stats.budget * 100)|round|int]|min }}%"></i></div>
+    <div class="s">سقف ${{ fa(stats.budget) }} · {{ fa(stats.sms_sent) }} ارسال · {{ fa(stats.sms_bad) }} خطا</div></div>
+</div>
+
+<div class="tabs" role="tablist">
+  <button class="tab on" data-tab="appts">🗓 نوبت‌ها <span class="n">{{ fa(days|length) }}</span></button>
+  <button class="tab" data-tab="pat">👤 بیماران <span class="n">{{ fa(stats.patients) }}</span></button>
+  <button class="tab" data-tab="sms">✉️ پیامک‌ها <span class="n">{{ fa(stats.sms_sent + stats.sms_bad) }}</span></button>
+  <button class="tab" data-tab="req">📨 درخواست‌های سایت <span class="n">{{ fa(stats.requests_open) }}</span></button>
+  <button class="tab" data-tab="sys">⚙️ سامانه</button>
+</div>
+
+<!-- ═══════════════ نوبت‌ها ═══════════════ -->
+<section class="pane on" id="pane-appts">
+  {% if not days %}<div class="card">نوبتی ثبت نشده.</div>{% endif %}
+  {% for day in days %}
+  <div class="day-h"><b>{{ day.day.long }}</b>
+    <span class="c">{{ fa(day.rows|length) }} نوبت{% if day.jdate == now_jalali.iso %} · امروز{% endif %}</span>
+    <span class="line"></span>
+    <button class="btn soft mini" data-open-picker="new:{{ day.jdate }}">+ ثبت نوبت در این روز</button>
+  </div>
+  <div class="table-wrap"><table>
+    <thead><tr>
+      <th>ساعت / کابین</th><th>بیمار</th><th>تلفن</th><th>وضعیت</th><th>توضیح بیمار</th>
+      <th>پزشک ارتوپد</th><th>MRI</th><th>داروها</th><th class="nowrap">کارها</th>
+    </tr></thead>
+    <tbody>
+    {% for a in day.rows %}
+      <tr class="{% if a.status == 'coming' %}tile-coming{% endif %}">
+        <td class="nowrap"><b>{{ a.time_fa }}</b> <span class="muted tiny">کابین {{ a.cabin_fa }}</span>
+          <div><span class="tag">{{ kind_labels[a.kind] }}</span></div></td>
+        <td>{{ a.full_name }}<div class="tiny muted">{{ a.tracking_code }} · {{ a.created_at[:10] }}</div></td>
+        <td class="nowrap mono tiny">{{ a.phone_disp }}</td>
+        <td class="nowrap"><span class="tag {{ a.status }}">{{ status_labels[a.status] }}</span>
+          {% if a.confirm_reply_at %}<div class="tiny muted" style="color:var(--good-ink)">پاسخ داده ✓</div>{% endif %}</td>
+        <td class="tiny" style="max-width:220px">{{ a.note or "—" }}</td>
+        <td class="tiny">{{ a.orthopedist or "—" }}</td>
+        <td class="nowrap">
+          {% if a.mri_file %}<button class="btn ghost mini" data-view="mri" data-pid="{{ a.patient_id }}">تصویر</button>{% endif %}
+          {% if a.mri_url %}<a class="tiny" href="{{ a.mri_url }}" target="_blank" rel="noopener nofollow">لینک</a>{% endif %}
+          {% if not a.mri_file and not a.mri_url %}<span class="tiny muted">—</span>{% endif %}
+        </td>
+        <td class="nowrap">
+          {% if a.meds_photo %}<button class="btn ghost mini" data-view="photo" data-pid="{{ a.patient_id }}">عکس</button>
+          {% else %}<span class="tiny muted">—</span>{% endif %}
+          <label class="btn ghost mini" style="cursor:pointer">بارگذاری MRI
+            <input type="file" hidden data-upload-mri="{{ a.patient_id }}" accept="image/*,application/pdf"></label>
+        </td>
+        <td class="nowrap">
+          <div class="btn-row">
+            <button class="btn mini ghost" data-act="done" data-id="{{ a.id }}">انجام شد</button>
+            <button class="btn mini ghost" data-act="no_show" data-id="{{ a.id }}">مراجعه نشد</button>
+            <button class="btn mini soft" data-open-picker="move:{{ a.id }}:{{ day.jdate }}">تغییر زمان</button>
+            <button class="btn mini soft" data-open-picker="followup:{{ a.id }}:{{ day.jdate }}">جلسه بعدی</button>
+            <button class="btn mini ghost" data-remind="{{ a.id }}">یادآوری</button>
+            {% if a.status not in ('cancelled','done') %}
+            <button class="btn mini danger" data-cancel="{{ a.id }}">لغو + پیامک</button>
+            {% endif %}
+            <button class="btn mini" data-session="{{ a.id }}" data-pid="{{ a.patient_id }}"
+                    data-name="{{ a.full_name }}">🩺 ثبت جلسه</button>
+          </div>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody></table></div>
+  {% endfor %}
+</section>
+
+<!-- ═══════════════ بیماران ═══════════════ -->
+<section class="pane" id="pane-pat">
+  <div class="search">
+    <input type="search" id="pat-q" placeholder="جست‌وجو: نام، تلفن یا اثرانگشت کد ملی…">
+    <span class="tiny muted" id="pat-count"></span>
+  </div>
+  <div class="grid cols-2" id="pat-list">
+    {% for p in patients %}
+    <div class="card tight" data-search="{{ p.full_name }} {{ p.phone_disp }} {{ p.nc_fp }}">
+      <div class="flex">
+        <h3 style="margin:0">{{ p.full_name }}</h3>
+        <span class="tag booked">{{ p.appt_count }} نوبت</span>
+        <span class="tag">{{ p.session_count }} جلسه</span>
+        {% if p.last_session_j %}<span class="tiny muted">آخرین جلسه {{ p.last_session_j.medium }}</span>{% endif %}
+        <span class="spacer"></span>
+        <span class="mono tiny muted">{{ p.phone_disp }}</span>
+      </div>
+      <dl class="kv" style="margin-top:8px">
+        <dt>تاریخ تولد</dt><dd>{{ p.birth.slash }} ({{ p.birth.weekday_name }})</dd>
+        <dt>کد ملی</dt><dd class="mono tiny">{{ p.nc_fp }} <span class="muted">— خودِ کد به این صفحه نمی‌آید</span></dd>
+        <dt>موبایل</dt><dd class="mono tiny">{{ p.mobile }}</dd>
+        {% if p.mri_url %}<dt>لینک MRI</dt><dd><a href="{{ p.mri_url }}" target="_blank" rel="noopener nofollow">{{ p.mri_url[:60] }}</a></dd>{% endif %}
+        {% if p.orthopedist %}<dt>پزشک ارتوپد</dt><dd>{{ p.orthopedist }}</dd>{% endif %}
+      </dl>
+      <div class="btn-row" style="margin-top:8px">
+        <button class="btn mini ghost" data-view="photo" data-pid="{{ p.id }}">عکس داروها</button>
+        <button class="btn mini ghost" data-view="mri" data-pid="{{ p.id }}">فایل MRI</button>
+        <button class="btn mini soft" data-history="{{ p.id }}" data-name="{{ p.full_name }}">پرونده و تاریخچه</button>
+      </div>
+      <div class="field" style="margin-top:10px">
+        <label>یادداشت پزشک</label>
+        <textarea data-note="{{ p.id }}" maxlength="4000" placeholder="مثال: حساسیت به اولتراسوند">{{ p.note or "" }}</textarea>
+        <div class="hint">ذخیره با کلیک بیرون از کادر.</div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<!-- ═══════════════ پیامک‌ها ═══════════════ -->
+<section class="pane" id="pane-sms">
+  <div class="grid cols-2">
+    <div class="card tight">
+      <h3>شبیه‌ساز پاسخ بیمار</h3>
+      <p class="tiny muted">همان قرارگاهی که سرویس پیامک صدا می‌زند: <code>POST /api/sms/inbound</code>
+        با هدر <code>X-SMS-Secret</code>. بدون این هدر ⇒ ۴۰۳.</p>
+      <div class="field"><label>موبایل بیمار</label>
+        <input type="text" id="in-phone" class="mono" value="00989121000000"></div>
+      <div class="field"><label>متن پاسخ</label>
+        <input type="text" id="in-body" value="1" placeholder="۱ / بله / ۲ / نه"></div>
+      <div class="field"><label>رمز وبهوک</label>
+        <input type="text" id="in-secret" class="mono" value=""></div>
+      <div class="btn-row"><button class="btn mini" id="in-send">ارسال به وبهوک</button>
+        <button class="btn mini ghost" id="in-bad">بدون رمز (باید ۴۰۳ شود)</button></div>
+      <pre id="in-out" class="tiny mono muted" style="white-space:pre-wrap;margin-top:10px"></pre>
+    </div>
+    <div class="card tight">
+      <h3>پاسخ‌های دریافتی</h3>
+      <div class="table-wrap"><table><thead><tr><th>تلفن</th><th>متن</th><th>تفسیر</th><th>نوبت</th></tr></thead>
+      <tbody>
+      {% for i in inbound %}
+        <tr><td class="mono tiny">{{ i.phone }}</td><td>{{ i.body }}</td>
+          <td>{% if i.normalized == 'yes' %}<span class="tag coming">حضور ✓</span>
+              {% elif i.normalized == 'no' %}<span class="tag no_show">عدم حضور</span>
+              {% else %}<span class="tag">نامشخص</span>{% endif %}</td>
+          <td class="tiny">{{ i.full_name or "—" }}</td></tr>
+      {% else %}<tr><td colspan="4" class="muted tiny">پاسخی نرسیده.</td></tr>{% endfor %}
+      </tbody></table></div>
+    </div>
+  </div>
+
+  <div class="card tight">
+    <h3>متن دقیق هر پیامک، وضعیت ارسال و خطاها</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>زمان</th><th>رویداد</th><th>بیمار</th><th>به</th><th>متن</th><th>وضعیت</th><th>هزینه</th></tr></thead>
+      <tbody>
+      {% for m in sms_rows %}
+        <tr>
+          <td class="tiny nowrap mono">{{ m.created_at[:16] }}</td>
+          <td class="nowrap"><span class="tag">{{ m.event_label }}</span></td>
+          <td class="tiny">{{ m.full_name or "—" }}</td>
+          <td class="mono tiny nowrap">{{ m.to_disp }}</td>
+          <td class="tiny" style="max-width:420px;white-space:pre-wrap">{{ m.body }}</td>
+          <td class="nowrap">
+            {% if m.status == 'sent' %}<span class="tag coming">ارسال شد</span>
+            {% elif m.status == 'failed' %}<span class="tag no_show">خطا</span>
+            {% elif m.status == 'skipped_budget' %}<span class="tag warn">سقف ماهانه</span>
+            {% else %}<span class="tag">در صف</span>{% endif %}
+            {% if m.error %}<div class="tiny muted">{{ m.error }}</div>{% endif %}
+          </td>
+          <td class="tiny mono">${{ fa((m.cost_usd or 0)|round(3)) }}</td>
+        </tr>
+      {% endfor %}
+      </tbody></table></div>
+  </div>
+</section>
+
+<!-- ═══════════════ درخواست‌های سایت ═══════════════ -->
+<section class="pane" id="pane-req">
+  <div class="card tight">
+    <h3>فرم سریع تماس + سنجش نتیجه</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>زمان</th><th>نام</th><th>تلفن</th><th>موضوع</th><th>پیام</th><th>منبع</th><th></th></tr></thead>
+      <tbody>
+      {% for r in site_reqs %}
+        <tr>
+          <td class="tiny nowrap mono">{{ r.created_at[:16] }}</td>
+          <td>{{ r.name }}</td><td class="mono tiny">{{ r.phone_disp }}</td>
+          <td><span class="tag">{{ r.topic }}</span></td>
+          <td class="tiny" style="max-width:340px">{{ r.message }}</td>
+          <td class="tiny muted">{{ r.source }}</td>
+          <td class="nowrap">
+            <span class="tiny {% if r.handled %}" style="color:var(--good-ink)">دیده شد{% else %}muted">باز{% endif %}</span>
+            <button class="btn mini ghost" data-handle="{{ r.id }}">تغییر وضعیت</button>
+          </td>
+        </tr>
+      {% else %}<tr><td colspan="7" class="muted tiny">درخواستی نیست.</td></tr>{% endfor %}
+      </tbody></table></div>
+  </div>
+</section>
+
+<!-- ═══════════════ سامانه ═══════════════ -->
+<section class="pane" id="pane-sys">
+  <div class="grid cols-2">
+    <div class="card tight">
+      <h3>قطع‌کننده و کانال پیامک</h3>
+      <dl class="kv">
+        <dt>کانال فعال</dt><dd><span class="tag booked">{{ systems.provider }}</span>
+          <span class="tiny muted">kavenegar · smsir · webhook · file</span></dd>
+        <dt>محافظ تولید</dt><dd><span class="dot {% if env == 'production' and systems.provider == 'file' %}off{% else %}on{% endif %}"></span>{{ systems.prod_block }}</dd>
+        <dt>کش / Cookie</dt><dd class="tiny">{{ systems.cookie }}</dd>
+        <dt>منطقه‌ی زمانی</dt><dd>{{ systems.tz }} — شمسی و «گذشته» با همین ساعت سنجیده می‌شود</dd>
+        <dt>ساعت مطب</dt><dd class="tiny">{{ systems.slot_math }}</dd>
+        <dt>پشتیبان</dt><dd class="mono tiny">{{ systems.db_path }}</dd>
+        <dt>پوشه‌ی فایل‌ها</dt><dd class="mono tiny">{{ systems.upload_dir }}</dd>
+        <dt>لاگ پیامک (file)</dt><dd class="mono tiny">{{ systems.sms_log }}</dd>
+      </dl>
+      <hr>
+      <h4>یادآوری خودکار</h4>
+      <p class="tiny muted">هر {{ fa(systems.interval) }} ثانیه داخل برنامه · آخرین اجرا:
+        {{ fa(systems.last_scan.sent) }} ارسال، {{ fa(systems.last_scan.skipped) }} رد شده
+        (منبع {{ systems.last_scan.source }}، ساعت {{ systems.last_scan.at }}).</p>
+      <pre class="tiny mono" style="background:#f6f8f7;padding:10px;border-radius:10px;overflow:auto">*/5 * * * * cd /srv/asa &amp;&amp; python3 -m api.reminders &gt;&gt; data/reminders.log 2&gt;&amp;1</pre>
+      <p class="tiny muted">ادعا و علامتِ «ارسال‌شده» با یک <code>UPDATE … WHERE confirm_sent_at IS NULL</code>
+        اتمی انجام می‌شود؛ اگر ارسال شکست بخورد علامت پاک می‌شود و تلاش بعدی می‌ماند.</p>
+    </div>
+
+    <div class="card tight">
+      <h3>محدودیت‌ها (لایه ۰۹)</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>سقف</th><th>مقدار</th></tr></thead>
+        <tbody>
+        {% for l in systems.limits %}
+          <tr><td>{{ l.label }}</td><td class="mono">{{ fa(l.limit) }}</td></tr>
+        {% endfor %}
+        </tbody></table></div>
+      <h4 style="margin-top:14px">شمارنده‌های زنده</h4>
+      {% if systems.live %}
+      <div class="table-wrap"><table>
+        <thead><tr><th>سقف</th><th>کلید (اثرانگشت)</th><th>خورده</th><th>ریست</th></tr></thead>
+        <tbody>
+        {% for x in systems.live %}
+          <tr><td>{{ x.bucket }}</td><td class="mono tiny">{{ x.key[:14] }}…</td>
+              <td>{{ fa(x.used) }}/{{ fa(x.limit) }}</td><td class="tiny">{{ fa(x.reset_in) }}s</td></tr>
+        {% endfor %}
+        </tbody></table></div>
+      {% else %}<p class="tiny muted">فعلاً فعال است.</p>{% endif %}
+
+      <h4 style="margin-top:14px">فهرست‌های رشدکرده</h4>
+      <div class="bars">
+        {% for g in body_parts %}
+        <div class="bar"><span>{{ g.grp }}</span>
+          <span class="tr"><i style="width:{{ [100, (g['items']|length * 8)]|min }}%"></i></span>
+          <span class="tiny">{{ fa(g['items']|length) }}</span></div>
+        {% endfor %}
+        <div class="bar"><span>درمان‌ها</span>
+          <span class="tr"><i style="width:{{ [100, (treatments|length * 4)]|min }}%"></i></span>
+          <span class="tiny">{{ fa(treatments|length) }}</span></div>
+      </div>
+      <p class="tiny muted">مواردی که پزشک نوشته (<code>source=physician</code>) از آن لحظه
+        برای همه در کرکره هست؛ تکراری با ۴۰۹ رد می‌شود.</p>
+      <hr>
+      <h4>بهداشت داده</h4>
+      <p class="tiny muted">در لاگ‌ها شماره و کد ملی فقط به شکل <code>fp_…</code> می‌آیند ·
+        فایل‌های بالینی با <code>Cache-Control: private, no-store</code> و فقط برای کارکنان سرو
+        می‌شوند · نوع فایل با magic bytes سنجیده می‌شود.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ مودال انتخاب ساعت ═══════════════ -->
+<div class="modal" id="picker">
+  <div class="box">
+    <header><h3 id="picker-title">جدول ۱۲ × {{ fa(cabins) }}</h3>
+      <button class="x" data-close aria-label="بستن">×</button></header>
+    <div class="body">
+      <div class="flex" style="margin-bottom:10px">
+        <label class="lbl" style="margin:0">روز:</label>
+        <select id="picker-day" style="max-width:260px"></select>
+        <span class="spacer"></span>
+        <span class="tiny muted" id="picker-cap"></span>
+      </div>
+      <div class="slots" id="picker-slots"></div>
+      <div class="field" style="margin-top:12px"><label>توضیح (اختیاری)</label>
+        <input type="text" id="picker-note" maxlength="400"></div>
+      <div id="picker-msg"></div>
+      <div class="btn-row" style="margin-top:10px">
+        <button class="btn" id="picker-ok" disabled>ثبت</button>
+        <button class="btn ghost" data-close>انصراف</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ مودال جلسه‌ی درمان ═══════════════ -->
+<div class="modal" id="session">
+  <div class="box">
+    <header><h3>🩺 ثبت جلسه — <span id="session-name"></span></h3>
+      <button class="x" data-close aria-label="بستن">×</button></header>
+    <div class="body">
+      <div class="grid cols-2">
+        <div class="combo">
+          <span class="lbl">عضو / آسیب درگیر (چندتایی)</span>
+          <div class="pick" id="parts"></div>
+          <div class="addrow">
+            <input type="text" id="add-part" placeholder="مورد در فهرست نبود؟">
+            <button class="btn mini" data-add="part">ثبت در فهرست</button>
+          </div>
+        </div>
+        <div class="combo">
+          <span class="lbl">درمان انجام‌شده (چندتایی)</span>
+          <div class="pick" id="treats"></div>
+          <div class="addrow">
+            <input type="text" id="add-treat" placeholder="مورد در فهرست نبود؟">
+            <button class="btn mini" data-add="treat">ثبت در فهرست</button>
+          </div>
+        </div>
+      </div>
+      <div class="grid cols-2" style="margin-top:12px">
+        <div class="field"><label>شدت درد قبل (۰–۱۰)</label>
+          <input type="text" id="pain-before" class="digits" maxlength="2"></div>
+        <div class="field"><label>شدت درد بعد (۰–۱۰)</label>
+          <input type="text" id="pain-after" class="digits" maxlength="2"></div>
+      </div>
+      <div class="field"><label>یافته‌های معاینه</label><textarea id="findings" maxlength="2000"></textarea></div>
+      <div class="field"><label>برنامه‌ی جلسه‌ی بعد</label><textarea id="next-plan" maxlength="2000"></textarea></div>
+      <label class="check"><input type="checkbox" id="notify"> ارسال پیامک خلاصه‌ی جلسه برای بیمار</label>
+      <div id="session-msg"></div>
+      <div class="btn-row" style="margin-top:12px">
+        <button class="btn" id="session-ok">ثبت جلسه</button>
+        <button class="btn ghost" data-close>انصراف</button>
+        <span class="tiny muted">با ثبت، نوبت خودکار «انجام شد» می‌شود.</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ مودال پرونده ═══════════════ -->
+<div class="modal" id="profile">
+  <div class="box">
+    <header><h3 id="profile-name">پرونده</h3><button class="x" data-close aria-label="بستن">×</button></header>
+    <div class="body" id="profile-body"></div>
+  </div>
+</div>
+
+<!-- ═══════════════ نورچین ═══════════════ -->
+<div class="modal" id="viewer">
+  <div class="box lightbox">
+    <header><h3 id="viewer-title">فایل</h3><button class="x" data-close aria-label="بستن">×</button></header>
+    <div class="body" id="viewer-body" style="padding:10px"></div>
+  </div>
+</div>
+
+<script id="data-body-parts" type="application/json">{{ body_parts|tojson }}</script>
+<script id="data-treatments" type="application/json">{{ treatments|tojson }}</script>
+{% endblock %}
+{% block scripts %}<script src="/static/site.js"></script>
+<script src="/static/admin.js"></script>{% endblock %}

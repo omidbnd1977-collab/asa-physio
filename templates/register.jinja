@@ -1,0 +1,77 @@
+{% extends "base.jinja" %}
+{% set narrow = true %}
+{% block title %}ثبت‌نام بیمار — {{ clinic }}{% endblock %}
+{% block body %}
+<div class="card" style="margin-top:18px">
+  <h1>ثبت‌نام</h1>
+  <p class="muted tiny">فیلدهای ستاره‌دار اجباری‌اند. ارقام فارسی همه‌جا پذیرفته می‌شود.</p>
+  {% if error %}<div class="notice err">{{ error }}</div>{% endif %}
+
+  <form method="post" action="/booking/register" enctype="multipart/form-data" id="reg-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+
+    <div class="field">
+      <label for="full_name">نام و نام خانوادگی <span class="req">*</span></label>
+      <input id="full_name" name="full_name" required minlength="4" maxlength="90"
+             value="{{ values.get('full_name','') }}" autocomplete="name" placeholder="مثال: مریم رضایی">
+      <div class="hint">حداقل دو کلمه.</div>
+    </div>
+
+    <div class="field">
+      <label for="national_code">کد ملی <span class="req">*</span></label>
+      <input id="national_code" name="national_code" required inputmode="numeric" maxlength="10"
+             class="digits" value="{{ values.get('national_code','') }}" placeholder="۱۰ رقم">
+      <div class="hint">با رقمِ کنترل سنجیده می‌شود. برای ورودِ بعدی لازم است.</div>
+      <div class="msg" data-for="national_code"></div>
+    </div>
+
+    <div class="field">
+      <label>تاریخ تولد (شمسی) <span class="req">*</span></label>
+      <div class="three">
+        <input name="birth_year" required inputmode="numeric" maxlength="4" class="digits auto-next"
+               value="{{ values.get('birth_year','') }}" placeholder="سال" aria-label="سال تولد">
+        <input name="birth_month" required inputmode="numeric" maxlength="2" class="digits auto-next"
+               value="{{ values.get('birth_month','') }}" placeholder="ماه" aria-label="ماه تولد">
+        <input name="birth_day" required inputmode="numeric" maxlength="2" class="digits"
+               value="{{ values.get('birth_day','') }}" placeholder="روز" aria-label="روز تولد">
+      </div>
+      <div class="hint">ماسک خودکار: با پر شدن هر کادر به کادر بعد می‌روید.</div>
+    </div>
+
+    <div class="field">
+      <label for="mobile">شماره موبایل <span class="req">*</span></label>
+      <input id="mobile" name="mobile" required inputmode="tel" maxlength="16"
+             value="{{ values.get('mobile','') }}" placeholder="۰۹۱۲۱۱۱۲۲۳۳">
+      <div class="hint"><code>+98</code>، <code>0098</code> و <code>09…</code> همه یکسان نرمال می‌شوند.</div>
+    </div>
+
+    <div class="field">
+      <label for="mri_url">لینک MRI <span class="muted tiny">(اختیاری)</span></label>
+      <input id="mri_url" name="mri_url" type="url" maxlength="300"
+             value="{{ values.get('mri_url','') }}" placeholder="https://…">
+      <div class="hint">فقط لینک؛ فایل را می‌توانید در همان کادر بعدی بفرستید یا بعداً پزشک بارگذاری کند.</div>
+    </div>
+
+    <div class="field">
+      <label for="orthopedist">نام پزشک ارتوپد <span class="muted tiny">(اختیاری)</span></label>
+      <input id="orthopedist" name="orthopedist" maxlength="90" value="{{ values.get('orthopedist','') }}">
+    </div>
+
+    <div class="field">
+      <label for="meds_photo">عکس داروهای مصرفی <span class="muted tiny">(اختیاری)</span></label>
+      <input id="meds_photo" name="meds_photo" type="file" accept="image/jpeg,image/png,image/webp,application/pdf">
+      <div class="hint">JPG / PNG / WEBP / PDF — حداکثر ۵ مگابایت.
+        نوع فایل با محتوایش سنجیده می‌شود، نه با پسوند.</div>
+    </div>
+
+    <div id="reg-out"></div>
+    <button class="btn big" type="submit">ثبت‌نام و رفتن به جدول نوبت‌ها</button>
+  </form>
+
+  <hr>
+  <p class="tiny muted">پس از ثبت، پیامک «اطلاعات شما در {{ clinic }} ثبت شد» می‌رود و
+    مستقیم به جدول نوبت‌ها می‌روید. عکس داروها و فایل MRI هیچ‌وقت از مسیر عمومی
+    باز نمی‌شوند.</p>
+</div>
+{% endblock %}
+{% block scripts %}<script src="/static/site.js"></script>{% endblock %}

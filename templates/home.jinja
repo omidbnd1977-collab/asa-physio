@@ -1,0 +1,74 @@
+{% extends "base.jinja" %}
+{% block title %}{{ clinic }} — رزرو آنلاین نوبت{% endblock %}
+{% block body %}
+<section class="hero">
+  <div class="wrap grid-2">
+    <div>
+      <h1>نوبت فیزیوتراپی را آنلاین بگیرید</h1>
+      <p class="lead">جدول ۳۰ روزِ پیش‌رو، هر نیم‌ساعت از {{ slot_times[0] }} تا {{ slot_times[-1] }}.
+        ثبت‌نام یک‌بار است؛ بعد از آن با کد ملی و تاریخ تولد وارد می‌شوید.</p>
+      <div class="cta-row">
+        <a class="btn big" style="width:auto" href="/booking">رزرو نوبت</a>
+        <a class="btn ghost" style="width:auto" href="/booking/login">قبلاً ثبت‌نام کرده‌ام</a>
+      </div>
+      <div class="kpis">
+        <div class="kpi"><b>{{ fa(stats.capacity) }}</b><span>ظرفیت روزانه</span></div>
+        <div class="kpi"><b>{{ fa(stats.done) }}</b><span>جلسه‌ی انجام‌شده</span></div>
+        <div class="kpi"><b>{{ fa(stats.patients) }}</b><span>بیماران ثبت‌شده</span></div>
+        <div class="kpi"><b>{{ "آزاد" if stats.open_today else "پر" }}</b><span>امروز</span></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>مسیر بیمار</h2>
+      <ol class="steps">
+        <li>ثبت‌نام با کد ملی و تاریخ تولد شمسی</li>
+        <li>انتخاب روز و ساعت از جدول ۱۲ خانه</li>
+        <li>دریافت کد پیگیری و پیامک تأیید</li>
+        <li>یادآوری دو ساعت قبل؛ با پاسخ «۱» حضور قطعی می‌شود</li>
+      </ol>
+      <hr>
+      <p class="tiny muted">کابین‌ها موازی کار می‌کنند؛ اگر ساعتی پر باشد همان لحظه
+        از رزرو شما جلوگیری می‌شود و جدول تازه می‌شود.</p>
+    </div>
+  </div>
+</section>
+
+<div class="grid cols-2" style="margin-top:18px">
+  <form class="card" id="contact-form" method="post" action="/contact">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <h2>فرم سریع تماس</h2>
+    <p class="tiny muted">پاسخ با پیامک. این درخواست‌ها در پنل، تب «درخواست‌های سایت» دیده می‌شوند.</p>
+    <div class="field"><label>نام <span class="req">*</span></label>
+      <input type="text" name="name" required maxlength="80" placeholder="نام و نام خانوادگی"></div>
+    <div class="field"><label>موبایل <span class="req">*</span></label>
+      <input type="tel" name="phone" required inputmode="numeric" placeholder="۰۹۱۲۱۱۱۲۲۳۳"></div>
+    <div class="field"><label>موضوع</label>
+      <select name="topic"><option>عمومی</option><option>بیمه</option><option>سوال درمانی</option>
+        <option>هماهنگی جلسه</option></select></div>
+    <div class="field"><label>پیام <span class="req">*</span></label>
+      <textarea name="message" required maxlength="1000" placeholder="خیلی کوتاه بنویسید"></textarea></div>
+    <div id="contact-out"></div>
+    <button class="btn" type="submit">ارسال درخواست</button>
+  </form>
+
+  <div class="card flow">
+    <h2>ساعات کاری</h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>روز</th><th>شروع</th><th>آخرین نوبت</th><th>بستن مطب</th></tr></thead>
+      <tbody>
+        <tr><td>شنبه تا چهارشنبه</td><td>{{ slot_times[0] }}</td>
+            <td>{{ slot_times[-1] }}</td><td>{{ fa(22) }}:{{ fa(0) }}</td></tr>
+        <tr><td>پنج‌شنبه</td><td class="muted">تعطیل</td><td>—</td><td>—</td></tr>
+      </tbody>
+    </table></div>
+    <hr>
+    <h3>رسیدن</h3>
+    <dl class="kv">
+      <dt>آدرس</dt><dd>{{ address }}</dd>
+      <dt>تلفن</dt><dd>{{ phone_disp }}</dd>
+      <dt>منطقه</dt><dd>{{ now_jalali.month_name }} {{ fa(now_jalali.jy) }} · امروز {{ now_jalali.long }}</dd>
+    </dl>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}<script src="/static/site.js"></script>{% endblock %}

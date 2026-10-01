@@ -1,0 +1,18 @@
+{% extends "base.jinja" %}
+{% set narrow = true %}
+{% block title %}کد پیگیری — {{ clinic }}{% endblock %}
+{% block body %}
+<div class="card" style="margin-top:18px">
+  <h1>رسید نوبت</h1>
+  <p class="muted">کد پیگیری را وارد کنید تا رسید را ببینید. اگر همین حالا نوبت گرفته‌اید،
+    نیازی به این کار نیست — از <a href="/booking/reserve">جدول نوبت‌ها</a> هم می‌شود رسید را باز کرد.</p>
+  {% if code %}<div class="notice err">کد «{{ code }}» پیدا نشد.</div>{% endif %}
+  <form class="flex" method="get" action="/booking/done">
+    <input type="text" name="code" placeholder="مثال: 7KQMX4TB" maxlength="12"
+           style="max-width:220px;text-transform:uppercase" required>
+    <button class="btn" type="submit">نمایش رسید</button>
+  </form>
+  <p class="tiny muted" style="margin-top:12px">رسید فقط نام، تاریخ، ساعت و کد پیگیری را
+    نشان می‌دهد؛ تاریخچه‌ی درمان و فایل‌های بالینی در آن نیست.</p>
+</div>
+{% endblock %}

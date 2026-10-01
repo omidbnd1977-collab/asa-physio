@@ -1,0 +1,19 @@
+{% extends "base.jinja" %}
+{% set narrow = true %}
+{% block title %}ورود پنل — {{ clinic }}{% endblock %}
+{% block body %}
+<form class="card" style="margin-top:24px" method="post" action="/admin/login">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <h1>پنل پزشک</h1>
+  <p class="muted tiny">فقط برای کارکنان. نشست {{ fa(8) }} ساعته، <code>HttpOnly</code>.</p>
+  <div id="box"></div>
+  <div class="field"><label>نام کاربری</label>
+    <input type="text" name="user" autocomplete="username" required></div>
+  <div class="field"><label>رمز</label>
+    <input type="password" name="password" autocomplete="current-password" required></div>
+  <button class="btn big" type="submit">ورود</button>
+  <p class="tiny muted" style="margin-top:14px">نمونه‌ی توسعه: <code>{{ fa("dr-asa") }}</code> /
+    رمز در <code>ASA_ADMIN_PASSWORD</code>.</p>
+</form>
+{% endblock %}
+{% block scripts %}<script src="/static/site.js"></script>{% endblock %}

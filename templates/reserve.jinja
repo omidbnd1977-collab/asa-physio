@@ -1,0 +1,87 @@
+{% extends "base.jinja" %}
+{% block title %}جدول نوبت‌ها — {{ clinic }}{% endblock %}
+{% block body %}
+<div class="flex" style="margin:14px 0 10px">
+  <h1 style="margin:0">جدول نوبت‌ها</h1>
+  <span class="spacer"></span>
+  <span class="tag">{{ patient.full_name }}</span>
+  <a class="btn ghost mini" href="/booking/logout">خروج</a>
+</div>
+
+<div class="card tight">
+  <div class="strip-head">
+    <b>۳۰ روز پیش‌رو</b>
+    <span class="tiny muted">ظرفیت هر روز: {{ fa(grid.capacity_per_day) }} نوبت ·
+      {{ fa(cabins) }} کابین موازی · آخرین نوبت {{ slot_times[-1] }} (مطب {{ fa(22) }}:{{ fa(0) }} می‌بندد)</span>
+  </div>
+  <div class="strip" id="strip" role="tablist" aria-label="انتخاب روز">
+    {% for d in strip %}
+    <button class="day{% if d.date_val == selected %} sel{% endif %}{% if not d.free %} off{% endif %}"
+            data-date="{{ d.date_val }}" role="tab" aria-selected="{{ 'true' if d.date_val == selected else 'false' }}">
+      <span class="dw{% if d.weekday == 5 %} friday{% endif %}">{{ d.weekday_short }}</span>
+      <span class="dn">{{ fa(d.jd) }}</span>
+      <span class="dm">{{ d.month_name }}</span>
+      <span class="df">{{ "پر" if not d.free else fa(d.free) + " جا" }}</span>
+    </button>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="strip-head">
+    <h2 style="margin:0">{{ grid.day.long }}</h2>
+    <span class="spacer"></span>
+    <span class="tiny muted" id="grid-note"></span>
+  </div>
+  <div id="grid-msg"></div>
+  <div class="slots" id="slots">
+    {% for s in grid.slots %}
+    <button class="slot{% if s.few %} few{% endif %}" data-time="{{ s.time }}"
+            {% if s.disabled %}disabled{% endif %}
+            aria-label="{{ s.time_fa }} — {{ fa(s.free) }} جای خالی">
+      <span class="t">{{ s.time_fa }}</span>
+      <span class="f">{% if s.reason == 'past' %}گذشته{% elif s.reason == 'full' %}پر{% else %}{{ fa(s.free) }} جای خالی{% endif %}</span>
+    </button>
+    {% endfor %}
+  </div>
+  <div class="legend">
+    <span><i class="ok"></i> جا هست</span>
+    <span><i class="few"></i {{ fa(few_threshold) }} یا کمتر مانده</span>
+    <span><i class="off"></i پر یا گذشته — با کیبورد هم انتخاب نمی‌شود</span>
+  </div>
+
+  <div class="field" style="margin-top:14px">
+    <label for="note">توضیح برای مطب <span class="muted tiny">(اختیاری)</span></label>
+    <textarea id="note" maxlength="400" placeholder="مثال: زانوی چپ، بعد از عمل"></textarea>
+  </div>
+  <div class="flex">
+    <span class="tiny muted">ساعتی را انتخاب کنید.</span>
+    <span class="spacer"></span>
+    <button class="btn" id="do-book" disabled>رزرو این ساعت</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>نوبت‌های پیش‌روی من</h2>
+  {% if mine %}
+  <div class="stack" id="mine">
+    {% for a in mine %}
+    <div class="appt-row{% if a.status == 'coming' %} tile-coming{% endif %}">
+      <span class="when">{{ a.day.long }} — {{ a.time_fa }}</span>
+      <span class="tag {{ a.status }}">{{ status_labels[a.status] }}</span>
+      <span class="tag">{{ kind_labels[a.kind] }}</span>
+      <span class="tiny muted">کابین {{ a.cabin_fa }} · کد {{ a.tracking_code }}</span>
+      <span class="spacer"></span>
+      {% if a.cancelable %}
+      <button class="btn danger mini" data-cancel="{{ a.id }}">لغو + پیامک</button>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">نوبت بازی ندارید.</p>
+  {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}<script src="/static/site.js"></script>
+<script src="/static/booking.js"></script>{% endblock %}

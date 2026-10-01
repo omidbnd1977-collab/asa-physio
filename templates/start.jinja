@@ -1,0 +1,20 @@
+{% extends "base.jinja" %}
+{% set narrow = true %}
+{% block title %}رزرو نوبت — {{ clinic }}{% endblock %}
+{% block body %}
+<div class="card" style="margin-top:22px">
+  <h1>رزرو نوبت</h1>
+  <p class="muted">کدام‌یک هستید؟</p>
+  <div class="grid cols-2" style="margin-top:14px">
+    <a class="btn big" href="/booking/register">بار اولم است — ثبت‌نام</a>
+    <a class="btn ghost big" href="/booking/login">قبلاً ثبت‌نام کرده‌ام</a>
+  </div>
+  <hr>
+  <p class="tiny muted">برای ورود به «کد ملی + تاریخ تولد» نیاز است؛ همان چیزی که هنگام
+    ثبت‌نام داده‌اید. اگر آن را ندارید، دوباره ثبت‌نام کنید — رکورد شما به‌روز می‌شود،
+    نوبت‌هایتان دست‌نخورده می‌ماند.</p>
+</div>
+{% if patient %}
+<div class="notice ok">وارد شده‌اید: {{ patient.full_name }} — <a href="/booking/reserve">جدول نوبت‌ها</a></div>
+{% endif %}
+{% endblock %}
