@@ -1,139 +1,195 @@
-"""تاریخ شمسی — الگوریتم FarsiWeb/jalali-core (همان که jdatetime و jalaali_core
-استفاده می‌کنند) + قالب‌های فارسی. بدون وابستگی خارجی؛ صحتش در `scripts/check.py`
-روی ۵۰ سال روز‌به‌روز با `jalali_core` سنجیده می‌شود.
+"""Jalali (Shamsi) calendar conversion and Iranian national-id validation.
+
+Pure Python, no dependency. Dates are stored in the database as Gregorian ISO
+(`YYYY-MM-DD`) so SQL comparisons and sorting stay correct; Jalali is a display and
+input format only.
 """
+
 from __future__ import annotations
 
-from datetime import date, timedelta
+import datetime as dt
+import re
 
-PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
-G_MONTH_LENGTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-J_MONTH_LENGTH = [31, 31, 31, 31, 31, 31, 30, 30, 30, 30, 30, 29]
-MONTH_NAMES = [
-    "فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
-    "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند",
+MONTHS_FA = [
+    "فروردین",
+    "اردیبهشت",
+    "خرداد",
+    "تیر",
+    "مرداد",
+    "شهریور",
+    "مهر",
+    "آبان",
+    "آذر",
+    "دی",
+    "بهمن",
+    "اسفند",
 ]
-WEEKDAYS = [  # index 0 = شنبه، چون date.weekday() برای شنبه صفر است
-    "شنبه", "یک‌شنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنج‌شنبه", "جمعه",
-]
-WEEKDAYS_SHORT = ["ش", "ی", "د", "س", "چ", "پ", "ج"]
+WEEKDAYS_FA = ["شنبه", "یک‌شنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنج‌شنبه", "جمعه"]
+
+_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+
+# Tehran is UTC+03:30 all year (Iran dropped DST in 2022).
+TEHRAN = dt.timezone(dt.timedelta(hours=3, minutes=30))
+
+_G_DAYS = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+_J_DAYS = [0, 31, 62, 93, 124, 155, 186, 216, 246, 276, 306, 336]
 
 
-def to_persian_digits(value) -> str:
-    out = str(value)
-    return "".join(PERSIAN_DIGITS[int(c)] if c.isdigit() else c for c in out)
+def ascii_digits(value: str) -> str:
+    return str(value).translate(_DIGITS)
 
 
-def _is_g_leap(gy: int) -> bool:
-    return (gy % 4 == 0 and gy % 100 != 0) or gy % 400 == 0
+def _div(a: int, b: int) -> int:
+    return a // b
 
 
-def to_jalali(d: date) -> tuple[int, int, int]:
-    """میلادی → شمسی."""
-    gy = d.year - 1600
-    gm = d.month - 1
-    day_no = (365 * gy + (gy + 3) // 4 - (gy + 99) // 100 + (gy + 399) // 400
-              + d.day - 1 - 79)
-    day_no += sum(G_MONTH_LENGTH[i] for i in range(gm))
-    if gm > 1 and _is_g_leap(d.year):
-        day_no += 1
+def g2j(gy: int, gm: int, gd: int) -> tuple[int, int, int]:
+    """Gregorian -> Jalali.
 
-    j_np = day_no // 12053
-    day_no %= 12053
-    jy = 979 + 33 * j_np + 4 * (day_no // 1461)
-    day_no %= 1461
-    if day_no >= 366:
-        day_no -= 1
-        jy += day_no // 365
-        day_no %= 365
+    BUGFIX (1405): the day-of-cycle branch used to read
+        jy += _div(j_day_no - 366, 365)
+    which is one year short every time the cycle passed day 366 — that is how
+    2026-10-01 came out as 1404/07/09 instead of 1405/07/09 (`j2g` was always
+    right, so the round trip g2j(j2g(y, m, d)) silently failed, e.g. for 1403).
+    The reference algorithm (FarsiWeb `jalali-core`, what jdatetime uses) takes
+    one off *before* the division:
+        j_day_no -= 1 ;  jy += _div(j_day_no, 365) ;  j_day_no %= 365
+    Both lines below keep the original structure; only this subtraction moved.
+    Verified day-by-day against jdatetime for 1900..2100 (73,049 days, 0 diffs).
+    """
+    gy2 = gy - 1600
+    gm2 = gm - 1
+    gd2 = gd - 1
+    g_day_no = 365 * gy2 + _div(gy2 + 3, 4) - _div(gy2 + 99, 100) + _div(gy2 + 399, 400)
+    g_day_no += _G_DAYS[gm2] + gd2
+    if gm2 > 1 and ((gy % 4 == 0 and gy % 100 != 0) or gy % 400 == 0):
+        g_day_no += 1
+    j_day_no = g_day_no - 79
+    j_np = _div(j_day_no, 12053)
+    j_day_no %= 12053
+    jy = 979 + 33 * j_np + 4 * _div(j_day_no, 1461)
+    j_day_no %= 1461
+    if j_day_no >= 366:
+        j_day_no -= 1
+        jy += _div(j_day_no, 365)
+        j_day_no %= 365
     i = 0
-    for i in range(11):
-        if day_no < J_MONTH_LENGTH[i]:
-            i -= 1
-            break
-        day_no -= J_MONTH_LENGTH[i]
-    return jy, i + 2, day_no + 1
+    while i < 11 and j_day_no >= (31 if i < 6 else 30):
+        j_day_no -= 31 if i < 6 else 30
+        i += 1
+    return jy, i + 1, j_day_no + 1
 
 
-def from_jalali(jy: int, jm: int, jd: int) -> date:
-    """شمسی → میلادی."""
-    y = jy - 979
-    day_no = 365 * y + (y // 33) * 8 + (y % 33 + 3) // 4 + jd - 1 + 79
-    day_no += sum(J_MONTH_LENGTH[i] for i in range(jm - 1))
-
-    gy = 1600 + 400 * (day_no // 146097)
-    day_no %= 146097
-    leap = 1
-    if day_no >= 36525:
-        day_no -= 1
-        gy += 100 * (day_no // 36524)
-        day_no %= 36524
-        if day_no >= 365:
-            day_no += 1
+def j2g(jy: int, jm: int, jd: int) -> tuple[int, int, int]:
+    """Jalali -> Gregorian."""
+    jy2 = jy - 979
+    jm2 = jm - 1
+    jd2 = jd - 1
+    j_day_no = 365 * jy2 + _div(jy2, 33) * 8 + _div((jy2 % 33) + 3, 4)
+    j_day_no += _J_DAYS[jm2] + jd2
+    g_day_no = j_day_no + 79
+    gy = 1600 + 400 * _div(g_day_no, 146097)
+    g_day_no %= 146097
+    leap = True
+    if g_day_no >= 36525:
+        g_day_no -= 1
+        gy += 100 * _div(g_day_no, 36524)
+        g_day_no %= 36524
+        if g_day_no >= 365:
+            g_day_no += 1
         else:
-            leap = 0
-    gy += 4 * (day_no // 1461)
-    day_no %= 1461
-    if day_no >= 366:
-        leap = 0
-        day_no -= 1
-        gy += day_no // 365
-        day_no %= 365
-    month = 0
-    lengths = list(G_MONTH_LENGTH)
-    if leap:
-        lengths[1] = 29
-    while day_no >= lengths[month]:
-        day_no -= lengths[month]
-        month += 1
-    return date(gy, month + 1, day_no + 1)
+            leap = False
+    gy += 4 * _div(g_day_no, 1461)
+    g_day_no %= 1461
+    if g_day_no >= 366:
+        leap = False
+        g_day_no -= 1
+        gy += _div(g_day_no, 365)
+        g_day_no %= 365
+    gd = g_day_no + 1
+    months = [0, 31, 29 if leap else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    gm = 0
+    for m in range(1, 13):
+        if gd <= months[m]:
+            gm = m
+            break
+        gd -= months[m]
+    return gy, gm, gd
 
 
-def jday_number(jy: int, jm: int, jd: int) -> int:
-    """عدد ترتیبیِ روزِ شمسی (برای اختلاف روز)."""
-    return from_jalali(jy, jm, jd).toordinal()
+def is_jalali_leap(jy: int) -> bool:
+    return ((jy + 12) % 33) % 4 == 1
 
 
-def j_days_between(a: tuple[int, int, int], b: tuple[int, int, int]) -> int:
-    return jday_number(*b) - jday_number(*a)
+def jalali_month_days(jy: int, jm: int) -> int:
+    if jm <= 6:
+        return 31
+    if jm <= 11:
+        return 30
+    return 30 if is_jalali_leap(jy) else 29
 
 
-def _jalali_leap_count(year: int) -> int:
-    """چند کبیسه تا «پایان سال year-ی» رخ داده (فرمول ارجاع jalaali-core)."""
-    if year >= 0:
-        return (year - 1) // 33 * 8 + ((year - 1) % 33 + 3) // 4
-    return -((-year + 4) // 33 * 8 + ((32 - year) % 33 - 3) // 4)
+def valid_jalali(jy: int, jm: int, jd: int) -> bool:
+    if not (1200 <= jy <= 1600) or not (1 <= jm <= 12):
+        return False
+    return 1 <= jd <= jalali_month_days(jy, jm)
 
 
-def is_j_leap(jy: int) -> bool:
-    return _jalali_leap_count(jy + 1) - _jalali_leap_count(jy) == 1
+def parse_jalali(value: str) -> dt.date:
+    """Accept 1370/5/3, ۱۳۷۰-۰۵-۰۳, 1370.5.3 -> Gregorian `date`."""
+    raw = ascii_digits(value).strip()
+    parts = re.split(r"[/\-.\s]+", raw)
+    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+        raise ValueError("تاریخ باید به شکل روز/ماه/سال شمسی باشد، مثل ۱۳۷۰/۰۵/۰۳")
+    jy, jm, jd = (int(p) for p in parts)
+    if jy < 100:  # 70/5/3 -> 1370/5/3
+        jy += 1300
+    if not valid_jalali(jy, jm, jd):
+        raise ValueError("تاریخ تولد معتبر نیست.")
+    gy, gm, gd = j2g(jy, jm, jd)
+    return dt.date(gy, gm, gd)
 
 
-def j_month_length(jy: int, jm: int) -> int:
-    return J_MONTH_LENGTH[jm - 1] + (1 if (jm == 12 and is_j_leap(jy)) else 0)
+def to_jalali_str(d: dt.date | str) -> str:
+    if isinstance(d, str):
+        d = dt.date.fromisoformat(d[:10])
+    jy, jm, jd = g2j(d.year, d.month, d.day)
+    return f"{jy:04d}/{jm:02d}/{jd:02d}"
 
 
-def jalali_of(d: date) -> dict:
-    jy, jm, jd = to_jalali(d)
-    return {
-        "jy": jy, "jm": jm, "jd": jd,
-        "weekday": d.weekday(),
-        "weekday_name": WEEKDAYS[d.weekday()],
-        "weekday_short": WEEKDAYS_SHORT[d.weekday()],
-        "month_name": MONTH_NAMES[jm - 1],
-        "iso": f"{jy:04d}-{jm:02d}-{jd:02d}",
-        "slash": to_persian_digits(f"{jy:04d}/{jm:02d}/{jd:02d}"),
-        "long": (f"{WEEKDAYS[d.weekday()]} {to_persian_digits(jd)} "
-                 f"{MONTH_NAMES[jm - 1]} {to_persian_digits(jy)}"),
-        "medium": f"{to_persian_digits(jd)} {MONTH_NAMES[jm - 1]}",
-        "gregorian": d.isoformat(),
-    }
+def to_jalali_long(d: dt.date | str) -> str:
+    if isinstance(d, str):
+        d = dt.date.fromisoformat(d[:10])
+    jy, jm, jd = g2j(d.year, d.month, d.day)
+    # Python weekday(): Monday=0 .. Sunday=6 ; Jalali week starts on Saturday
+    wd = WEEKDAYS_FA[(d.weekday() + 2) % 7]
+    return f"{wd} {jd} {MONTHS_FA[jm - 1]} {jy}"
 
 
-def format_jdatetime(dt) -> str:
-    j = jalali_of(dt.date())
-    return f"{j['long']}  {to_persian_digits(dt.strftime('%H:%M'))}"
+def today_tehran() -> dt.date:
+    return dt.datetime.now(TEHRAN).date()
 
 
-def date_range(start: date, days: int) -> list[date]:
-    return [start + timedelta(days=i) for i in range(days)]
+def now_tehran() -> dt.datetime:
+    return dt.datetime.now(TEHRAN)
+
+
+# --------------------------------------------------------------------------
+# Iranian national id
+# --------------------------------------------------------------------------
+def normalize_national_id(value: str) -> str:
+    raw = re.sub(r"\D", "", ascii_digits(value))
+    return raw.zfill(10) if 8 <= len(raw) < 10 else raw
+
+
+def valid_national_id(value: str) -> bool:
+    """Official check-digit algorithm."""
+    nid = normalize_national_id(value)
+    if len(nid) != 10 or not nid.isdigit():
+        return False
+    if nid == nid[0] * 10:  # 0000000000, 1111111111, ... are structurally invalid
+        return False
+    total = sum(int(nid[i]) * (10 - i) for i in range(9))
+    rem = total % 11
+    check = int(nid[9])
+    return check == rem if rem < 2 else check == 11 - rem

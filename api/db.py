@@ -1,252 +1,178 @@
-"""پایگاه‌داده: schema، WAL، و کمکی‌های تراکنش.
+"""Layer 03 — connection handling plus a forward-only, versioned migration runner."""
 
-تخصیص کابین داخل `BEGIN IMMEDIATE` انجام می‌شود و
-`UNIQUE (slot_date, slot_time, cabin)` ضمانت نهایی است — همان‌طور که
-BOOKING.md خواسته. برای اینکه همان تراکنش «دو نوبتِ یک بیمار در یک ساعت» را
-هم جلو بگیرد، `UNIQUE (patient_id, slot_date, slot_time)` هم اضافه شده است.
-"""
 from __future__ import annotations
 
-import os
+import hashlib
+import pathlib
+import re
 import sqlite3
 import threading
 
-from .config import settings
+from .config import ROOT, settings
+from .logging_ import info, warn
 
-_lock = threading.Lock()
+MIGRATIONS_DIR = pathlib.Path(__file__).resolve().parent.parent / "migrations"
+_local = threading.local()
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS patients (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  full_name     TEXT    NOT NULL,
-  national_code TEXT    NOT NULL UNIQUE,          -- ۱۰ رقم نرمال‌شده
-  birth_jdate   TEXT    NOT NULL,                 -- YYYY-MM-DD شمسی
-  mobile        TEXT    NOT NULL,                 -- 0098…
-  mri_url       TEXT,
-  orthopedist   TEXT,
-  meds_photo    TEXT,                             -- نام blob، نه مسیر کاربر
-  meds_mime     TEXT,
-  mri_file      TEXT,                             -- فایل MRI (نام blob)
-  mri_mime      TEXT,
-  note          TEXT,                             -- یادداشت پزشک
-  created_at    TEXT    NOT NULL,
-  last_login_at TEXT
-);
 
-CREATE TABLE IF NOT EXISTS appointments (
-  id               INTEGER PRIMARY KEY AUTOINCREMENT,
-  patient_id       INTEGER NOT NULL REFERENCES patients(id),
-  slot_date        TEXT    NOT NULL,              -- YYYY-MM-DD شمسی
-  slot_time        TEXT    NOT NULL,              -- HH:MM
-  cabin            INTEGER NOT NULL,
-  kind           TEXT    NOT NULL DEFAULT 'initial',  -- initial|reschedule|followup
-  status           TEXT    NOT NULL DEFAULT 'booked', -- booked|coming|done|cancelled|no_show
-  tracking_code    TEXT    NOT NULL UNIQUE,
-  idempotency_key  TEXT,
-  note             TEXT,
-  orthopedist      TEXT,
-  mri_url          TEXT,
-  cabin_prev       INTEGER,
-  slot_prev_date   TEXT,
-  slot_prev_time   TEXT,
-  confirm_sent_at  TEXT,
-  confirm_reply_at TEXT,
-  reminder_attempts INTEGER NOT NULL DEFAULT 0,
-  created_at       TEXT    NOT NULL,
-  updated_at       TEXT    NOT NULL,
-  UNIQUE (slot_date, slot_time, cabin),
-  UNIQUE (patient_id, slot_date, slot_time),
-  UNIQUE (patient_id, idempotency_key)
-);
-CREATE INDEX IF NOT EXISTS idx_appt_patient ON appointments(patient_id, slot_date, slot_time);
-CREATE INDEX IF NOT EXISTS idx_appt_remind  ON appointments(status, confirm_sent_at, slot_date, slot_time);
+def connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(settings.DB_PATH, timeout=10, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=8000")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    return conn
 
-CREATE TABLE IF NOT EXISTS sms_messages (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  patient_id    INTEGER,
-  appointment_id INTEGER,
-  direction     TEXT    NOT NULL DEFAULT 'out',
-  event         TEXT    NOT NULL,
-  to_phone      TEXT    NOT NULL,
-  body          TEXT    NOT NULL,
-  status        TEXT    NOT NULL DEFAULT 'pending',   -- sent|failed|skipped_budget
-  error         TEXT,
-  provider_id   TEXT,
-  cost_usd      REAL    NOT NULL DEFAULT 0,
-  created_at    TEXT    NOT NULL,
-  sent_at       TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_sms_created ON sms_messages(created_at DESC);
 
-CREATE TABLE IF NOT EXISTS sms_inbound (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  phone      TEXT    NOT NULL,
-  body       TEXT    NOT NULL,
-  normalized TEXT,
-  matched_id INTEGER,
-  created_at TEXT    NOT NULL
-);
+def get_conn() -> sqlite3.Connection:
+    """One connection per thread; SQLite objects are not shareable across threads."""
+    c = getattr(_local, "conn", None)
+    if c is None:
+        c = connect()
+        _local.conn = c
+    return c
 
-CREATE TABLE IF NOT EXISTS body_parts (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  label      TEXT    NOT NULL UNIQUE,
-  grp        TEXT    NOT NULL DEFAULT 'سایر',
-  source     TEXT    NOT NULL DEFAULT 'seed',        -- seed|physician
-  used_count INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT    NOT NULL
-);
 
-CREATE TABLE IF NOT EXISTS treatments (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  label      TEXT    NOT NULL UNIQUE,
-  source     TEXT    NOT NULL DEFAULT 'seed',
-  used_count INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT    NOT NULL
-);
+def close_conn() -> None:
+    c = getattr(_local, "conn", None)
+    if c is not None:
+        c.close()
+        _local.conn = None
 
-CREATE TABLE IF NOT EXISTS patient_sessions (
-  id             INTEGER PRIMARY KEY AUTOINCREMENT,
-  patient_id     INTEGER NOT NULL REFERENCES patients(id),
-  appointment_id INTEGER REFERENCES appointments(id),
-  session_date   TEXT    NOT NULL,                   -- YYYY-MM-DD شمسی
-  pain_before    INTEGER,
-  pain_after     INTEGER,
-  findings       TEXT,
-  next_plan      TEXT,
-  created_by     TEXT,
-  created_at     TEXT    NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_sess_patient ON patient_sessions(patient_id, session_date DESC);
 
-CREATE TABLE IF NOT EXISTS session_body_parts (
-  session_id INTEGER NOT NULL REFERENCES patient_sessions(id) ON DELETE CASCADE,
-  part_id    INTEGER NOT NULL REFERENCES body_parts(id),
-  PRIMARY KEY (session_id, part_id)
-);
-
-CREATE TABLE IF NOT EXISTS session_treatments (
-  session_id   INTEGER NOT NULL REFERENCES patient_sessions(id) ON DELETE CASCADE,
-  treatment_id INTEGER NOT NULL REFERENCES treatments(id),
-  PRIMARY KEY (session_id, treatment_id)
-);
-
-CREATE TABLE IF NOT EXISTS site_requests (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  name       TEXT,
-  phone      TEXT,
-  topic      TEXT,
-  message    TEXT,
-  source     TEXT,
-  handled    INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT    NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS cost_events (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  kind       TEXT    NOT NULL,
-  amount_usd REAL    NOT NULL DEFAULT 0,
-  ref        TEXT,
-  created_at TEXT    NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_cost_month ON cost_events(created_at);
-
-CREATE TABLE IF NOT EXISTS counters (
-  name  TEXT PRIMARY KEY,
-  value INTEGER NOT NULL DEFAULT 0
+# --------------------------------------------------------------------------
+# migrations
+# --------------------------------------------------------------------------
+BOOTSTRAP = """
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version    TEXT PRIMARY KEY,
+    checksum   TEXT NOT NULL,
+    applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 """
 
 
-def connect() -> sqlite3.Connection:
-    os.makedirs(str(settings.DATA_DIR), exist_ok=True)
-    os.makedirs(str(settings.UPLOAD_DIR), exist_ok=True)
-    conn = sqlite3.connect(str(settings.DB_PATH), timeout=15, isolation_level=None,
-                           check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=15000")
-    return conn
+def _files() -> list[pathlib.Path]:
+    return sorted(MIGRATIONS_DIR.glob("[0-9][0-9][0-9][0-9]_*.sql"))
 
 
-_local = threading.local()
+def split_statements(sql: str) -> list[str]:
+    """Split on top-level semicolons.
 
-
-def db() -> sqlite3.Connection:
-    """اتصال به‌ازای هر رشته.
-
-    چرا؟ چون `BEGIN IMMEDIATE` روی یک *رشته* معنا دارد؛ اگر همه‌ی رشته‌ها یک
-    اتصال را шарینگ کنند، تراکنشِ یک نفر داخل تراکنشِ نفر دیگر باز می‌شود.
-    با اتصال جدا + WAL، SQLite خودِ `BEGIN IMMEDIATE` را صف می‌کند
-    (busy_timeout ۱۵ ثانیه) و دقیقاً همان «قفلِ سراسری» به‌دست می‌آید که
-    BOOKING.md برای تخصیص کابین می‌خواهد.
+    `executescript()` cannot be used: it issues an implicit COMMIT, which would break the
+    atomicity of a migration. Trigger bodies (BEGIN ... END) are rejected outright — layer
+    03 forbids them, so the simple splitter is always sufficient.
     """
-    conn = getattr(_local, "conn", None)
-    if conn is None:
-        with _lock:
-            conn = connect()
-        _local.conn = conn
-    return conn
+    if re.search(r"\bCREATE\s+(TEMP\s+)?TRIGGER\b", sql, re.I):
+        raise RuntimeError("triggers are not allowed: business logic belongs in api/repo.py")
+    out: list[str] = []
+    buf: list[str] = []
+    i, n = 0, len(sql)
+    quote: str | None = None
+    while i < n:
+        ch = sql[i]
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                if i + 1 < n and sql[i + 1] == quote:
+                    buf.append(sql[i + 1])
+                    i += 1
+                else:
+                    quote = None
+            i += 1
+            continue
+        if ch in "'\"":
+            quote = ch
+            buf.append(ch)
+            i += 1
+            continue
+        if sql.startswith("--", i):
+            j = sql.find("\n", i)
+            i = n if j == -1 else j + 1
+            continue
+        if sql.startswith("/*", i):
+            j = sql.find("*/", i)
+            i = n if j == -1 else j + 2
+            continue
+        if ch == ";":
+            stmt = "".join(buf).strip()
+            if stmt:
+                out.append(stmt)
+            buf = []
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    tail = "".join(buf).strip()
+    if tail:
+        out.append(tail)
+    return out
 
 
-def reset_for_tests() -> None:
-    """اتصالِ رشته‌ی جاری را می‌بندد (فقط در تست)."""
-    conn = getattr(_local, "conn", None)
-    if conn is not None:
+def migrate(conn: sqlite3.Connection | None = None) -> list[str]:
+    """Apply every pending migration in order. Refuses to run if an applied file changed."""
+    conn = conn or get_conn()
+    conn.executescript(BOOTSTRAP)
+    applied = {r["version"]: r["checksum"] for r in conn.execute("SELECT * FROM schema_migrations")}
+    done: list[str] = []
+    for path in _files():
+        version = path.name[:4]
+        body = path.read_text(encoding="utf-8")
+        checksum = hashlib.sha256(body.encode()).hexdigest()
+        if version in applied:
+            if applied[version] != checksum:
+                raise RuntimeError(
+                    f"migration {path.name} changed after it was applied — "
+                    "migrations are forward only, add a new file instead"
+                )
+            continue
+        statements = split_statements(body)
+        conn.execute("BEGIN")
         try:
-            conn.close()
-        except sqlite3.Error:
-            pass
-        _local.conn = None
+            for stmt in statements:
+                conn.execute(stmt)
+            conn.execute(
+                "INSERT INTO schema_migrations(version, checksum) VALUES (?,?)",
+                (version, checksum),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        done.append(path.name)
+        info("migration.applied", migration=path.name)
+    if not done:
+        info("migration.up_to_date", count=len(applied))
+    return done
 
 
-def init() -> None:
-    conn = db()
-    conn.executescript(SCHEMA)
+def assert_no_business_triggers(conn: sqlite3.Connection | None = None) -> list[str]:
+    """Layer 03 guard — the schema must contain no triggers at all."""
+    conn = conn or get_conn()
+    rows = conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'").fetchall()
+    names = [r["name"] for r in rows]
+    if names:
+        warn("schema.trigger_found", triggers=names)
+    return names
 
 
-def tx(immediate: bool = False):
-    """context manager: BEGIN [IMMEDIATE] … COMMIT / ROLLBACK."""
-    return _Tx(db(), immediate)
+def tables(conn: sqlite3.Connection | None = None) -> list[str]:
+    conn = conn or get_conn()
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+    ).fetchall()
+    return [r["name"] for r in rows]
 
 
-class _Tx:
-    def __init__(self, conn: sqlite3.Connection, immediate: bool):
-        self.conn = conn
-        self.immediate = immediate
+if __name__ == "__main__":  # python -m api.db
+    from .logging_ import setup_logging
 
-    def __enter__(self) -> sqlite3.Connection:
-        self.conn.execute("BEGIN IMMEDIATE" if self.immediate else "BEGIN")
-        return self.conn
-
-    def __exit__(self, exc_type, exc, tb) -> bool:
-        if exc_type is None:
-            self.conn.execute("COMMIT")
-        else:
-            self.conn.execute("ROLLBACK")
-        return False
-
-
-def now_iso() -> str:
-    return settings.now().isoformat(timespec="seconds")
-
-
-def bump(conn: sqlite3.Connection, name: str, amount: int = 1) -> int:
-    conn.execute(
-        "INSERT INTO counters(name, value) VALUES(?, ?) "
-        "ON CONFLICT(name) DO UPDATE SET value = value + excluded.value",
-        (name, amount),
-    )
-    row = conn.execute("SELECT value FROM counters WHERE name = ?", (name,)).fetchone()
-    return int(row["value"]) if row else 0
-
-
-def month_cost_usd(conn: sqlite3.Connection) -> float:
-    start = settings.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    row = conn.execute(
-        "SELECT COALESCE(SUM(amount_usd), 0) AS total FROM cost_events "
-        "WHERE kind = 'sms' AND created_at >= ?",
-        (start.isoformat(timespec="seconds"),),
-    ).fetchone()
-    return float(row["total"] or 0.0)
+    setup_logging()
+    applied = migrate()
+    print(f"db: {settings.DB_PATH}")
+    print("applied:", applied or "nothing (already up to date)")
+    print("tables:", ", ".join(tables()))
+    print("triggers:", assert_no_business_triggers() or "none")
+    _ = ROOT

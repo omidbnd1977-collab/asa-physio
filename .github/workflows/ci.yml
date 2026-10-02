@@ -1,0 +1,87 @@
+# Layer 07 — main is always releasable: nothing merges without these checks passing.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: lint + tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      APP_ENV: development
+      SECRET_KEY: ci-only-ephemeral-secret-not-used-anywhere-else
+      NOTIFY_PROVIDER: file
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check api tests build_static.py
+
+      - name: Format check
+        run: ruff format --check api tests build_static.py
+
+      - name: Secret scan
+        run: |
+          ! grep -rInE '(sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|BEGIN [A-Z ]*PRIVATE KEY)' \
+            --include='*.py' --include='*.sh' --include='*.yml' --include='*.html' . \
+            || (echo "::error::possible secret committed" && exit 1)
+
+      - name: Migrations are forward-only
+        run: |
+          git fetch origin ${{ github.base_ref || 'main' }} --depth=1 || true
+          CHANGED=$(git diff --name-only --diff-filter=MD \
+            origin/${{ github.base_ref || 'main' }}...HEAD -- migrations/ || true)
+          if [ -n "$CHANGED" ]; then
+            echo "::error::an applied migration was modified or deleted: $CHANGED"; exit 1
+          fi
+
+      - name: Tests
+        run: python -m pytest -q
+
+      - name: Static build is reproducible
+        run: |
+          python work/build_pages.py
+          python build_static.py
+          test -f public/asset-manifest.json
+
+      - name: Boot smoke test
+        run: |
+          python -m uvicorn api.main:app --port 8099 &
+          for i in $(seq 1 40); do curl -fsS http://127.0.0.1:8099/api/readyz && break; sleep 0.5; done
+          curl -fsS http://127.0.0.1:8099/api/healthz | grep -q '"ok":true'
+
+  staging:
+    name: deploy to staging
+    needs: check
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: staging          # separate secrets, separate database, no customer data
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy
+        env:
+          DEPLOY_HOST: ${{ secrets.STAGING_HOST }}
+          DEPLOY_KEY: ${{ secrets.STAGING_SSH_KEY }}
+        run: echo "ssh $DEPLOY_HOST 'cd /srv/asa && git pull && ops/deploy.sh staging'"
