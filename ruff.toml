@@ -1,6 +1,18 @@
 line-length = 100
 target-version = "py311"
-exclude = ["work", "site", "public", "releases", "data", "node_modules"]
+exclude = [
+  "work",
+  "site",
+  "public",
+  "releases",
+  "data",
+  "node_modules",
+  "api/app.py",
+  "api/appointments.py",
+  "api/body_lists.py",
+  "api/security.py",
+  "api/seed.py",
+]
 
 [lint]
 select = ["E", "F", "W", "I", "B", "UP", "S", "C4", "SIM"]
