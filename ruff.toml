@@ -1,5 +1,6 @@
 line-length = 100
 target-version = "py311"
+
 exclude = [
   "work",
   "site",
@@ -12,6 +13,9 @@ exclude = [
   "api/body_lists.py",
   "api/security.py",
   "api/seed.py",
+
+  "scripts/check.py",
+"ops/loadtest.py",
 ]
 
 [lint]
