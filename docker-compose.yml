@@ -1,0 +1,22 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: [.env.production]
+    ports: ["8080:8080"]
+    volumes:
+      - ./data:/srv/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/api/readyz',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  backup:
+    build: .
+    restart: unless-stopped
+    env_file: [.env.production]
+    volumes:
+      - ./data:/srv/data
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["while true; do /srv/ops/backup.sh; sleep 21600; done"]   # every 6 h

@@ -1,123 +1,137 @@
-"""تنظیمات. همه‌چیز از environment قابل تغییر است؛ پیش‌فرض‌ها == BOOKING.md."""
+"""Layer 08 — all configuration from the environment. No secret ever lives in the repo."""
+
 from __future__ import annotations
 
 import os
-from pathlib import Path
-from zoneinfo import ZoneInfo
+import pathlib
+import secrets
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
-def _int(name: str, default: int) -> int:
+def _b(name: str, default: str = "0") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _i(name: str, default: int) -> int:
     try:
-        return int(os.environ.get(name, "") or default)
+        return int(os.getenv(name, str(default)))
     except ValueError:
         return default
 
 
-def _fl(name: str, default: float) -> float:
+def _f(name: str, default: float) -> float:
     try:
-        return float(os.environ.get(name, "") or default)
+        return float(os.getenv(name, str(default)))
     except ValueError:
         return default
 
 
-def _b(name: str, default: bool) -> bool:
-    v = os.environ.get(name)
-    if v is None:
-        return default
-    return v.strip().lower() in {"1", "true", "yes", "on"}
-
-
-class settings:
-    APP_ENV = os.environ.get("APP_ENV", "development")
-    SECRET_KEY = os.environ.get("SECRET_KEY", "asa-dev-secret-change-me")
-
-    DATA_DIR = Path(os.environ.get("ASA_DATA_DIR", str(ROOT / "data")))
-    DB_PATH = Path(os.environ.get("ASA_DB_PATH", str(DATA_DIR / "booking.db")))
-    UPLOAD_DIR = Path(os.environ.get("ASA_UPLOAD_DIR", str(DATA_DIR / "uploads")))
-
-    # --- کلینیک ---
-    CLINIC_NAME = os.environ.get("ASA_CLINIC_NAME", "آسا فیزیو")
-    ADDRESS = os.environ.get(
-        "ASA_ADDRESS", "تهران، خیابان ولی‌عصر، نبش کوچه‌ی مهر، پلاک ۱۲، طبقه‌ی دوم"
+class Settings:
+    # --- environment -------------------------------------------------------
+    ENV: str = os.getenv("APP_ENV", "development")  # development | staging | production
+    DEBUG: bool = _b(
+        "APP_DEBUG", "1" if os.getenv("APP_ENV", "development") == "development" else "0"
     )
-    PHONE = os.environ.get("ASA_PHONE", "021-88 12 34 56")
-    # تاریخ شمسی و «گذشته بودن ساعت» هر دو با همین منطقه محاسبه می‌شوند.
-    TIMEZONE = os.environ.get("TZ_NAME", "Asia/Tehran")
+    VERSION: str = os.getenv("APP_VERSION", "dev")
+    BASE_URL: str = os.getenv("APP_BASE_URL", "http://localhost:8080")
 
-    WORK_START = os.environ.get("ASA_WORK_START", "16:00")
-    WORK_END = os.environ.get("ASA_WORK_END", "22:00")        # ساعت بستن مطب
-    SLOT_MINUTES = _int("ASA_SLOT_MINUTES", 30)
-    CABINS = _int("ASA_CABINS", 10)
-    CABIN_CAPACITY = _int("ASA_CABIN_CAPACITY", 1)           # بخش «ظرفیت — محاسبه» را ببینید
-    STRIP_DAYS = _int("ASA_STRIP_DAYS", 30)
-    FEW_LEFT_THRESHOLD = _int("ASA_FEW_LEFT", 3)
+    # --- storage -----------------------------------------------------------
+    DB_PATH: pathlib.Path = pathlib.Path(os.getenv("DB_PATH", str(ROOT / "data" / "asa.db")))
+    BACKUP_DIR: pathlib.Path = pathlib.Path(os.getenv("BACKUP_DIR", str(ROOT / "data" / "backups")))
+    STATIC_DIR: pathlib.Path = pathlib.Path(os.getenv("STATIC_DIR", str(ROOT / "public")))
 
-    # --- پیامک ---
-    SMS_PROVIDER = os.environ.get("SMS_PROVIDER", "file")
-    KAVENEGAR_KEY = os.environ.get("KAVENEGAR_KEY", "")
-    KAVENEGAR_LINE = os.environ.get("KAVENEGAR_LINE", "")
-    SMSIR_KEY = os.environ.get("SMSIR_KEY", "")
-    SMSIR_LINE = os.environ.get("SMSIR_LINE", "")
-    SMS_WEBHOOK_URL = os.environ.get("SMS_WEBHOOK_URL", "")
-    SMS_INBOUND_SECRET = os.environ.get("SMS_INBOUND_SECRET", "asa-dev-inbound-secret")
-    SMS_LOG_PATH = os.environ.get("ASA_SMS_LOG", str(DATA_DIR / "sms_outbox.log"))
-    SMS_BUDGET_MONTHLY_USD = _fl("SMS_BUDGET_MONTHLY_USD", 3.0)
-    SMS_UNIT_COST_USD = _fl("ASA_SMS_UNIT_COST_USD", 0.006)
-    REMINDER_LEAD_MIN = _int("REMINDER_LEAD_MIN", 120)
-    REMINDER_INTERVAL_SEC = _int("ASA_REMINDER_INTERVAL_SEC", 60)
-    RETURN_GAP_DAYS = _int("ASA_RETURN_GAP_DAYS", 30)
+    # --- security ----------------------------------------------------------
+    # Dev gets an ephemeral secret so nothing is ever committed; prod MUST set it.
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "")
+    SESSION_TTL_H: int = _i("SESSION_TTL_HOURS", 12)
+    ALLOWED_ORIGINS: list[str] = [
+        o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()
+    ]
+    TRUST_PROXY: bool = _b("TRUST_PROXY", "0")
+    MAX_BODY_BYTES: int = _i("MAX_BODY_BYTES", 16 * 1024)
 
-    # --- محدودیت‌ها (لایه ۰۹) ---
-    LIMIT_REGISTER_IP = _int("ASA_LIMIT_REGISTER_IP", 25)          # ۲۴ ساعته / IP
-    LIMIT_REGISTER_CODE = _int("ASA_LIMIT_REGISTER_CODE", 3)       # ۲۴ ساعته / کد ملی
-    LIMIT_LOGIN_IP = _int("ASA_LIMIT_LOGIN_IP", 10)                 # هر ۱۵ دقیقه / IP
-    LIMIT_LOGIN_CODE = _int("ASA_LIMIT_LOGIN_CODE", 8)             # هر ۱۵ دقیقه / کد ملی
-    LIMIT_LOGIN_FAIL_LOCK = _int("ASA_LIMIT_LOGIN_FAIL_LOCK", 5)   # قفل رکورد پس از N خطا
-    LIMIT_RESERVE_DAY = _int("ASA_LIMIT_RESERVE_DAY", 4)           # روزانه / بیمار
-    LIMIT_INBOUND_MIN = _int("ASA_LIMIT_INBOUND_MIN", 120)         # دقیقه‌ای / IP
+    # --- layer 09: rate limits --------------------------------------------
+    RL_IP_PER_MIN: int = _i("RL_IP_PER_MIN", 60)
+    RL_IP_BURST: int = _i("RL_IP_BURST", 20)
+    RL_BOOKING_IP_PER_HOUR: int = _i("RL_BOOKING_IP_PER_HOUR", 5)
+    RL_BOOKING_PHONE_PER_DAY: int = _i("RL_BOOKING_PHONE_PER_DAY", 3)
+    RL_LOGIN_IP_PER_15MIN: int = _i("RL_LOGIN_IP_PER_15MIN", 8)
+    RL_AI_USER_PER_HOUR: int = _i("RL_AI_USER_PER_HOUR", 10)
+    RL_AI_GLOBAL_PER_DAY: int = _i("RL_AI_GLOBAL_PER_DAY", 200)
+    BREAKER_ERR_THRESHOLD: int = _i("BREAKER_ERR_THRESHOLD", 25)  # 5xx within window
+    BREAKER_WINDOW_S: int = _i("BREAKER_WINDOW_S", 60)
+    BREAKER_OPEN_S: int = _i("BREAKER_OPEN_S", 30)
 
-    UPLOAD_MAX_BYTES = _int("ASA_UPLOAD_MAX_BYTES", 5 * 1024 * 1024)
+    # --- layer 06: cost control -------------------------------------------
+    AI_ENABLED: bool = _b("AI_ENABLED", "0")
+    AI_API_KEY: str = os.getenv("AI_API_KEY", "")
+    AI_UNIT_COST_USD: float = _f("AI_UNIT_COST_USD", 0.0012)  # per call
+    BUDGET_MONTHLY_USD: float = _f("BUDGET_MONTHLY_USD", 5.0)
+    BUDGET_ALERT_AT: float = _f("BUDGET_ALERT_AT", 0.8)  # alert at 80 % of cap
 
-    # نشست بیمار: ۶ ساعت، HttpOnly + SameSite=Strict (تولید). در dev برای
-    # راحتیِ پیش‌نمایش SameSite=Lax می‌شود (همان‌سایت است، بدون CSRF مشکل).
-    PATIENT_SESSION_HOURS = _int("ASA_PATIENT_SESSION_HOURS", 6)
-    ADMIN_SESSION_HOURS = _int("ASA_ADMIN_SESSION_HOURS", 8)
-    CSRF_COOKIE_NAME = "asa_csrf"
-    COOKIE_SECURE = _b("ASA_COOKIE_SECURE", APP_ENV == "production")
-    COOKIE_SAMESITE = os.environ.get("ASA_COOKIE_SAMESITE") or (
-        "Strict" if APP_ENV == "production" else "Lax"
+    # --- layer 12: alerting -------------------------------------------------
+    ALERT_WEBHOOK: str = os.getenv("ALERT_WEBHOOK", "")
+    ALERT_FILE: pathlib.Path = pathlib.Path(
+        os.getenv("ALERT_FILE", str(ROOT / "data" / "alerts.log"))
     )
 
-    ADMIN_USER = os.environ.get("ASA_ADMIN_USER", "dr-asa")
-    ADMIN_PASSWORD = os.environ.get("ASA_ADMIN_PASSWORD", "asa-demo-1385")
+    # --- booking delivery (what makes the success toast true) ---------------
+    NOTIFY_PROVIDER: str = os.getenv("NOTIFY_PROVIDER", "file")  # file | webhook | telegram
+    NOTIFY_WEBHOOK: str = os.getenv("NOTIFY_WEBHOOK", "")
+    TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
+    NOTIFY_FILE: pathlib.Path = pathlib.Path(
+        os.getenv("NOTIFY_FILE", str(ROOT / "data" / "outbox.jsonl"))
+    )
 
-    @classmethod
-    def tz(cls):
-        return ZoneInfo(cls.TIMEZONE)
+    # --- SMS (patient notifications) ---------------------------------------
+    SMS_PROVIDER: str = os.getenv("SMS_PROVIDER", "file")  # file|webhook|kavenegar|smsir
+    SMS_API_KEY: str = os.getenv("SMS_API_KEY", "")
+    SMS_SENDER: str = os.getenv("SMS_SENDER", "")
+    SMS_WEBHOOK: str = os.getenv("SMS_WEBHOOK", "")
+    SMS_INBOUND_SECRET: str = os.getenv("SMS_INBOUND_SECRET", "")
+    SMS_UNIT_COST_USD: float = _f("SMS_UNIT_COST_USD", 0.0045)
+    SMS_BUDGET_MONTHLY_USD: float = _f("SMS_BUDGET_MONTHLY_USD", 3.0)
+    SMS_FILE: pathlib.Path = pathlib.Path(
+        os.getenv("SMS_FILE", str(ROOT / "data" / "sms-outbox.txt"))
+    )
 
-    @classmethod
-    def now(cls):
-        return datetime_now(cls.tz())
+    # --- patient portal -----------------------------------------------------
+    PATIENT_SESSION_TTL_H: int = _i("PATIENT_SESSION_TTL_HOURS", 6)
+    UPLOAD_DIR: pathlib.Path = pathlib.Path(os.getenv("UPLOAD_DIR", str(ROOT / "data" / "uploads")))
+    MAX_UPLOAD_BYTES: int = _i("MAX_UPLOAD_BYTES", 5 * 1024 * 1024)  # 5 MB
+    REMINDER_LEAD_MIN: int = _i("REMINDER_LEAD_MIN", 120)  # confirm SMS 2 h before
+    REMINDER_TICK_S: int = _i("REMINDER_TICK_S", 60)
+    # patients often share one IP (clinic wifi, a family, carrier NAT), so the
+    # per-IP ceiling is loose and the real protection is the per-national-id limit
+    RL_REGISTER_IP_PER_DAY: int = _i("RL_REGISTER_IP_PER_DAY", 25)
+    RL_PATIENT_LOGIN_IP_PER_15MIN: int = _i("RL_PATIENT_LOGIN_IP_PER_15MIN", 10)
+    RL_APPT_PATIENT_PER_DAY: int = _i("RL_APPT_PATIENT_PER_DAY", 4)
 
-    @classmethod
-    def slot_times(cls) -> list[str]:
-        """خانه‌های ساعت: 16:00 تا 21:30 با گام ۳۰ دقیقه (WORK_END بسته می‌شود)."""
-        from datetime import datetime, timedelta
+    # --- layer 10: caching --------------------------------------------------
+    STATIC_IMMUTABLE_MAX_AGE: int = _i("STATIC_IMMUTABLE_MAX_AGE", 31536000)
+    HTML_MAX_AGE: int = _i("HTML_MAX_AGE", 0)
+    API_CACHE_TTL_S: int = _i("API_CACHE_TTL_S", 30)
 
-        start = datetime.strptime(cls.WORK_START, "%H:%M")
-        end = datetime.strptime(cls.WORK_END, "%H:%M")
-        step = timedelta(minutes=cls.SLOT_MINUTES)
-        out = []
-        cur = start
-        while cur + step <= end:
-            out.append(cur.strftime("%H:%M"))
-            cur += step
-        return out
+    def __init__(self) -> None:
+        if not self.SECRET_KEY:
+            if self.ENV == "production":
+                raise RuntimeError("SECRET_KEY is required in production (see .env.example)")
+            self.SECRET_KEY = secrets.token_urlsafe(48)  # ephemeral, dev only
+        if self.ENV == "production" and self.NOTIFY_PROVIDER == "file":
+            # the file sink is a dev stub: refuse to pretend bookings are delivered in prod
+            raise RuntimeError("NOTIFY_PROVIDER=file is not allowed in production")
+        if self.ENV == "production" and self.SMS_PROVIDER == "file":
+            # same rule for SMS: never tell a patient we texted them when we did not
+            raise RuntimeError("SMS_PROVIDER=file is not allowed in production")
+        self.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self.BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        self.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def is_prod(self) -> bool:
+        return self.ENV == "production"
 
 
-def datetime_now(tz):
-    from datetime import datetime
-
-    return datetime.now(tz)
+settings = Settings()

@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#030d1a">
+<meta name="robots" content="noindex,nofollow">
+<title>{{TITLE}} | آسا فیزیو کلینیک</title>
+<link rel="stylesheet" href="{{CSS}}">
+<style>
+/* portal-only additions. Every token below is the one the site already uses. */
+body{min-height:100vh}
+.pwrap{width:min(94%,980px);margin-inline:auto;padding:28px 0 90px;position:relative;z-index:2}
+.pnav{display:flex;align-items:center;gap:12px;padding:14px 0 26px;flex-wrap:wrap}
+.pnav .brand{gap:11px}
+.pnav .sp{flex:1}
+.pbadge{font-size:.74rem;padding:5px 11px;border-radius:999px;border:1px solid rgba(45,212,191,.3);
+  color:var(--glow);background:rgba(45,212,191,.08);white-space:nowrap}
+.pcard{background:linear-gradient(165deg,rgba(9,32,56,.92),rgba(4,18,34,.95));
+  border:1px solid rgba(45,212,191,.16);border-radius:24px;padding:30px;position:relative;
+  overflow:hidden;box-shadow:0 34px 70px -40px rgba(0,0,0,.9),0 0 0 1px rgba(94,234,212,.05) inset}
+.pcard::before{content:'';position:absolute;inset-inline-start:-40%;top:-60%;width:120%;height:120%;
+  background:radial-gradient(closest-side,rgba(45,212,191,.13),transparent 70%);pointer-events:none}
+.pcard>*{position:relative}
+.pcard+.pcard{margin-top:20px}
+.ptitle{font-size:1.35rem;font-weight:800;letter-spacing:-.3px;margin-bottom:8px;
+  background:linear-gradient(120deg,var(--ink),var(--glow));-webkit-background-clip:text;
+  background-clip:text;color:transparent}
+.psub{color:var(--muted);font-size:.9rem;line-height:1.9;margin-bottom:22px}
+.grid2{display:grid;gap:16px;grid-template-columns:1fr 1fr}
+@media(max-width:620px){.grid2{grid-template-columns:1fr}.pcard{padding:22px 18px}}
+.field+.field,.field+.grid2,.grid2+.field,.grid2+.grid2{margin-top:16px}
+.hint{font-size:.74rem;color:#7fa3bb;margin:7px 3px 0;line-height:1.8}
+.err-msg{display:none;margin:7px 3px 0;font-size:.75rem;color:#fca5a5;line-height:1.7}
+.field.is-bad .err-msg{display:block}
+.field.is-bad input,.field.is-bad select,.field.is-bad textarea{border-color:rgba(248,113,113,.75)!important}
+/* ---- choice cards (entry page) ---- */
+.choice{display:grid;gap:18px;grid-template-columns:1fr 1fr}
+@media(max-width:700px){.choice{grid-template-columns:1fr}}
+.choice a{display:block;text-decoration:none;color:inherit;padding:28px 24px;border-radius:20px;
+  border:1px solid rgba(45,212,191,.18);background:rgba(11,42,74,.4);transition:.3s;
+  position:relative;overflow:hidden;transform-style:preserve-3d}
+.choice a::after{content:'';position:absolute;inset:0;
+  background:linear-gradient(135deg,rgba(94,234,212,.12),transparent 55%);opacity:0;transition:.3s}
+.choice a:hover{transform:translateY(-6px);border-color:rgba(45,212,191,.5);
+  box-shadow:0 30px 60px -30px rgba(45,212,191,.55)}
+.choice a:hover::after{opacity:1}
+.choice .ico{width:52px;height:52px;border-radius:16px;display:grid;place-items:center;
+  background:linear-gradient(135deg,rgba(94,234,212,.22),rgba(56,189,248,.12));
+  border:1px solid rgba(94,234,212,.28);margin-bottom:16px}
+.choice .ico svg{width:26px;height:26px;stroke:var(--glow);fill:none;stroke-width:2;stroke-linecap:round}
+.choice h3{font-size:1.05rem;margin-bottom:7px}
+.choice p{font-size:.84rem;color:var(--muted);line-height:1.9}
+.choice .go{margin-top:14px;font-size:.82rem;color:var(--glow);display:inline-flex;gap:6px;align-items:center}
+/* ---- stepper ---- */
+.steps{display:flex;align-items:center;gap:6px;margin-bottom:24px;flex-wrap:wrap}
+.steps i{flex:1;height:4px;border-radius:99px;background:rgba(155,185,209,.16);min-width:40px}
+.steps i.on{background:linear-gradient(90deg,var(--teal),var(--aqua));
+  box-shadow:0 0 14px rgba(45,212,191,.5)}
+.steps span{font-size:.74rem;color:var(--muted)}
+/* ---- date strip ---- */
+.dayrow{display:flex;gap:9px;overflow-x:auto;padding:4px 2px 14px;scroll-snap-type:x mandatory;
+  -webkit-overflow-scrolling:touch}
+.dayrow::-webkit-scrollbar{height:5px}
+.dayrow::-webkit-scrollbar-thumb{background:rgba(45,212,191,.3);border-radius:9px}
+.daybtn{flex:0 0 auto;scroll-snap-align:start;min-width:78px;padding:11px 12px;border-radius:15px;
+  border:1px solid rgba(45,212,191,.18);background:rgba(11,42,74,.42);color:var(--ink);
+  cursor:pointer;font:inherit;text-align:center;transition:.22s;line-height:1.6}
+.daybtn b{display:block;font-size:1.22rem;font-weight:800}
+.daybtn span{display:block;font-size:.68rem;color:var(--muted)}
+.daybtn:hover{border-color:rgba(45,212,191,.45);transform:translateY(-3px)}
+.daybtn.on{background:linear-gradient(135deg,rgba(45,212,191,.28),rgba(56,189,248,.16));
+  border-color:var(--teal);box-shadow:0 14px 32px -14px rgba(45,212,191,.75)}
+.daybtn.on span{color:var(--glow)}
+/* ---- slot grid ---- */
+.slotgrid{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));margin-top:6px}
+.slot{position:relative;padding:13px 8px 11px;border-radius:15px;cursor:pointer;font:inherit;
+  border:1px solid rgba(45,212,191,.2);background:rgba(11,42,74,.45);color:var(--ink);
+  transition:.2s;text-align:center;overflow:hidden}
+.slot .t{font-size:1.06rem;font-weight:800;letter-spacing:.4px;direction:ltr}
+.slot .c{font-size:.67rem;color:var(--muted);margin-top:3px}
+.slot::before{content:'';position:absolute;inset-inline:0;bottom:0;height:3px;
+  background:linear-gradient(90deg,var(--teal),var(--aqua));transform:scaleX(0);transition:.25s}
+.slot:not(:disabled):hover{transform:translateY(-4px);border-color:rgba(45,212,191,.55);
+  box-shadow:0 18px 36px -18px rgba(45,212,191,.7)}
+.slot:not(:disabled):hover::before{transform:scaleX(1)}
+.slot.on{background:linear-gradient(135deg,rgba(45,212,191,.3),rgba(56,189,248,.17));
+  border-color:var(--teal);box-shadow:0 0 0 3px rgba(45,212,191,.16),0 18px 38px -18px rgba(45,212,191,.8)}
+.slot.on::before{transform:scaleX(1)}
+.slot:disabled{opacity:.3;cursor:not-allowed;filter:grayscale(.6)}
+.slot:disabled .c{color:#f87171;opacity:.9}
+.slot.low:not(:disabled) .c{color:#fbbf24}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:.74rem;color:var(--muted);margin-top:16px}
+.legend i{display:inline-block;width:13px;height:13px;border-radius:5px;margin-inline-end:6px;
+  vertical-align:-2px;border:1px solid rgba(45,212,191,.3);background:rgba(11,42,74,.6)}
+.legend .l-on{background:linear-gradient(135deg,var(--teal),var(--aqua));border-color:transparent}
+.legend .l-full{opacity:.3;filter:grayscale(.6)}
+/* ---- states ---- */
+.state{padding:30px 16px;text-align:center;border-radius:16px;font-size:.88rem;line-height:1.9}
+.state.loading{color:var(--muted)}
+.state.empty{color:var(--muted);border:1px dashed rgba(155,185,209,.28)}
+.state.error{color:#ffd9d9;border:1px solid rgba(248,113,113,.4);background:rgba(248,113,113,.08)}
+.state .sub{display:block;margin-top:8px;font-size:.76rem;opacity:.85}
+.spin{width:24px;height:24px;border:2px solid rgba(45,212,191,.22);border-top-color:var(--teal);
+  border-radius:50%;animation:psp .8s linear infinite;margin:0 auto 12px}
+@keyframes psp{to{transform:rotate(360deg)}}
+.skel{height:56px;border-radius:15px;background:linear-gradient(90deg,
+  rgba(11,42,74,.45),rgba(11,42,74,.85),rgba(11,42,74,.45));background-size:200% 100%;
+  animation:psh 1.2s linear infinite}
+@keyframes psh{to{background-position:-200% 0}}
+.hidden{display:none!important}
+.btn.is-loading{pointer-events:none;opacity:.75}
+.btn.is-loading svg{display:none}
+.btn.is-loading::before{content:"";width:16px;height:16px;border-radius:50%;flex:0 0 auto;
+  border:2px solid rgba(255,255,255,.35);border-top-color:currentColor;animation:psp .7s linear infinite}
+/* ---- summary / receipt ---- */
+.recap{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin:20px 0}
+.recap div{background:rgba(11,42,74,.45);border:1px solid rgba(45,212,191,.15);
+  border-radius:14px;padding:14px}
+.recap b{display:block;font-size:1.02rem;margin-bottom:3px}
+.recap span{font-size:.72rem;color:var(--muted)}
+.ticket{text-align:center;padding:34px 20px}
+.ticket .mark{width:78px;height:78px;border-radius:50%;display:grid;place-items:center;margin:0 auto 20px;
+  background:linear-gradient(135deg,rgba(45,212,191,.28),rgba(56,189,248,.15));
+  border:1px solid rgba(94,234,212,.35);animation:pop .55s cubic-bezier(.2,1.4,.4,1) both}
+.ticket .mark svg{width:38px;height:38px;stroke:var(--glow);fill:none;stroke-width:2.6;
+  stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:40;stroke-dashoffset:40;
+  animation:draw .6s .3s ease forwards}
+@keyframes pop{from{transform:scale(.4);opacity:0}}
+@keyframes draw{to{stroke-dashoffset:0}}
+.code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:1.3rem;letter-spacing:3px;
+  direction:ltr;color:var(--glow);background:rgba(45,212,191,.09);padding:9px 18px;border-radius:12px;
+  display:inline-block;border:1px dashed rgba(45,212,191,.35);margin:6px 0 4px}
+.mylist{display:grid;gap:10px;margin-top:6px}
+.myrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:13px 15px;border-radius:14px;
+  border:1px solid rgba(45,212,191,.14);background:rgba(11,42,74,.34)}
+.myrow .w{font-weight:700}
+.pill{font-size:.69rem;padding:3px 9px;border-radius:999px;border:1px solid currentColor}
+.p-booked{color:var(--aqua)}.p-attended{color:#34d399}.p-cancelled{color:#f87171}
+.p-no_show{color:#fbbf24}.p-coming{color:#34d399}
+.toast{position:fixed;inset-inline:14px;bottom:16px;z-index:60;padding:14px 18px;border-radius:15px;
+  font-size:.86rem;font-weight:700;opacity:0;visibility:hidden;transform:translateY(16px);
+  transition:.3s;text-align:center;max-width:470px;margin:0 auto;
+  background:linear-gradient(140deg,var(--glow),var(--teal));color:#042027;
+  box-shadow:0 20px 44px -18px rgba(45,212,191,.8)}
+.toast.show{opacity:1;visibility:visible;transform:none}
+.toast.is-err{background:linear-gradient(140deg,rgba(248,113,113,.97),rgba(220,80,80,.95));color:#2b0505}
+.backlink{display:inline-flex;gap:7px;align-items:center;font-size:.84rem;color:var(--muted);
+  text-decoration:none;margin-top:18px}
+.backlink:hover{color:var(--glow)}
+.filebox{border:1px dashed rgba(45,212,191,.3);border-radius:16px;padding:18px;text-align:center;
+  background:rgba(11,42,74,.3);transition:.25s;cursor:pointer;display:block}
+.filebox:hover{border-color:rgba(45,212,191,.6);background:rgba(45,212,191,.07)}
+.filebox input{display:none}
+.filebox svg{width:26px;height:26px;stroke:var(--glow);fill:none;stroke-width:1.8;margin-bottom:8px}
+.filebox b{display:block;font-size:.88rem;margin-bottom:4px}
+.filebox span{font-size:.72rem;color:var(--muted)}
+.filebox.has{border-color:var(--teal);background:rgba(45,212,191,.1)}
+</style>
+</head>
+<body>
+<div class="bg-grid" aria-hidden="true"></div>
+<div class="pwrap">
+
+  <header class="pnav">
+    <a href="/" class="brand">
+      <svg class="mark" viewBox="0 0 200 112.96" aria-label="لوگوی آسا فیزیو"><path fill="url(#logoGradP)" d="{{MARK}}"/></svg>
+      <span class="brand-tx"><b>آسا فیزیو کلینیک</b><span>ASA PHYSIO</span></span>
+    </a>
+    <span class="sp"></span>
+    <span class="pbadge" id="whoBadge"></span>
+    <button class="btn btn-ghost hidden" id="outBtn" style="padding:8px 14px;font-size:.8rem">خروج</button>
+  </header>
+
+  {{BODY}}
+
+</div>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <linearGradient id="logoGradP" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#7ff3e0"/><stop offset=".5" stop-color="#2dd4bf"/>
+    <stop offset="1" stop-color="#38bdf8"/>
+  </linearGradient>
+</defs></svg>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script>{{SCRIPT}}</script>
+</body>
+</html>

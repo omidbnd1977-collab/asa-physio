@@ -1,0 +1,30 @@
+# secrets — only .env.example is tracked
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# runtime data
+data/
+releases/
+CURRENT_RELEASE
+public/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# build artifacts of the static site
+node_modules/
+*.zip
+
+# os
+.DS_Store
+
+uploads/

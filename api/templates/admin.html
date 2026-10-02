@@ -1,0 +1,1214 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<title>پنل آسا فیزیو</title>
+<style>
+/* layer 01: four states on every view, works at 375px. system fonts only — no network. */
+:root{--abyss:#030d1a;--deep:#061a30;--mid:#0b2a4a;--teal:#2dd4bf;--aqua:#38bdf8;
+      --ink:#eaf7ff;--muted:#9bb9d1;--bad:#f87171;--warn:#fbbf24;--ok:#34d399;--r:16px}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--abyss);color:var(--ink);min-height:100vh;
+     font:15px/1.7 system-ui,"Segoe UI",Tahoma,sans-serif;
+     background-image:radial-gradient(900px 500px at 80% -10%,rgba(45,212,191,.10),transparent 60%),
+                      radial-gradient(700px 500px at 0% 10%,rgba(56,189,248,.08),transparent 60%)}
+.wrap{max-width:1100px;margin:0 auto;padding:16px}
+a{color:var(--teal)}
+header.top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  padding:14px 16px;background:rgba(6,26,48,.75);border:1px solid rgba(45,212,191,.16);
+  border-radius:var(--r);margin-bottom:16px;backdrop-filter:blur(8px)}
+header.top h1{font-size:1rem;font-weight:700;letter-spacing:.2px}
+header.top .sp{flex:1}
+.badge{font-size:.72rem;padding:4px 9px;border-radius:999px;border:1px solid rgba(45,212,191,.3);
+  color:var(--teal);background:rgba(45,212,191,.08);white-space:nowrap}
+.btn{appearance:none;border:1px solid rgba(45,212,191,.35);background:rgba(45,212,191,.12);
+  color:var(--ink);padding:9px 14px;border-radius:11px;font:inherit;font-size:.86rem;
+  cursor:pointer;transition:.18s;min-height:40px}
+.btn:hover:not(:disabled){background:rgba(45,212,191,.22)}
+.btn:disabled{opacity:.55;cursor:not-allowed}
+.btn.primary{background:linear-gradient(135deg,var(--teal),var(--aqua));color:#042027;
+  border-color:transparent;font-weight:700}
+.btn.sm{padding:6px 10px;font-size:.78rem;min-height:34px}
+.card{background:rgba(6,26,48,.62);border:1px solid rgba(45,212,191,.14);
+  border-radius:var(--r);padding:18px;margin-bottom:16px}
+.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.kpi{background:rgba(11,42,74,.5);border:1px solid rgba(45,212,191,.14);
+  border-radius:13px;padding:14px}
+.kpi b{display:block;font-size:1.7rem;line-height:1.3;
+  background:linear-gradient(135deg,var(--teal),var(--aqua));
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.kpi span{font-size:.76rem;color:var(--muted)}
+.kpi.star{border-color:rgba(45,212,191,.42);box-shadow:0 0 0 1px rgba(45,212,191,.12) inset}
+.kpi.vanity b{background:none;color:var(--muted);font-size:1.25rem}
+h2{font-size:.95rem;margin-bottom:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+label{display:block;font-size:.8rem;color:var(--muted);margin:0 0 6px}
+input,select{width:100%;background:rgba(3,13,26,.75);border:1px solid rgba(45,212,191,.2);
+  border-radius:11px;padding:11px 13px;color:var(--ink);font:inherit;min-height:44px}
+input:focus,select:focus{outline:2px solid rgba(45,212,191,.5);outline-offset:1px}
+/* ---- the four states ---- */
+.state{padding:28px 16px;text-align:center;border-radius:13px;font-size:.9rem}
+.state.loading{color:var(--muted)}
+.state.empty{color:var(--muted);border:1px dashed rgba(155,185,209,.3)}
+.state.error{color:#ffd9d9;border:1px solid rgba(248,113,113,.4);background:rgba(248,113,113,.08)}
+.state .sub{display:block;margin-top:8px;font-size:.78rem;opacity:.8}
+.spin{width:22px;height:22px;border:2px solid rgba(45,212,191,.25);border-top-color:var(--teal);
+  border-radius:50%;animation:sp .8s linear infinite;margin:0 auto 10px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.skel{height:52px;border-radius:11px;margin-bottom:8px;
+  background:linear-gradient(90deg,rgba(11,42,74,.5),rgba(11,42,74,.85),rgba(11,42,74,.5));
+  background-size:200% 100%;animation:sh 1.2s linear infinite}
+@keyframes sh{to{background-position:-200% 0}}
+.hidden{display:none!important}
+/* clinical */
+.thumbs{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+.thumb{width:104px;border-radius:12px;overflow:hidden;border:1px solid rgba(45,212,191,.22);
+  background:rgba(11,42,74,.5);cursor:pointer;transition:.2s;padding:0;display:block}
+.thumb:hover{transform:translateY(-3px);border-color:var(--teal);
+  box-shadow:0 14px 30px -14px rgba(45,212,191,.7)}
+.thumb img{width:100%;height:78px;object-fit:cover;display:block}
+.thumb span{display:block;font-size:.68rem;padding:5px 4px;color:var(--muted);text-align:center}
+.thumb.pdf{display:grid;place-items:center;height:78px;color:var(--glow);font-size:.74rem}
+.upbtn{width:104px;height:105px;border-radius:12px;border:1px dashed rgba(45,212,191,.35);
+  background:rgba(11,42,74,.3);color:var(--muted);font:inherit;font-size:.72rem;cursor:pointer;
+  display:grid;place-items:center;text-align:center;padding:6px;transition:.2s}
+.upbtn:hover{border-color:var(--teal);color:var(--glow);background:rgba(45,212,191,.08)}
+.upbtn input{display:none}
+#lightbox{position:fixed;inset:0;z-index:200;background:rgba(2,8,18,.93);display:none;
+  align-items:center;justify-content:center;padding:18px;flex-direction:column;gap:12px}
+#lightbox.on{display:flex}
+#lightbox img{max-width:96vw;max-height:82vh;border-radius:14px;
+  box-shadow:0 30px 80px -20px #000;background:#0b2a4a}
+#lightbox iframe{width:96vw;height:82vh;border:0;border-radius:14px;background:#fff}
+#lbBar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:center}
+#lbTitle{color:var(--ink);font-size:.9rem;font-weight:700}
+/* chips multiselect */
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;min-height:30px}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:.76rem;padding:5px 10px;
+  border-radius:999px;border:1px solid rgba(45,212,191,.4);background:rgba(45,212,191,.12);
+  color:var(--ink)}
+.chip b{cursor:pointer;color:#fca5a5;font-weight:700;line-height:1}
+.pickrow{display:flex;gap:7px;margin-top:8px;flex-wrap:wrap}
+.pickrow select{flex:1;min-width:150px}
+.addrow{display:flex;gap:7px;margin-top:7px;flex-wrap:wrap}
+.addrow input{flex:1;min-width:140px;min-height:38px;font-size:.82rem}
+.sectitle{font-size:.84rem;font-weight:700;color:var(--teal);margin:18px 0 2px}
+/* history */
+.hist{border-inline-start:2px solid rgba(45,212,191,.3);padding-inline-start:14px;
+  margin-top:12px;position:relative}
+.histrow{position:relative;padding:12px 13px;border-radius:12px;margin-bottom:9px;
+  border:1px solid rgba(45,212,191,.13);background:rgba(11,42,74,.34)}
+.histrow::before{content:'';position:absolute;inset-inline-start:-21px;top:18px;width:9px;height:9px;
+  border-radius:50%;background:var(--teal);box-shadow:0 0 0 3px rgba(45,212,191,.18)}
+.histrow .hd{font-weight:700;font-size:.85rem;margin-bottom:6px;display:flex;gap:8px;
+  flex-wrap:wrap;align-items:center}
+.histrow .tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
+.tag{font-size:.7rem;padding:3px 8px;border-radius:7px;background:rgba(56,189,248,.14);
+  border:1px solid rgba(56,189,248,.3);color:#bae6fd}
+.tag.tx{background:rgba(45,212,191,.13);border-color:rgba(45,212,191,.32);color:var(--glow)}
+.histrow .note{font-size:.78rem;color:var(--muted);margin-top:7px;line-height:1.8}
+.gapbadge{font-size:.68rem;padding:2px 8px;border-radius:999px;background:rgba(251,191,36,.14);
+  border:1px solid rgba(251,191,36,.35);color:#fcd34d}
+/* tabs */
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px}
+.tab{appearance:none;border:1px solid rgba(45,212,191,.2);background:rgba(11,42,74,.4);
+  color:var(--muted);padding:9px 15px;border-radius:11px;font:inherit;font-size:.84rem;
+  cursor:pointer;transition:.2s;min-height:40px}
+.tab:hover{color:var(--ink);border-color:rgba(45,212,191,.4)}
+.tab.on{background:linear-gradient(135deg,rgba(45,212,191,.26),rgba(56,189,248,.14));
+  color:var(--ink);border-color:var(--teal);font-weight:700}
+/* appointment rows */
+.appt{display:grid;gap:5px 12px;grid-template-columns:auto 1fr;padding:13px;border-radius:13px;
+  border:1px solid rgba(45,212,191,.13);background:rgba(11,42,74,.34);margin-bottom:9px}
+.appt .when{font-weight:800;font-size:1.02rem;direction:ltr;text-align:center;
+  background:rgba(45,212,191,.1);border:1px solid rgba(45,212,191,.22);border-radius:11px;
+  padding:9px 11px;min-width:74px;align-self:start}
+.appt .when small{display:block;font-size:.62rem;color:var(--muted);direction:rtl;font-weight:400}
+.appt .who{font-weight:700}
+.appt .meta{grid-column:1/-1;display:flex;gap:9px;flex-wrap:wrap;align-items:center;
+  font-size:.76rem;color:var(--muted)}
+.appt .acts{grid-column:1/-1;display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.appt.coming{border-color:rgba(52,211,153,.45);box-shadow:0 0 0 1px rgba(52,211,153,.1) inset}
+.d-coming{color:#34d399}.d-not_coming{color:#f87171}.d-unknown{color:var(--muted)}
+.a-booked{color:var(--aqua)}.a-attended{color:#34d399}.a-cancelled{color:#f87171}.a-no_show{color:#fbbf24}
+/* patient card */
+.pt{border:1px solid rgba(45,212,191,.14);border-radius:14px;background:rgba(11,42,74,.3);
+  padding:14px;margin-bottom:10px}
+.pt summary{cursor:pointer;font-weight:700;display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+  list-style:none}
+.pt summary::-webkit-details-marker{display:none}
+.pt summary::after{content:'▾';margin-inline-start:auto;color:var(--teal);font-size:.9rem}
+.pt[open] summary::after{content:'▴'}
+.pt dl{display:grid;grid-template-columns:auto 1fr;gap:7px 12px;margin-top:14px;font-size:.82rem}
+.pt dt{color:var(--muted)}
+.pt dd{word-break:break-word}
+.ptappt{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:7px;
+  padding:10px 12px;border-radius:11px;border:1px solid rgba(45,212,191,.12);
+  background:rgba(11,42,74,.34);font-size:.82rem}
+.ptappt .pill{flex:0 0 auto;white-space:nowrap}
+.pt .ptacts{display:flex;gap:7px;flex-wrap:wrap;margin-top:13px}
+/* slot picker inside the panel */
+.minigrid{display:grid;gap:7px;grid-template-columns:repeat(auto-fill,minmax(82px,1fr));margin-top:10px}
+.mslot{padding:9px 4px;border-radius:10px;border:1px solid rgba(45,212,191,.2);
+  background:rgba(11,42,74,.45);color:var(--ink);font:inherit;font-size:.82rem;cursor:pointer;
+  text-align:center;direction:ltr;transition:.18s}
+.mslot b{display:block;font-weight:800}
+.mslot small{font-size:.6rem;color:var(--muted);direction:rtl}
+.mslot:not(:disabled):hover{border-color:var(--teal);transform:translateY(-2px)}
+.mslot.on{background:linear-gradient(135deg,rgba(45,212,191,.3),rgba(56,189,248,.16));border-color:var(--teal)}
+.mslot:disabled{opacity:.28;cursor:not-allowed}
+dialog{border:0;padding:0;background:transparent;max-width:min(94vw,520px);width:100%}
+dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
+.modal{background:linear-gradient(165deg,rgba(9,32,56,.98),rgba(4,18,34,.99));
+  border:1px solid rgba(45,212,191,.22);border-radius:20px;padding:22px;color:var(--ink);
+  max-height:88vh;overflow:auto}
+.modal h3{font-size:1rem;margin-bottom:6px}
+.modal .mrow{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap}
+.smsrow{padding:11px 13px;border-radius:12px;border:1px solid rgba(45,212,191,.12);
+  background:rgba(11,42,74,.3);margin-bottom:8px;font-size:.8rem}
+.smsrow pre{white-space:pre-wrap;font:inherit;color:var(--muted);margin-top:6px}
+.s-sent{color:#34d399}.s-failed{color:#f87171}.s-pending{color:#fbbf24}
+/* ---- list ---- */
+.row{display:grid;gap:4px 12px;grid-template-columns:1fr auto;
+  padding:13px;border:1px solid rgba(45,212,191,.12);border-radius:13px;
+  background:rgba(11,42,74,.32);margin-bottom:9px}
+.row .nm{font-weight:700;font-size:.95rem}
+.row .meta{font-size:.78rem;color:var(--muted);grid-column:1/-1;
+  display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.row .acts{grid-column:1/-1;display:flex;gap:7px;flex-wrap:wrap;margin-top:6px}
+.pill{font-size:.7rem;padding:3px 8px;border-radius:999px;border:1px solid currentColor}
+.p-new{color:var(--aqua)}.p-contacted{color:var(--warn)}.p-scheduled{color:var(--teal)}
+.p-done{color:var(--ok)}.p-spam{color:var(--bad)}
+.d-delivered{color:var(--ok)}.d-failed{color:var(--bad)}.d-pending{color:var(--muted)}
+.toast{position:fixed;inset-inline:12px;bottom:14px;z-index:50;padding:13px 16px;border-radius:13px;
+  font-size:.86rem;font-weight:700;opacity:0;visibility:hidden;transform:translateY(16px);
+  transition:.3s;text-align:center;max-width:460px;margin:0 auto}
+.toast.show{opacity:1;visibility:visible;transform:none}
+.toast.ok{background:var(--teal);color:#042027}
+.toast.err{background:var(--bad);color:#2b0505}
+.login{max-width:380px;margin:9vh auto}
+.muted{color:var(--muted);font-size:.78rem}
+@media(max-width:420px){.wrap{padding:12px}.card{padding:14px}header.top h1{font-size:.92rem}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ============ LOGIN ============ -->
+  <section id="loginView" class="hidden">
+    <div class="card login">
+      <h2>ورود به پنل آسا فیزیو</h2>
+      <form id="loginForm" novalidate>
+        <label for="u">نام کاربری</label>
+        <input id="u" name="username" autocomplete="username" required minlength="3">
+        <div style="height:12px"></div>
+        <label for="p">گذرواژه</label>
+        <input id="p" name="password" type="password" autocomplete="current-password"
+               required minlength="8">
+        <div style="height:16px"></div>
+        <button class="btn primary" style="width:100%" id="loginBtn">ورود</button>
+      </form>
+      <div id="loginErr" class="state error hidden" style="margin-top:14px"></div>
+      <p class="muted" style="margin-top:12px">این صفحه برای کارکنان کلینیک است.</p>
+    </div>
+  </section>
+
+  <!-- ============ APP ============ -->
+  <section id="appView" class="hidden">
+    <header class="top">
+      <h1>پنل آسا فیزیو</h1>
+      <span class="badge" id="roleBadge">—</span>
+      <span class="badge" id="envBadge">—</span>
+      <span class="sp"></span>
+      <button class="btn sm" id="refreshBtn">تازه‌سازی</button>
+      <button class="btn sm" id="logoutBtn">خروج</button>
+    </header>
+
+    <div class="tabs" id="tabs">
+      <button class="tab on" data-tab="sched">🗓 نوبت‌ها</button>
+      <button class="tab" data-tab="pts">👤 بیماران</button>
+      <button class="tab" data-tab="sms">✉️ پیامک‌ها</button>
+      <button class="tab" data-tab="req">📨 درخواست‌های سایت</button>
+      <button class="tab" data-tab="ops">⚙️ سامانه</button>
+    </div>
+
+    <!-- ============ TAB: schedule ============ -->
+    <section data-pane="sched">
+      <div class="card">
+        <h2>🗓 نوبت‌های فیزیوتراپی
+          <select id="scope" style="width:auto;min-height:36px;padding:6px 10px;font-size:.8rem">
+            <option value="today">امروز</option>
+            <option value="upcoming" selected>از امروز به بعد</option>
+            <option value="past">گذشته</option>
+            <option value="all">همه</option>
+          </select>
+          <button class="btn sm" id="remindBtn">ارسال یادآوری‌های سررسیده</button>
+        </h2>
+        <div id="aLoading"><div class="skel"></div><div class="skel"></div><div class="skel"></div></div>
+        <div id="aEmpty" class="state empty hidden">
+          هنوز نوبتی ثبت نشده است.
+          <span class="sub">به محض اینکه بیماری از صفحه‌ی رزرو نوبت بگیرد، همین‌جا نمایش داده می‌شود.</span>
+        </div>
+        <div id="aError" class="state error hidden"></div>
+        <div id="aList" class="hidden"></div>
+      </div>
+    </section>
+
+    <!-- ============ TAB: patients ============ -->
+    <section data-pane="pts" class="hidden">
+      <div class="card">
+        <h2>👤 پرونده‌ی بیماران
+          <input id="pq" placeholder="جست‌وجوی نام، تلفن یا کد ملی"
+                 style="width:auto;flex:1;min-width:160px;min-height:36px;padding:7px 11px;font-size:.8rem">
+        </h2>
+        <div id="pLoading"><div class="skel"></div><div class="skel"></div></div>
+        <div id="pEmpty" class="state empty hidden">
+          هنوز بیماری ثبت‌نام نکرده است.
+          <span class="sub">ثبت‌نام از مسیر «رزرو نوبت» در سایت انجام می‌شود.</span>
+        </div>
+        <div id="pError" class="state error hidden"></div>
+        <div id="pList" class="hidden"></div>
+      </div>
+    </section>
+
+    <!-- ============ TAB: sms ============ -->
+    <section data-pane="sms" class="hidden">
+      <div class="card">
+        <h2>✉️ پیامک‌های ارسال‌شده <span class="badge" id="smsProv">—</span>
+          <button class="btn sm" id="smsRetry">تلاش دوباره برای ناموفق‌ها</button>
+        </h2>
+        <div id="sLoading"><div class="skel"></div><div class="skel"></div></div>
+        <div id="sEmpty" class="state empty hidden">هنوز پیامکی ارسال نشده است.</div>
+        <div id="sError" class="state error hidden"></div>
+        <div id="sList" class="hidden"></div>
+        <h2 style="margin-top:22px">📥 پاسخ‌های دریافتی</h2>
+        <div id="sInEmpty" class="state empty">هنوز پاسخی از بیماران دریافت نشده است.</div>
+        <div id="sIn" class="hidden"></div>
+      </div>
+    </section>
+
+    <!-- ============ TAB: site requests ============ -->
+    <section data-pane="req" class="hidden">
+    <!-- metrics -->
+    <div class="card">
+      <h2>📈 سنجش نتیجه <span class="muted">— ۳۰ روز گذشته</span></h2>
+      <div id="mLoading"><div class="spin"></div><p class="muted" style="text-align:center">
+        در حال بارگذاری…</p></div>
+      <div id="mError" class="state error hidden"></div>
+      <div id="mBody" class="hidden">
+        <div class="grid">
+          <div class="kpi star"><b id="kStar">۰</b>
+            <span>جلسه‌ی فیزیوتراپی که واقعاً انجام شد<br><i class="muted">عدد اصلی</i></span></div>
+          <div class="kpi"><b id="kReg">۰</b><span>ثبت‌نام بیمار جدید</span></div>
+          <div class="kpi"><b id="kBook">۰</b><span>نوبت رزروشده</span></div>
+          <div class="kpi"><b id="kShow">—</b><span>نرخ حضور (از رزرو تا جلسه)</span></div>
+          <div class="kpi"><b id="kConf">۰</b><span>تأیید حضور با پیامک</span></div>
+          <div class="kpi"><b id="kDeliv">۰</b><span>درخواست سایت که به کلینیک رسید</span></div>
+          <div class="kpi vanity"><b id="kCall">۰</b><span>کلیک تماس <i>(تزئینی)</i></span></div>
+          <div class="kpi vanity"><b id="kIg">۰</b><span>کلیک اینستاگرام <i>(تزئینی)</i></span></div>
+        </div>
+        <p class="muted" id="kFunnel" style="margin-top:12px;text-align:center"></p>
+      </div>
+    </div>
+
+    <!-- bookings -->
+    <div class="card">
+      <h2>🗂 درخواست‌های نوبت
+        <select id="filter" style="width:auto;min-height:36px;padding:6px 10px;font-size:.8rem">
+          <option value="">همه</option><option value="new">جدید</option>
+          <option value="contacted">تماس گرفته شد</option><option value="scheduled">زمان‌بندی شد</option>
+          <option value="done">انجام شد</option><option value="spam">اسپم</option>
+        </select>
+      </h2>
+      <div id="bLoading"><div class="skel"></div><div class="skel"></div><div class="skel"></div></div>
+      <div id="bEmpty" class="state empty hidden">
+        هنوز هیچ درخواستی ثبت نشده است.
+        <span class="sub">به محض اینکه کسی فرم سایت را پر کند، همین‌جا نمایش داده می‌شود.</span>
+      </div>
+      <div id="bError" class="state error hidden"></div>
+      <div id="bList" class="hidden"></div>
+      <div id="bPager" class="hidden" style="display:flex;gap:8px;justify-content:center;margin-top:12px">
+        <button class="btn sm" id="prevBtn">قبلی</button>
+        <span class="muted" id="pageLbl" style="align-self:center"></span>
+        <button class="btn sm" id="nextBtn">بعدی</button>
+      </div>
+    </div>
+
+    </section>
+
+    <!-- ============ TAB: ops ============ -->
+    <section data-pane="ops" class="hidden">
+    <div class="card hidden" id="opsCard">
+      <h2>⚙️ وضعیت سامانه</h2>
+      <div id="oLoading"><div class="skel" style="height:80px"></div></div>
+      <div id="oError" class="state error hidden"></div>
+      <div id="oBody" class="hidden"><div class="grid" id="opsGrid"></div>
+        <div style="margin-top:12px"><button class="btn sm" id="breakerBtn">بستن قطع‌کننده</button></div>
+      </div>
+    </div>
+    </section>
+  </section>
+</div>
+
+<div id="lightbox" role="dialog" aria-modal="true">
+  <div id="lbBar">
+    <span id="lbTitle"></span>
+    <a class="btn sm" id="lbOpen" target="_blank" rel="noopener">باز کردن در تب جدید</a>
+    <button class="btn sm" id="lbClose">بستن</button>
+  </div>
+  <div id="lbBody"></div>
+</div>
+
+<dialog id="sessDlg"><div class="modal">
+  <h3>ثبت جلسه درمان</h3>
+  <p class="muted" id="sessSub"></p>
+
+  <div class="sectitle">عضو / آسیب درگیر</div>
+  <div class="chips" id="bpChips"></div>
+  <div class="pickrow">
+    <select id="bpSelect"><option value="">انتخاب از فهرست…</option></select>
+    <button class="btn sm" id="bpAdd" type="button">افزودن</button>
+  </div>
+  <div class="addrow">
+    <input id="bpNew" maxlength="60" placeholder="در فهرست نیست؟ اینجا بنویسید">
+    <select id="bpCat" style="width:auto;min-height:38px;font-size:.8rem">
+      <option value="spine">ستون فقرات</option><option value="upper">اندام فوقانی</option>
+      <option value="lower">اندام تحتانی</option><option value="neuro">عصبی</option>
+      <option value="other" selected>سایر</option>
+    </select>
+    <button class="btn sm" id="bpCreate" type="button">ثبت در فهرست</button>
+  </div>
+
+  <div class="sectitle">درمان انجام‌شده</div>
+  <div class="chips" id="txChips"></div>
+  <div class="pickrow">
+    <select id="txSelect"><option value="">انتخاب از فهرست…</option></select>
+    <button class="btn sm" id="txAdd" type="button">افزودن</button>
+  </div>
+  <div class="addrow">
+    <input id="txNew" maxlength="60" placeholder="درمان جدیدی انجام دادید؟ اینجا بنویسید">
+    <button class="btn sm" id="txCreate" type="button">ثبت در فهرست</button>
+  </div>
+
+  <div class="sectitle">شرح و برنامه</div>
+  <div style="display:grid;gap:10px;grid-template-columns:1fr 1fr">
+    <div><label for="sPainB">درد قبل (۰ تا ۱۰)</label>
+      <input id="sPainB" type="number" min="0" max="10" inputmode="numeric"></div>
+    <div><label for="sPainA">درد بعد (۰ تا ۱۰)</label>
+      <input id="sPainA" type="number" min="0" max="10" inputmode="numeric"></div>
+  </div>
+  <div style="margin-top:10px"><label for="sFind">یافته‌های معاینه</label>
+    <input id="sFind" maxlength="2000"></div>
+  <div style="margin-top:10px"><label for="sPlan">برنامه‌ی جلسه بعد</label>
+    <input id="sPlan" maxlength="2000"></div>
+
+  <label style="display:flex;gap:8px;align-items:center;margin-top:13px;font-size:.84rem">
+    <input type="checkbox" id="sAttend" checked style="width:auto;min-height:auto">
+    این نوبت را «انجام شد» علامت بزن
+  </label>
+  <label style="display:flex;gap:8px;align-items:center;margin-top:8px;font-size:.84rem">
+    <input type="checkbox" id="sNotify" style="width:auto;min-height:auto">
+    پیامک خلاصه‌ی جلسه برای بیمار ارسال شود
+  </label>
+
+  <div id="sessErr" class="state error hidden" style="margin-top:12px"></div>
+  <div class="mrow">
+    <button class="btn primary" id="sessOk" style="flex:1">ثبت جلسه</button>
+    <button class="btn" id="sessCancel">انصراف</button>
+  </div>
+</div></dialog>
+
+<dialog id="slotDlg"><div class="modal">
+  <h3 id="dlgTitle">انتخاب زمان</h3>
+  <p class="muted" id="dlgSub"></p>
+  <div style="margin-top:14px">
+    <label for="dlgDate">روز</label>
+    <select id="dlgDate"></select>
+  </div>
+  <div id="dlgLoading" style="margin-top:12px"><div class="skel" style="height:90px"></div></div>
+  <div id="dlgError" class="state error hidden" style="margin-top:12px"></div>
+  <div class="minigrid hidden" id="dlgGrid"></div>
+  <div style="margin-top:14px">
+    <label for="dlgNote">یادداشت (اختیاری)</label>
+    <input id="dlgNote" maxlength="500">
+  </div>
+  <label style="display:flex;gap:8px;align-items:center;margin-top:12px;font-size:.84rem;color:var(--ink)">
+    <input type="checkbox" id="dlgNotify" checked style="width:auto;min-height:auto">
+    ارسال پیامک اطلاع‌رسانی به بیمار
+  </label>
+  <div class="mrow">
+    <button class="btn primary" id="dlgOk" style="flex:1">تأیید</button>
+    <button class="btn" id="dlgCancel">انصراف</button>
+  </div>
+</div></dialog>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+const fa = n => Number(n || 0).toLocaleString('fa-IR');
+let CSRF = '', ROLE = 'anon', PAGE = 1, TOTAL = 0, PER = 20;
+
+function toast(msg, ok = true) {
+  const t = $('#toast'); t.textContent = msg;
+  t.className = 'toast show ' + (ok ? 'ok' : 'err');
+  clearTimeout(t._t); t._t = setTimeout(() => t.className = 'toast', 3800);
+}
+function show(id) { $(id).classList.remove('hidden'); }
+function hide(id) { $(id).classList.add('hidden'); }
+
+/** Single fetch helper: every call returns {ok, data, error} — never throws at call sites. */
+async function api(path, opts = {}) {
+  const o = Object.assign({ headers: {}, credentials: 'same-origin' }, opts);
+  if (o.body && typeof o.body !== 'string') { o.body = JSON.stringify(o.body); }
+  if (o.body) o.headers['Content-Type'] = 'application/json';
+  if (CSRF) o.headers['X-CSRF-Token'] = CSRF;
+  let res;
+  try { res = await fetch(path, o); }
+  catch (e) { return { ok: false, error: { message: 'ارتباط با سرور برقرار نشد. اتصال اینترنت را بررسی کنید.' } }; }
+  if (res.status === 204) return { ok: true, data: null };
+  let body = null;
+  try { body = await res.json(); } catch (e) { body = null; }
+  if (!res.ok) {
+    const err = (body && body.error) || { message: 'خطای ناشناخته (' + res.status + ')' };
+    err.status = res.status;
+    return { ok: false, error: err };
+  }
+  return { ok: true, data: body };
+}
+
+function errBox(sel, err, retryFn) {
+  const el = $(sel);
+  el.innerHTML = '';
+  el.append(document.createTextNode(err.message || 'خطایی رخ داد.'));
+  if (err.trace_id) {
+    const s = document.createElement('span'); s.className = 'sub';
+    s.textContent = 'کد پیگیری: ' + err.trace_id; el.appendChild(s);
+  }
+  if (retryFn) {
+    const b = document.createElement('button');
+    b.className = 'btn sm'; b.style.marginTop = '10px'; b.textContent = 'تلاش دوباره';
+    b.onclick = retryFn; el.appendChild(document.createElement('br')); el.appendChild(b);
+  }
+  el.classList.remove('hidden');
+}
+
+// ---------- metrics ----------
+async function loadMetrics() {
+  show('#mLoading'); hide('#mError'); hide('#mBody');
+  const r = await api('/api/admin/metrics?days=30');
+  hide('#mLoading');
+  if (!r.ok) return errBox('#mError', r.error, loadMetrics);
+  const o = r.data.outcome, f = o.funnel;
+  $('#kStar').textContent  = fa(o.north_star.value);
+  $('#kReg').textContent   = fa(f.patient_registered);
+  $('#kBook').textContent  = fa(f.appointment_booked);
+  $('#kShow').textContent  = f.show_rate === null ? '—' : fa(f.show_rate) + '٪';
+  $('#kConf').textContent  = fa(o.supporting.attendance_confirmed);
+  $('#kDeliv').textContent = fa(o.supporting.booking_delivered);
+  $('#kCall').textContent  = fa(o.vanity.call_click);
+  $('#kIg').textContent    = fa(o.vanity.instagram_click);
+  $('#kFunnel').textContent =
+    'مسیر: ' + fa(f.patient_registered) + ' ثبت‌نام ← ' +
+    fa(f.appointment_booked) + ' رزرو ← ' + fa(o.north_star.value) + ' جلسه‌ی انجام‌شده';
+  show('#mBody');
+}
+
+// ---------- bookings ----------
+const ST = { new: 'جدید', contacted: 'تماس گرفته شد', scheduled: 'زمان‌بندی شد',
+             done: 'انجام شد', spam: 'اسپم' };
+const SV = { laser: 'لیزر پرتوان', shockwave: 'شاک ویو', tecar: 'تکار تراپی',
+             manual: 'درمان‌های دستی', acupuncture: 'طب سوزنی', consult: 'مشاوره رایگان',
+             rehab: 'توانبخشی', other: 'سایر' };
+const DL = { delivered: 'تحویل شد', failed: 'تحویل نشد', pending: 'در صف' };
+
+async function loadBookings() {
+  show('#bLoading'); hide('#bError'); hide('#bEmpty'); hide('#bList'); hide('#bPager');
+  const f = $('#filter').value;
+  const r = await api(`/api/admin/bookings?page=${PAGE}&per_page=${PER}` + (f ? `&status=${f}` : ''));
+  hide('#bLoading');
+  if (!r.ok) return errBox('#bError', r.error, loadBookings);
+  TOTAL = r.data.total;
+  const items = r.data.items || [];
+  if (!items.length) { show('#bEmpty'); return; }
+  const list = $('#bList'); list.innerHTML = '';
+  for (const b of items) {
+    const d = document.createElement('div'); d.className = 'row';
+    const nm = document.createElement('div'); nm.className = 'nm'; nm.textContent = b.name;
+    const ph = document.createElement('a'); ph.href = 'tel:' + b.phone;
+    ph.textContent = b.phone; ph.setAttribute('dir', 'ltr');
+    const meta = document.createElement('div'); meta.className = 'meta';
+    const sp = document.createElement('span'); sp.className = 'pill p-' + b.status;
+    sp.textContent = ST[b.status] || b.status;
+    const dp = document.createElement('span'); dp.className = 'pill d-' + b.delivery;
+    dp.textContent = DL[b.delivery] || b.delivery;
+    const sv = document.createElement('span'); sv.textContent = SV[b.service] || b.service;
+    const ts = document.createElement('span');
+    ts.textContent = new Date(b.created_at).toLocaleString('fa-IR');
+    meta.append(sp, dp, sv, ts);
+    if (b.note) { const n = document.createElement('span'); n.style.opacity = '.85';
+                  n.textContent = '«' + b.note + '»'; meta.appendChild(n); }
+    const acts = document.createElement('div'); acts.className = 'acts';
+    for (const s of ['contacted', 'scheduled', 'done', 'spam']) {
+      if (s === b.status) continue;
+      const btn = document.createElement('button');
+      btn.className = 'btn sm'; btn.textContent = ST[s];
+      btn.onclick = () => setStatus(b.public_id, s, btn);
+      acts.appendChild(btn);
+    }
+    if (b.delivery !== 'delivered') {
+      const rb = document.createElement('button');
+      rb.className = 'btn sm'; rb.textContent = 'ارسال دوباره به کلینیک';
+      rb.onclick = () => redeliver(b.public_id, rb);
+      acts.appendChild(rb);
+    }
+    d.append(nm, ph, meta, acts);
+    list.appendChild(d);
+  }
+  show('#bList');
+  const pages = Math.max(1, Math.ceil(TOTAL / PER));
+  $('#pageLbl').textContent = `صفحه ${fa(PAGE)} از ${fa(pages)} — ${fa(TOTAL)} مورد`;
+  $('#prevBtn').disabled = PAGE <= 1; $('#nextBtn').disabled = PAGE >= pages;
+  show('#bPager');
+}
+
+async function withBtn(btn, label, fn) {
+  const old = btn.textContent; btn.disabled = true; btn.textContent = label;
+  try { await fn(); } finally { btn.disabled = false; btn.textContent = old; }
+}
+function setStatus(id, status, btn) {
+  return withBtn(btn, 'در حال ثبت…', async () => {
+    const r = await api('/api/admin/bookings/' + id, { method: 'PATCH', body: { status } });
+    if (!r.ok) return toast(r.error.message, false);
+    toast('وضعیت ثبت شد'); loadBookings();
+  });
+}
+function redeliver(id, btn) {
+  return withBtn(btn, 'در حال ارسال…', async () => {
+    const r = await api('/api/admin/bookings/' + id + '/redeliver', { method: 'POST' });
+    if (!r.ok) return toast(r.error.message, false);
+    toast(r.data.delivered ? 'به کلینیک رسید ✓' : 'باز هم نرسید', r.data.delivered);
+    loadBookings(); loadMetrics();
+  });
+}
+
+// ---------- ops ----------
+async function loadOps() {
+  if (ROLE !== 'owner') return;
+  show('#opsCard'); show('#oLoading'); hide('#oError'); hide('#oBody');
+  const [o, c] = await Promise.all([api('/api/admin/ops'), api('/api/admin/costs')]);
+  hide('#oLoading');
+  if (!o.ok) return errBox('#oError', o.error, loadOps);
+  const d = o.data, g = $('#opsGrid'); g.innerHTML = '';
+  const add = (v, l, cls) => { const k = document.createElement('div');
+    k.className = 'kpi ' + (cls || ''); const b = document.createElement('b'); b.textContent = v;
+    const s = document.createElement('span'); s.textContent = l; k.append(b, s); g.appendChild(k); };
+  add(d.breaker.open ? 'باز' : 'بسته', 'قطع‌کننده‌ی سراسری');
+  add(fa(d.cache.hit_rate_pct) + '٪', 'نرخ اصابت کش');
+  add('\u2066' + fa(d.db.size_kb) + ' KB\u2069', 'حجم پایگاه‌داده');
+  add(fa(d.backups.count), 'نسخه‌ی پشتیبان');
+  add(d.notify_provider, 'کانال تحویل');
+  add('\u2066' + fa(Math.round(d.uptime_s / 60)) + ' دقیقه\u2069', 'مدت فعالیت');
+  if (c.ok) for (const [k, v] of Object.entries(c.data.resources)) {
+    const used = '\u2066' + v.spent_usd.toFixed(3) + ' / ' + Number(v.cap_usd).toFixed(2) + ' $\u2069';
+    add(used, v.label + ' — خرج‌شده از سقف ماهانه (' + fa(v.pct) + '٪)',
+        v.pct >= 80 ? 'vanity' : '');
+  }
+  show('#oBody');
+}
+
+// ---------- session ----------
+async function boot() {
+  const r = await api('/api/admin/me');
+  if (!r.ok) { show('#loginView'); hide('#appView'); return; }
+  CSRF = r.data.csrf; ROLE = r.data.role;
+  $('#roleBadge').textContent = ROLE === 'owner' ? 'مدیر' : 'کارمند';
+  const h = await api('/api/healthz');
+  $('#envBadge').textContent = h.ok ? (h.data.env + ' · ' + h.data.version) : '—';
+  hide('#loginView'); show('#appView');
+  showTab('sched');
+}
+
+$('#loginForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  hide('#loginErr');
+  const btn = $('#loginBtn');
+  await withBtn(btn, 'در حال ورود…', async () => {
+    const r = await api('/api/admin/login', { method: 'POST',
+      body: { username: $('#u').value.trim(), password: $('#p').value } });
+    if (!r.ok) return errBox('#loginErr', r.error);
+    $('#p').value = ''; 
+boot();
+  });
+});
+$('#logoutBtn').onclick = async () => { await api('/api/admin/logout', { method: 'POST' });
+  CSRF = ''; location.reload(); };
+$('#refreshBtn').onclick = () => { const t=document.querySelector('.tab.on'); showTab(t?t.dataset.tab:'sched'); };
+$('#filter').onchange = () => { PAGE = 1; loadBookings(); };
+$('#prevBtn').onclick = () => { if (PAGE > 1) { PAGE--; loadBookings(); } };
+$('#nextBtn').onclick = () => { PAGE++; loadBookings(); };
+$('#breakerBtn').onclick = async () => {
+  const r = await api('/api/admin/breaker/close', { method: 'POST' });
+  toast(r.ok ? 'قطع‌کننده بسته شد' : r.error.message, r.ok); loadOps();
+};
+
+// ======================= tabs =======================
+function showTab(name){
+  $$('.tab').forEach(t=>t.classList.toggle('on',t.dataset.tab===name));
+  $$('[data-pane]').forEach(p=>p.classList.toggle('hidden',p.dataset.pane!==name));
+  if(name==='sched') loadAppts();
+  if(name==='pts')   loadPatients();
+  if(name==='sms')   loadSms();
+  if(name==='req'){ loadMetrics(); loadBookings(); }
+  if(name==='ops')   loadOps();
+}
+$$('.tab').forEach(t=>t.onclick=()=>showTab(t.dataset.tab));
+
+// ======================= appointments =======================
+const AST={booked:'ثبت‌شده',attended:'انجام شد',cancelled:'لغو شد',no_show:'مراجعه نشد'};
+const ATT={unknown:'تأیید نشده',coming:'حضور قطعی ✓',not_coming:'نمی‌آید'};
+
+async function loadAppts(){
+  show('#aLoading'); hide('#aError'); hide('#aEmpty'); hide('#aList');
+  const r=await api('/api/admin/appointments?scope='+$('#scope').value+'&per_page=100');
+  hide('#aLoading');
+  if(!r.ok) return errBox('#aError',r.error,loadAppts);
+  const items=r.data.items||[];
+  if(!items.length){ show('#aEmpty'); return; }
+  const list=$('#aList'); list.innerHTML='';
+  let lastDay=null;
+  for(const a of items){
+    if(a.slot_date!==lastDay){
+      lastDay=a.slot_date;
+      const h=document.createElement('div');
+      h.style.cssText='margin:14px 2px 8px;font-size:.85rem;color:var(--teal);font-weight:700';
+      h.textContent=a.label+(a.slot_date===r.data.today?' — امروز':'');
+      list.appendChild(h);
+    }
+    list.appendChild(apptRow(a));
+  }
+  show('#aList');
+}
+
+function apptRow(a){
+  const d=document.createElement('div');
+  d.className='appt'+(a.attendance==='coming'?' coming':'');
+  const when=document.createElement('div'); when.className='when';
+  when.innerHTML=a.slot_time+'<small>کابین '+fa(a.cabin)+'</small>';
+  const who=document.createElement('div');
+  const p=a.patient||{};
+  who.innerHTML='<div class="who">'+(p.full_name||'—')+'</div>';
+  const ph=document.createElement('a'); ph.href='tel:'+(p.phone||''); ph.setAttribute('dir','ltr');
+  ph.textContent=p.phone||''; ph.style.fontSize='.82rem'; who.appendChild(ph);
+
+  const meta=document.createElement('div'); meta.className='meta';
+  const st=document.createElement('span'); st.className='pill a-'+a.status; st.textContent=AST[a.status]||a.status;
+  const at=document.createElement('span'); at.className='pill d-'+a.attendance; at.textContent=ATT[a.attendance];
+  meta.append(st,at);
+  if(a.kind==='followup'){const k=document.createElement('span');k.className='pill';
+    k.style.color='var(--aqua)';k.textContent='جلسه بعدی';meta.appendChild(k);}
+  if(a.confirm_sent_at){const c=document.createElement('span');c.textContent='یادآوری ارسال شد';meta.appendChild(c);}
+  if(a.moved_from){const m=document.createElement('span');m.textContent='جابه‌جا شده از '+a.moved_from;meta.appendChild(m);}
+  if(a.note){const n=document.createElement('span');n.style.opacity='.85';n.textContent='«'+a.note+'»';meta.appendChild(n);}
+  if(p.ortho_doctor){const o=document.createElement('span');o.textContent='ارتوپد: '+p.ortho_doctor;meta.appendChild(o);}
+  if(p.mri_link){const l=document.createElement('a');l.href=p.mri_link;l.target='_blank';
+    l.rel='noopener';l.textContent='لینک MRI';meta.appendChild(l);}
+
+  const acts=document.createElement('div'); acts.className='acts';
+  const mk=(txt,fn)=>{const b=document.createElement('button');b.className='btn sm';b.textContent=txt;b.onclick=()=>fn(b);return b;};
+  if(a.status==='booked'){
+    acts.appendChild(mk('تغییر زمان',b=>openMove(a,b)));
+    acts.appendChild(mk('انجام شد',b=>setApptStatus(a.public_id,'attended',b)));
+    acts.appendChild(mk('مراجعه نشد',b=>setApptStatus(a.public_id,'no_show',b)));
+    acts.appendChild(mk('لغو + پیامک',b=>setApptStatus(a.public_id,'cancelled',b,true)));
+    acts.appendChild(mk('ارسال یادآوری',b=>remindOne(a.public_id,b)));
+  }
+  if(p.public_id){
+    acts.appendChild(mk('🩺 ثبت جلسه درمان',()=>openSession(p,a)));
+    acts.appendChild(mk('ثبت جلسه بعدی',b=>openFollowup(p,b)));
+  }
+  const code=document.createElement('span');
+  code.style.cssText='font-size:.7rem;color:var(--muted);direction:ltr;align-self:center';
+  code.textContent=a.public_id; acts.appendChild(code);
+
+  d.append(when,who,meta);
+  if(p.public_id && (p.mri_file || p.med_photo)){
+    const th=document.createElement('div'); th.className='thumbs';
+    th.style.gridColumn='1/-1';
+    if(p.mri_file) th.appendChild(thumb('/api/admin/patients/'+p.public_id+'/mri',
+                                        'عکس MRI', /\.pdf$/i.test(p.mri_file)));
+    if(p.med_photo) th.appendChild(thumb('/api/admin/patients/'+p.public_id+'/photo',
+                                         'عکس داروها', /\.pdf$/i.test(p.med_photo)));
+    d.appendChild(th);
+  }
+  d.appendChild(acts);
+  return d;
+}
+
+function setApptStatus(id,status,btn,notify){
+  return withBtn(btn,'…',async()=>{
+    const r=await api('/api/admin/appointments/'+id+'/status',{method:'PATCH',
+      body:{status:status,notify:!!notify}});
+    if(!r.ok) return toast(r.error.message,false);
+    toast(r.data.sms_sent?'ثبت شد و پیامک رفت':'ثبت شد');
+    loadAppts(); loadMetrics();
+  });
+}
+function remindOne(id,btn){
+  return withBtn(btn,'…',async()=>{
+    const r=await api('/api/admin/appointments/'+id+'/remind',{method:'POST'});
+    toast(r.ok?(r.data.sms_sent?'یادآوری ارسال شد ✓':'ارسال نشد'):r.error.message,r.ok&&r.data.sms_sent);
+    loadAppts();
+  });
+}
+$('#scope').onchange=loadAppts;
+$('#remindBtn').onclick=async function(){
+  await withBtn(this,'در حال ارسال…',async()=>{
+    const r=await api('/api/admin/reminders/run',{method:'POST'});
+    if(!r.ok) return toast(r.error.message,false);
+    toast('سررسیده: '+fa(r.data.due)+' — ارسال‌شده: '+fa(r.data.sent));
+    loadAppts();
+  });
+};
+
+// ======================= slot dialog =======================
+let DLG_MODE=null, DLG_TARGET=null, DLG_DAYS=[], DLG_PICK=null;
+const dlg=$('#slotDlg');
+
+async function openDialog(title,sub){
+  DLG_PICK=null;
+  $('#dlgTitle').textContent=title; $('#dlgSub').textContent=sub;
+  $('#dlgNote').value=''; $('#dlgNotify').checked=true;
+  show('#dlgLoading'); hide('#dlgError'); hide('#dlgGrid');
+  dlg.showModal();
+  if(!DLG_DAYS.length){
+    const days=[]; const now=new Date();
+    for(let i=0;i<30;i++){
+      const d=new Date(now.getTime()+i*86400000);
+      days.push({date:d.toISOString().slice(0,10),
+        label:d.toLocaleDateString('fa-IR',{weekday:'long',day:'numeric',month:'long'})});
+    }
+    DLG_DAYS=days;
+  }
+  const sel=$('#dlgDate'); sel.innerHTML='';
+  DLG_DAYS.forEach(d=>{const o=document.createElement('option');o.value=d.date;o.textContent=d.label;sel.appendChild(o);});
+  sel.onchange=()=>loadDlgGrid(sel.value);
+  loadDlgGrid(sel.value);
+}
+let dlgReq=0;
+async function loadDlgGrid(date){
+  // Clear the old slots immediately: while the new day is loading the stale buttons
+  // must not be clickable, or a patient could be booked into the wrong day.
+  DLG_PICK=null;
+  const my=++dlgReq;
+  $('#dlgGrid').innerHTML='';
+  show('#dlgLoading'); hide('#dlgError'); hide('#dlgGrid');
+  const r=await api('/api/admin/appointments/grid?date='+date);
+  if(my!==dlgReq) return;            // a newer request won
+  hide('#dlgLoading');
+  if(!r.ok) return errBox('#dlgError',r.error,()=>loadDlgGrid(date));
+  const g=$('#dlgGrid'); g.innerHTML='';
+  r.data.slots.forEach(s=>{
+    const b=document.createElement('button');
+    b.type='button'; b.className='mslot'; b.disabled=s.full;
+    b.innerHTML='<b>'+s.time+'</b><small>'+(s.full?'تکمیل':fa(s.free)+' خالی')+'</small>';
+    b.onclick=()=>{DLG_PICK={date:date,time:s.time};
+      $$('.mslot').forEach(x=>x.classList.toggle('on',x===b));};
+    g.appendChild(b);
+  });
+  g.classList.remove('hidden');
+}
+function openMove(a){ DLG_MODE='move'; DLG_TARGET=a;
+  openDialog('تغییر زمان نوبت',(a.patient?a.patient.full_name:'')+' — فعلاً '+a.label+' ساعت '+a.slot_time); }
+function openFollowup(p){ DLG_MODE='followup'; DLG_TARGET=p;
+  openDialog('ثبت جلسه بعدی',p.full_name+' — زمان جلسه بعدی را انتخاب کنید'); }
+$('#dlgCancel').onclick=()=>dlg.close();
+$('#dlgOk').onclick=async function(){
+  if(!DLG_PICK) return toast('ابتدا یک ساعت را انتخاب کنید.',false);
+  await withBtn(this,'در حال ثبت…',async()=>{
+    let r;
+    if(DLG_MODE==='move'){
+      r=await api('/api/admin/appointments/'+DLG_TARGET.public_id+'/move',{method:'PATCH',
+        body:{slot_date:DLG_PICK.date,slot_time:DLG_PICK.time,notify:$('#dlgNotify').checked}});
+    } else {
+      r=await api('/api/admin/patients/'+DLG_TARGET.public_id+'/followup',{method:'POST',
+        body:{slot_date:DLG_PICK.date,slot_time:DLG_PICK.time,
+              note:$('#dlgNote').value.trim(),notify:$('#dlgNotify').checked}});
+    }
+    if(!r.ok) return toast(r.error.message,false);
+    dlg.close();
+    toast((DLG_MODE==='move'?'زمان تغییر کرد':'جلسه بعدی ثبت شد')+
+          (r.data.sms_sent?' و پیامک رفت ✓':''));
+    loadAppts(); loadPatients();
+  });
+};
+
+// ======================= image viewer =======================
+const lb=$('#lightbox');
+function viewFile(url,title){
+  $('#lbTitle').textContent=title;
+  $('#lbOpen').href=url;
+  const body=$('#lbBody'); body.innerHTML='';
+  // PDFs cannot go in an <img>; everything else is shown inline
+  fetch(url,{credentials:'same-origin'}).then(r=>{
+    if(!r.ok) throw new Error(r.status);
+    return r.blob();
+  }).then(b=>{
+    const u=URL.createObjectURL(b);
+    if(b.type==='application/pdf'){
+      const f=document.createElement('iframe'); f.src=u; body.appendChild(f);
+    } else {
+      const i=document.createElement('img'); i.src=u; i.alt=title; body.appendChild(i);
+    }
+  }).catch(()=>{ body.innerHTML='<p class="state error">فایل باز نشد.</p>'; });
+  lb.classList.add('on');
+}
+$('#lbClose').onclick=()=>{lb.classList.remove('on');$('#lbBody').innerHTML='';};
+lb.addEventListener('click',e=>{if(e.target===lb)$('#lbClose').click();});
+addEventListener('keydown',e=>{if(e.key==='Escape'&&lb.classList.contains('on'))$('#lbClose').click();});
+
+function thumb(url,label,isPdf){
+  const b=document.createElement('button');
+  b.type='button'; b.className='thumb'+(isPdf?' pdf':'');
+  if(isPdf){ b.textContent='📄 '+label; }
+  else{
+    const i=document.createElement('img'); i.src=url; i.alt=label; i.loading='lazy';
+    i.onerror=()=>{b.classList.add('pdf');b.innerHTML='';b.textContent='📄 '+label;};
+    const s=document.createElement('span'); s.textContent=label;
+    b.append(i,s);
+  }
+  b.onclick=()=>viewFile(url,label);
+  return b;
+}
+
+function uploadBtn(label,onPick){
+  const l=document.createElement('label'); l.className='upbtn';
+  l.innerHTML='<span>＋<br>'+label+'</span>';
+  const inp=document.createElement('input'); inp.type='file';
+  inp.accept='image/jpeg,image/png,image/webp,application/pdf';
+  inp.onchange=()=>{ if(inp.files[0]) onPick(inp.files[0], l); };
+  l.appendChild(inp);
+  return l;
+}
+
+// ======================= clinical catalogue =======================
+let CAT=null;
+async function loadCatalog(force){
+  if(CAT&&!force) return CAT;
+  const r=await api('/api/admin/catalog');
+  if(!r.ok){ toast(r.error.message,false); return null; }
+  CAT=r.data; return CAT;
+}
+function fillCatalogSelects(){
+  const bp=$('#bpSelect'); bp.innerHTML='<option value="">انتخاب از فهرست…</option>';
+  (CAT.body_parts||[]).forEach(g=>{
+    const og=document.createElement('optgroup'); og.label=g.label;
+    g.items.forEach(it=>{const o=document.createElement('option');
+      o.value=it.id; o.textContent=it.name; og.appendChild(o);});
+    bp.appendChild(og);
+  });
+  const tx=$('#txSelect'); tx.innerHTML='<option value="">انتخاب از فهرست…</option>';
+  (CAT.treatments||[]).forEach(it=>{const o=document.createElement('option');
+    o.value=it.id; o.textContent=it.name; tx.appendChild(o);});
+}
+
+// ======================= treatment session dialog =======================
+const sessDlg=$('#sessDlg');
+let SESS={patient:null, appt:null, bp:new Map(), tx:new Map()};
+
+function renderChips(){
+  const draw=(box,map)=>{
+    box.innerHTML='';
+    if(!map.size){const e=document.createElement('span');
+      e.className='muted';e.style.fontSize='.76rem';
+      e.textContent='هنوز چیزی انتخاب نشده';box.appendChild(e);return;}
+    map.forEach((name,id)=>{
+      const c=document.createElement('span'); c.className='chip';
+      const t=document.createElement('span'); t.textContent=name;
+      const x=document.createElement('b'); x.textContent='×';
+      x.onclick=()=>{map.delete(id);renderChips();};
+      c.append(t,x); box.appendChild(c);
+    });
+  };
+  draw($('#bpChips'),SESS.bp); draw($('#txChips'),SESS.tx);
+}
+
+async function openSession(patient,appt){
+  SESS={patient:patient, appt:appt||null, bp:new Map(), tx:new Map()};
+  $('#sessSub').textContent=patient.full_name+(appt?(' — '+appt.label+' ساعت '+appt.slot_time):'');
+  ['sFind','sPlan','sPainB','sPainA','bpNew','txNew'].forEach(i=>$('#'+i).value='');
+  $('#sAttend').checked=!!appt; $('#sNotify').checked=false;
+  $('#sessErr').classList.add('hidden');
+  renderChips();
+  sessDlg.showModal();
+  if(await loadCatalog()) fillCatalogSelects();
+}
+$('#sessCancel').onclick=()=>sessDlg.close();
+
+$('#bpAdd').onclick=()=>{
+  const el=$('#bpSelect'); if(!el.value) return;
+  SESS.bp.set(+el.value, el.options[el.selectedIndex].textContent);
+  el.value=''; renderChips();
+};
+$('#txAdd').onclick=()=>{
+  const el=$('#txSelect'); if(!el.value) return;
+  SESS.tx.set(+el.value, el.options[el.selectedIndex].textContent);
+  el.value=''; renderChips();
+};
+$('#bpSelect').onchange=()=>$('#bpAdd').click();
+$('#txSelect').onchange=()=>$('#txAdd').click();
+
+async function createCatalogItem(kind,btn){
+  const input = kind==='bp' ? $('#bpNew') : $('#txNew');
+  const name=input.value.trim();
+  if(name.length<2){toast('عنوان را کامل بنویسید.',false);return;}
+  await withBtn(btn,'…',async()=>{
+    const path = kind==='bp' ? '/api/admin/catalog/body-parts' : '/api/admin/catalog/treatments';
+    const body = kind==='bp' ? {name:name,category:$('#bpCat').value} : {name:name};
+    const r=await api(path,{method:'POST',body:body});
+    if(!r.ok){toast(r.error.message,false);return;}
+    (kind==='bp'?SESS.bp:SESS.tx).set(r.data.id,r.data.name);
+    input.value='';
+    await loadCatalog(true); fillCatalogSelects(); renderChips();
+    toast('«'+r.data.name+'» به فهرست اضافه شد و برای همیشه می‌ماند ✓');
+  });
+}
+$('#bpCreate').onclick=function(){createCatalogItem('bp',this);};
+$('#txCreate').onclick=function(){createCatalogItem('tx',this);};
+$('#bpNew').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();$('#bpCreate').click();}});
+$('#txNew').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();$('#txCreate').click();}});
+
+$('#sessOk').onclick=async function(){
+  $('#sessErr').classList.add('hidden');
+  if(!SESS.bp.size){toast('عضو یا آسیب درگیر را انتخاب کنید.',false);return;}
+  if(!SESS.tx.size){toast('درمان انجام‌شده را انتخاب کنید.',false);return;}
+  await withBtn(this,'در حال ثبت…',async()=>{
+    const body={
+      body_part_ids:[...SESS.bp.keys()], treatment_ids:[...SESS.tx.keys()],
+      findings:$('#sFind').value.trim(), plan:$('#sPlan').value.trim(),
+      pain_before:$('#sPainB').value===''?null:+$('#sPainB').value,
+      pain_after:$('#sPainA').value===''?null:+$('#sPainA').value,
+      appointment_id:SESS.appt?SESS.appt.public_id:'',
+      mark_attended:$('#sAttend').checked, notify:$('#sNotify').checked};
+    const r=await api('/api/admin/patients/'+SESS.patient.public_id+'/sessions',
+                      {method:'POST',body:body});
+    if(!r.ok){errBox('#sessErr',r.error);return;}
+    sessDlg.close();
+    toast('جلسه ثبت شد'+(r.data.sms_sent?' و پیامک رفت ✓':' ✓'));
+    loadAppts(); loadPatients();
+  });
+};
+
+// ======================= history rendering =======================
+function historyBlock(list){
+  const wrap=document.createElement('div'); wrap.className='hist';
+  if(!list.length){
+    const e=document.createElement('div'); e.className='state empty';
+    e.textContent='هنوز جلسه‌ی درمانی ثبت نشده است.';
+    return e;
+  }
+  list.forEach(h=>{
+    const d=document.createElement('div'); d.className='histrow';
+    const hd=document.createElement('div'); hd.className='hd';
+    const t=document.createElement('span'); t.textContent=h.label;
+    hd.appendChild(t);
+    if(h.gap_days!==null&&h.gap_days!==undefined&&h.gap_days>=30){
+      const g=document.createElement('span'); g.className='gapbadge';
+      g.textContent='پس از '+fa(h.gap_days)+' روز وقفه';
+      hd.appendChild(g);
+    }
+    if(h.pain_before!==null&&h.pain_after!==null){
+      const pn=document.createElement('span'); pn.className='pill';
+      pn.style.color='var(--aqua)';
+      pn.textContent='درد '+fa(h.pain_before)+' ← '+fa(h.pain_after);
+      hd.appendChild(pn);
+    }
+    d.appendChild(hd);
+    const tags=document.createElement('div'); tags.className='tags';
+    h.body_parts.forEach(n=>{const x=document.createElement('span');x.className='tag';
+      x.textContent=n;tags.appendChild(x);});
+    h.treatments.forEach(n=>{const x=document.createElement('span');x.className='tag tx';
+      x.textContent=n;tags.appendChild(x);});
+    d.appendChild(tags);
+    if(h.findings||h.plan){
+      const n=document.createElement('div'); n.className='note';
+      n.textContent=[h.findings&&('یافته: '+h.findings),h.plan&&('برنامه: '+h.plan)]
+        .filter(Boolean).join(' · ');
+      d.appendChild(n);
+    }
+    wrap.appendChild(d);
+  });
+  return wrap;
+}
+
+// ======================= patients =======================
+async function loadPatients(){
+  show('#pLoading'); hide('#pError'); hide('#pEmpty'); hide('#pList');
+  const q=$('#pq').value.trim();
+  const r=await api('/api/admin/patients?per_page=50'+(q?'&q='+encodeURIComponent(q):''));
+  hide('#pLoading');
+  if(!r.ok) return errBox('#pError',r.error,loadPatients);
+  const items=r.data.items||[];
+  if(!items.length){ show('#pEmpty'); return; }
+  const box=$('#pList'); box.innerHTML='';
+  items.forEach(p=>box.appendChild(patientCard(p)));
+  show('#pList');
+}
+function patientCard(p){
+  const d=document.createElement('details'); d.className='pt';
+  const sm=document.createElement('summary');
+  sm.textContent=p.full_name;
+  const ph=document.createElement('span'); ph.className='muted'; ph.setAttribute('dir','ltr');
+  ph.textContent=p.phone; sm.appendChild(ph);
+  const n=document.createElement('span'); n.className='pill'; n.style.color='var(--teal)';
+  n.textContent=fa(p.appointments.length)+' نوبت'; sm.appendChild(n);
+  d.appendChild(sm);
+
+  const dl=document.createElement('dl');
+  const add=(k,v,isLink)=>{
+    const dt=document.createElement('dt'); dt.textContent=k;
+    const dd=document.createElement('dd');
+    if(isLink&&v){const a=document.createElement('a');a.href=v;a.target='_blank';a.rel='noopener';
+      a.textContent=v.length>44?v.slice(0,44)+'…':v;dd.appendChild(a);}
+    else dd.textContent=v||'—';
+    dl.append(dt,dd);
+  };
+  add('کد ملی',p.national_id); add('تاریخ تولد',p.birth_jalali);
+  add('پزشک ارتوپد',p.ortho_doctor); add('لینک MRI',p.mri_link,true);
+  add('ثبت‌نام',new Date(p.created_at).toLocaleString('fa-IR'));
+  if(p.clinical&&p.clinical.sessions){
+    add('جلسات درمان',fa(p.clinical.sessions)+' جلسه — از '+p.clinical.first+' تا '+p.clinical.last);
+    if(p.clinical.body_parts.length) add('نواحی درمان‌شده',p.clinical.body_parts.join('، '));
+    if(p.clinical.treatments.length) add('درمان‌های انجام‌شده',p.clinical.treatments.join('، '));
+  }
+  d.appendChild(dl);
+
+  // --- files: seen, not just linked ---
+  const fh=document.createElement('div');
+  fh.style.cssText='margin-top:14px;font-size:.8rem;color:var(--teal);font-weight:700';
+  fh.textContent='پرونده‌ی تصویری'; d.appendChild(fh);
+  const th=document.createElement('div'); th.className='thumbs';
+  if(p.mri_file) th.appendChild(thumb('/api/admin/patients/'+p.public_id+'/mri',
+                                      'عکس MRI', /\.pdf$/i.test(p.mri_file)));
+  if(p.med_photo) th.appendChild(thumb('/api/admin/patients/'+p.public_id+'/photo',
+                                       'عکس داروها', /\.pdf$/i.test(p.med_photo)));
+  th.appendChild(uploadBtn(p.mri_file?'جایگزینی MRI':'بارگذاری MRI', async (file,el)=>{
+    const old=el.innerHTML; el.innerHTML='<span>در حال ارسال…</span>';
+    const fd=new FormData(); fd.append('mri_file',file);
+    const r=await api('/api/admin/patients/'+p.public_id+'/mri',{method:'POST',body:fd});
+    el.innerHTML=old;
+    if(!r.ok) return toast(r.error.message,false);
+    toast('فایل MRI ذخیره شد ✓'); loadPatients(); loadAppts();
+  }));
+  d.appendChild(th);
+
+  if(p.appointments.length){
+    const h=document.createElement('div');
+    h.style.cssText='margin-top:14px;font-size:.8rem;color:var(--teal);font-weight:700';
+    h.textContent='نوبت‌ها'; d.appendChild(h);
+    p.appointments.forEach(a=>{
+      const r=document.createElement('div'); r.className='ptappt';
+      const w=document.createElement('span');
+      w.textContent=a.label+' — '+a.slot_time+' · کابین '+fa(a.cabin);
+      const s=document.createElement('span'); s.className='pill a-'+a.status;
+      s.textContent=AST[a.status]||a.status;
+      r.append(w,s);
+      if(a.kind==='followup'){const k=document.createElement('span');k.className='pill';
+        k.style.color='var(--aqua)';k.textContent='جلسه بعدی';r.appendChild(k);}
+      if(a.attendance==='coming'){const c=document.createElement('span');
+        c.className='pill d-coming';c.textContent='حضور قطعی ✓';r.appendChild(c);}
+      d.appendChild(r);
+    });
+  }
+
+  // --- treatment history ---
+  const hh=document.createElement('div');
+  hh.style.cssText='margin-top:16px;font-size:.8rem;color:var(--teal);font-weight:700';
+  hh.textContent='تاریخچه‌ی درمان'; d.appendChild(hh);
+  d.appendChild(historyBlock(p.history||[]));
+
+  const acts=document.createElement('div'); acts.className='ptacts';
+  const sb=document.createElement('button'); sb.className='btn sm';
+  sb.textContent='🩺 ثبت جلسه درمان'; sb.onclick=()=>openSession(p,null); acts.appendChild(sb);
+  const fb=document.createElement('button'); fb.className='btn sm';
+  fb.textContent='ثبت جلسه بعدی'; fb.onclick=()=>openFollowup(p); acts.appendChild(fb);
+  const ni=document.createElement('input'); ni.value=p.staff_note||'';
+  ni.placeholder='یادداشت پزشک'; ni.style.cssText='flex:1;min-width:150px;min-height:38px;font-size:.82rem';
+  acts.appendChild(ni);
+  const nb=document.createElement('button'); nb.className='btn sm'; nb.textContent='ذخیره';
+  nb.onclick=()=>withBtn(nb,'…',async()=>{
+    const r=await api('/api/admin/patients/'+p.public_id+'/note',{method:'PATCH',
+      body:{staff_note:ni.value.trim()}});
+    toast(r.ok?'یادداشت ذخیره شد':r.error.message,r.ok);
+  });
+  acts.appendChild(nb);
+  d.appendChild(acts);
+  return d;
+}
+let pqT=null;
+$('#pq').oninput=()=>{clearTimeout(pqT);pqT=setTimeout(loadPatients,400);};
+
+// ======================= sms =======================
+const SKIND={registered:'ثبت‌نام',booked:'ثبت نوبت',rescheduled:'تغییر نوبت',
+             cancelled:'لغو نوبت',followup:'جلسه بعدی',confirm_request:'یادآوری/تأیید',
+             welcome_back:'خوش‌آمد پس از وقفه',session_logged:'خلاصه‌ی جلسه',custom:'دستی'};
+const SST={sent:'ارسال شد',failed:'ناموفق',pending:'در صف'};
+async function loadSms(){
+  show('#sLoading'); hide('#sError'); hide('#sEmpty'); hide('#sList');
+  const r=await api('/api/admin/sms?per_page=40');
+  hide('#sLoading');
+  if(!r.ok) return errBox('#sError',r.error,loadSms);
+  $('#smsProv').textContent='کانال: '+r.data.provider;
+  const items=r.data.items||[];
+  if(!items.length){ show('#sEmpty'); }
+  else{
+    const box=$('#sList'); box.innerHTML='';
+    items.forEach(m=>{
+      const d=document.createElement('div'); d.className='smsrow';
+      const head=document.createElement('div');
+      head.style.cssText='display:flex;gap:9px;flex-wrap:wrap;align-items:center';
+      const k=document.createElement('b'); k.textContent=SKIND[m.kind]||m.kind;
+      const st=document.createElement('span'); st.className='pill s-'+m.status;
+      st.textContent=SST[m.status]||m.status;
+      const ph=document.createElement('span'); ph.setAttribute('dir','ltr');
+      ph.className='muted'; ph.textContent=m.phone;
+      const ts=document.createElement('span'); ts.className='muted';
+      ts.style.marginInlineStart='auto';
+      ts.textContent=new Date(m.sent_at||m.created_at).toLocaleString('fa-IR');
+      head.append(k,st,ph,ts);
+      const pre=document.createElement('pre'); pre.textContent=m.body;
+      d.append(head,pre);
+      if(m.last_error){const e=document.createElement('div');e.className='s-failed';
+        e.style.fontSize='.72rem';e.textContent=m.last_error;d.appendChild(e);}
+      box.appendChild(d);
+    });
+    show('#sList'); hide('#sEmpty');
+  }
+  const inb=r.data.inbound||[];
+  if(inb.length){
+    const box=$('#sIn'); box.innerHTML='';
+    const IH={confirmed:'حضور تأیید شد',declined:'اعلام عدم حضور',
+              ignored:'نامشخص',unknown_phone:'شماره ناشناس'};
+    inb.forEach(m=>{
+      const d=document.createElement('div'); d.className='smsrow';
+      d.innerHTML='<b dir="ltr">'+m.phone+'</b> — «'+m.body+'» → '+(IH[m.handled]||m.handled);
+      box.appendChild(d);
+    });
+    show('#sIn'); hide('#sInEmpty');
+  } else { hide('#sIn'); show('#sInEmpty'); }
+}
+$('#smsRetry').onclick=async function(){
+  await withBtn(this,'…',async()=>{
+    const r=await api('/api/admin/sms/retry',{method:'POST'});
+    toast(r.ok?('تلاش مجدد: '+fa(r.data.retried)+' — موفق: '+fa(r.data.sent)):r.error.message,r.ok);
+    loadSms();
+  });
+};
+
+boot();
+</script>
+</body>
+</html>
