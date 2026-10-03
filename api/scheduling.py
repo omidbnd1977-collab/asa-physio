@@ -189,5 +189,65 @@ def allocate(
     }
 
 
+def move_atomic(
+    appointment: dict,
+    slot_date: str,
+    slot_time: str,
+    *,
+    booked_by: str = "staff",
+    note: str = "",
+) -> dict[str, object]:
+    """Move an appointment in one write transaction, preserving capacity on races."""
+    validate_slot(slot_date, slot_time)
+    public_id = secrets.token_hex(5)
+    with repo.tx() as conn:
+        rows = conn.execute(
+            "SELECT cabin FROM appointments "
+            "WHERE slot_date = ? AND slot_time = ? AND status != 'cancelled' AND id != ?",
+            (slot_date, slot_time, appointment["id"]),
+        ).fetchall()
+        used = {r["cabin"] for r in rows}
+        free = next((c for c in range(1, CABINS + 1) if c not in used), None)
+        if free is None:
+            raise Conflict("این ساعت همین الان پر شد. لطفاً ساعت دیگری انتخاب کنید.", code="slot_full")
+        duplicate = conn.execute(
+            "SELECT 1 FROM appointments WHERE patient_id = ? AND slot_date = ? "
+            "AND slot_time = ? AND status != 'cancelled' AND id != ?",
+            (appointment["patient_id"], slot_date, slot_time, appointment["id"]),
+        ).fetchone()
+        if duplicate:
+            raise Conflict("برای همین ساعت قبلاً نوبت دارید.", code="duplicate_booking")
+        conn.execute(
+            "UPDATE appointments SET status = 'cancelled', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') "
+            "WHERE id = ? AND status != 'cancelled'",
+            (appointment["id"],),
+        )
+        cur = conn.execute(
+            "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin, "
+            "kind, booked_by, note, moved_from) VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                public_id,
+                appointment["patient_id"],
+                slot_date,
+                slot_time,
+                free,
+                appointment["kind"],
+                booked_by,
+                note,
+                f"{appointment['slot_date']} {appointment['slot_time']}",
+            ),
+        )
+        appt_id = int(cur.lastrowid or 0)
+    return {
+        "id": appt_id,
+        "public_id": public_id,
+        "cabin": free,
+        "slot_date": slot_date,
+        "slot_time": slot_time,
+        "kind": appointment["kind"],
+        "moved_from": f"{appointment['slot_date']} {appointment['slot_time']}",
+    }
+
+
 def describe(appt: dict) -> str:
     return f"{to_jalali_long(appt['slot_date'])} ساعت {appt['slot_time']}"

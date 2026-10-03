@@ -121,6 +121,13 @@ POLICIES: dict[str, TablePolicy] = {
         note="Message log, including what was sent to whom.",
     ),
     "sms_inbound": TablePolicy(select="staff", insert="system", update="system", delete="owner"),
+    "audit_logs": TablePolicy(
+        select="staff",
+        insert="system",
+        update="system",
+        delete="owner",
+        note="Immutable application audit trail; only system writes records.",
+    ),
     # ---- clinical record ---------------------------------------------------
     "body_parts": TablePolicy(
         select="staff",

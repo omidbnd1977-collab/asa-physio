@@ -443,6 +443,23 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
   </div>
 </div></dialog>
 
+<dialog id="patientEditDlg"><div class="modal">
+  <h3>ویرایش اطلاعات بیمار</h3>
+  <p class="muted" id="patientEditSub"></p>
+  <div style="display:grid;gap:10px;margin-top:14px">
+    <div><label for="editName">نام و نام خانوادگی</label><input id="editName" maxlength="80"></div>
+    <div><label for="editPhone">شماره موبایل</label><input id="editPhone" inputmode="numeric" dir="ltr" maxlength="20"></div>
+    <div><label for="editDoctor">نام دکتر ارتوپد</label><input id="editDoctor" maxlength="80"></div>
+    <div><label for="editMri">لینک MRI</label><input id="editMri" type="url" dir="ltr" maxlength="500"></div>
+    <div><label for="editNote">یادداشت پزشک</label><input id="editNote" maxlength="2000"></div>
+  </div>
+  <div id="patientEditErr" class="state error hidden" style="margin-top:12px"></div>
+  <div class="mrow">
+    <button class="btn primary" id="patientEditOk" style="flex:1">ذخیره تغییرات</button>
+    <button class="btn" id="patientEditCancel">انصراف</button>
+  </div>
+</div></dialog>
+
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script>
@@ -1057,6 +1074,32 @@ async function loadPatients(){
   items.forEach(p=>box.appendChild(patientCard(p)));
   show('#pList');
 }
+let EDIT_PATIENT=null;
+const patientEditDlg=$('#patientEditDlg');
+function openPatientEdit(p){
+  EDIT_PATIENT=p;
+  $('#patientEditSub').textContent=p.full_name+' — اطلاعات قابل ویرایش';
+  $('#editName').value=p.full_name||'';
+  $('#editPhone').value=p.phone||'';
+  $('#editDoctor').value=p.ortho_doctor||'';
+  $('#editMri').value=p.mri_link||'';
+  $('#editNote').value=p.staff_note||'';
+  hide('#patientEditErr');
+  patientEditDlg.showModal();
+}
+$('#patientEditCancel').onclick=()=>patientEditDlg.close();
+$('#patientEditOk').onclick=async function(){
+  if(!EDIT_PATIENT) return;
+  await withBtn(this,'در حال ذخیره…',async()=>{
+    const r=await api('/api/admin/patients/'+EDIT_PATIENT.public_id,{method:'PATCH',body:{
+      full_name:$('#editName').value.trim(), phone:$('#editPhone').value.trim(),
+      ortho_doctor:$('#editDoctor').value.trim(), mri_link:$('#editMri').value.trim(),
+      staff_note:$('#editNote').value.trim()}});
+    if(!r.ok) return errBox('#patientEditErr',r.error);
+    patientEditDlg.close(); toast('اطلاعات بیمار ذخیره شد ✓'); loadPatients(); loadAppts();
+  });
+};
+
 function patientCard(p){
   const d=document.createElement('details'); d.className='pt';
   const sm=document.createElement('summary');
@@ -1131,6 +1174,8 @@ function patientCard(p){
   d.appendChild(historyBlock(p.history||[]));
 
   const acts=document.createElement('div'); acts.className='ptacts';
+  const eb=document.createElement('button'); eb.className='btn sm';
+  eb.textContent='ویرایش اطلاعات بیمار'; eb.onclick=()=>openPatientEdit(p); acts.appendChild(eb);
   const sb=document.createElement('button'); sb.className='btn sm';
   sb.textContent='🩺 ثبت جلسه درمان'; sb.onclick=()=>openSession(p,null); acts.appendChild(sb);
   const fb=document.createElement('button'); fb.className='btn sm';

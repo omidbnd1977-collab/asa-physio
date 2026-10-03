@@ -80,8 +80,12 @@ def main() -> int:
             if url.startswith(("http://", "https://", "data:", "tel:", "mailto:", "#")):
                 return m.group(0)
             clean = url.split("?", 1)[0].split("#", 1)[0].lstrip("./")
-            if clean in manifest:
-                return f'{m.group("attr")}/{manifest[clean]}"'
+            # Keep page navigation relative. Only fingerprinted assets are rewritten;
+            # absolute repository paths break GitHub Pages and HTML links must remain
+            # valid when a page is opened from /asa-physio/.
+            is_asset = pathlib.PurePosixPath(clean).suffix.lower() in HASHED_EXT
+            if clean in manifest and is_asset:
+                return f'{m.group("attr")}{manifest[clean]}"'
             return m.group(0)
 
         html = pattern.sub(sub, html)
