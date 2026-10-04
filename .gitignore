@@ -28,3 +28,13 @@ node_modules/
 .DS_Store
 
 uploads/
+data/
+archive/
+uploads/
+*.db
+*.db-wal
+*.db-shm
+*.log
+sms-outbox.txt
+__pycache__/
+.venv/

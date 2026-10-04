@@ -100,7 +100,7 @@ class Settings:
     # --- patient portal -----------------------------------------------------
     PATIENT_SESSION_TTL_H: int = _i("PATIENT_SESSION_TTL_HOURS", 6)
     UPLOAD_DIR: pathlib.Path = pathlib.Path(os.getenv("UPLOAD_DIR", str(ROOT / "data" / "uploads")))
-    MAX_UPLOAD_BYTES: int = _i("MAX_UPLOAD_BYTES", 5 * 1024 * 1024)  # 5 MB
+    MAX_UPLOAD_BYTES: int = _i("MAX_UPLOAD_BYTES", 50 * 1024 * 1024)  # 50 MB
     REMINDER_LEAD_MIN: int = _i("REMINDER_LEAD_MIN", 120)  # confirm SMS 2 h before
     REMINDER_TICK_S: int = _i("REMINDER_TICK_S", 60)
     # patients often share one IP (clinic wifi, a family, carrier NAT), so the

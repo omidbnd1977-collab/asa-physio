@@ -36,7 +36,7 @@ log = logging.getLogger("asa.app")
 app = Flask(__name__, static_folder=str(ROOT / "static"),
             template_folder=str(ROOT / "templates"))
 app.secret_key = settings.SECRET_KEY
-app.config["MAX_CONTENT_LENGTH"] = settings.UPLOAD_MAX_BYTES + 64 * 1024
+app.config["MAX_CONTENT_LENGTH"] = settings.MAX_UPLOAD_BYTES + 64 * 1024
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = settings.COOKIE_SAMESITE
 app.config["SESSION_COOKIE_SECURE"] = settings.COOKIE_SECURE
@@ -258,8 +258,8 @@ def do_register():
     meds_name = meds_mime = None
     upload = request.files.get("meds_photo")
     if upload is not None and (upload.filename or ""):
-        blob = upload.read(settings.UPLOAD_MAX_BYTES + 1)
-        if len(blob) > settings.UPLOAD_MAX_BYTES:
+        blob = upload.read(settings.MAX_UPLOAD_BYTES + 1)
+        if len(blob) > settings.MAX_UPLOAD_BYTES:
             return err(413, "too_large", "حجم فایل بیشتر از ۵ مگابایت است.")
         ok, msg, meds_name, meds_mime = save_blob(blob, "meds")
         if not ok:
@@ -781,8 +781,8 @@ def api_admin_mri(pid: int):
     upload = request.files.get("mri")
     if upload is None or not (upload.filename or ""):
         return err(400, "no_file", "فایل نیامد.")
-    blob = upload.read(settings.UPLOAD_MAX_BYTES + 1)
-    if len(blob) > settings.UPLOAD_MAX_BYTES:
+    blob = upload.read(settings.MAX_UPLOAD_BYTES + 1)
+    if len(blob) > settings.MAX_UPLOAD_BYTES:
         return err(413, "too_large", "حجم فایل بیشتر از ۵ مگابایت است.")
     ok, msg, _mime, name = save_blob(blob, "mri")
     if not ok:
@@ -948,7 +948,7 @@ def not_found(_e):
 
 @app.errorhandler(413)
 def too_big(_e):
-    limit_mb = settings.UPLOAD_MAX_BYTES // (1024 * 1024)
+    limit_mb = settings.MAX_UPLOAD_BYTES // (1024 * 1024)
     if request.path.startswith("/booking/register"):
         return render_template("register.jinja", values=request.form.to_dict(),
                                error=f"حجم فایل بیشتر از {to_persian_digits(limit_mb)} مگابایت است.",
