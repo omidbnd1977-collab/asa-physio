@@ -1,0 +1,37 @@
+# Base44 development compose — runs the app from cloned source with live reload.
+# The app is a single Python/FastAPI service backed by a local SQLite file.
+services:
+  app:
+    image: python:3.12-slim
+    restart: on-failure
+    working_dir: /srv
+    environment:
+      - APP_ENV=development
+      - APP_DEBUG=1
+      - PORT=8080
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - DB_PATH=/srv/data/asa.db
+      - NOTIFY_PROVIDER=file
+      - SMS_PROVIDER=file
+      - TRUST_PROXY=1
+    ports:
+      - "3000:8080"
+    volumes:
+      - ./:/srv
+      - app_data:/srv/data
+    command:
+      - sh
+      - -ec
+      - |
+        pip install --no-cache-dir -r requirements.txt &&
+        exec python -m uvicorn api.main:app --host 0.0.0.0 --port 8080 --reload --reload-dir /srv/api
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/api/readyz',timeout=3).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  app_data:
