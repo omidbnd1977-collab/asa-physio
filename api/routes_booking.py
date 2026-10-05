@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Body, File, Form, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 
-from . import clinical, metrics, patients, ratelimit, repo, scheduling, schemas, sms
+from . import audit, clinical, metrics, patients, ratelimit, repo, scheduling, schemas, sms
 from .config import settings
 from .errors import BadRequest, Forbidden, NotFound
 from .jalali import to_jalali_long, to_jalali_str
@@ -105,6 +105,13 @@ async def register(
     photo = patients.save_upload(med_photo, prefix=data.national_id[-4:])
     mri = patients.save_upload(mri_file, prefix=f"mri-{data.national_id[-4:]}")
     patient = patients.register(data.model_dump(), med_photo=photo, mri_file=mri, ip=ip)
+    audit.record(
+        SYSTEM,
+        "patient.registered",
+        "patient",
+        patient["public_id"],
+        after={"full_name": patient["full_name"], "birth_date": patient["birth_date"], "ortho_doctor": patient["ortho_doctor"], "has_mri": bool(patient["mri_file"] or patient["mri_link"]), "has_medication_photo": bool(patient["med_photo"])},
+    )
 
     # layer: the SMS the user asked for — "اطلاعات شما ثبت شد"
     _, sent = sms.send_now(
@@ -249,6 +256,13 @@ async def book(request: Request, payload: dict[str, Any] = Body(default={})) -> 
         appointment_id=appt["id"],
     )
     metrics.record("appointment_booked")
+    audit.record(
+        SYSTEM,
+        "appointment.booked",
+        "appointment",
+        appt["public_id"],
+        after={"patient_id": p["id"], "slot_date": appt["slot_date"], "slot_time": appt["slot_time"], "cabin": appt["cabin"], "kind": appt["kind"]},
+    )
     from . import cache
 
     cache.purge("admin:appointments")
@@ -284,7 +298,15 @@ async def cancel(public_id: str, request: Request) -> dict[str, Any]:
     if when - now_tehran() < dt.timedelta(hours=3):
         raise Forbidden("لغو نوبت تا ۳ ساعت مانده به زمان مراجعه ممکن نیست. تماس بگیرید.")
     repo.update(
-        SYSTEM, "appointments", {"status": "cancelled"}, where="id = ?", params=[appt["id"]]
+        SYSTEM, "appointments", {"status": "cancelled", "updated_at": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")}, where="id = ?", params=[appt["id"]]
+    )
+    audit.record(
+        SYSTEM,
+        "appointment.cancelled",
+        "appointment",
+        appt["public_id"],
+        before={"status": appt["status"], "slot_date": appt["slot_date"], "slot_time": appt["slot_time"]},
+        after={"status": "cancelled"},
     )
     from . import cache
 

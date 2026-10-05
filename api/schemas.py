@@ -268,6 +268,51 @@ class PatientNoteIn(BaseModel):
         return clean_text(v, max_len=2000)
 
 
+class PatientUpdateIn(BaseModel):
+    """Staff may correct editable demographic/contact fields without changing identity."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    full_name: str = Field(min_length=3, max_length=80)
+    phone: str = Field(min_length=10, max_length=20)
+    ortho_doctor: str = Field(default="", max_length=80)
+    mri_link: str = Field(default="", max_length=500)
+    staff_note: str = Field(default="", max_length=2000)
+
+    @field_validator("full_name")
+    @classmethod
+    def _full_name(cls, v: str) -> str:
+        v = clean_text(v, max_len=80)
+        if len(v.split()) < 2 or not re.match(r"^[\w\u0600-\u06FF\u200c .'\-]+$", v, re.UNICODE):
+            raise ValueError("نام و نام خانوادگی معتبر نیست.")
+        return v
+
+    @field_validator("phone")
+    @classmethod
+    def _phone_update(cls, v: str) -> str:
+        return BookingIn._phone(v)
+
+    @field_validator("ortho_doctor")
+    @classmethod
+    def _doctor(cls, v: str) -> str:
+        v = clean_text(v, max_len=80)
+        if v and not re.match(r"^[\w\u0600-\u06FF\u200c .'\-]+$", v, re.UNICODE):
+            raise ValueError("نام پزشک معتبر نیست.")
+        return v
+
+    @field_validator("mri_link")
+    @classmethod
+    def _mri_link(cls, v: str) -> str:
+        v = clean_text(v, max_len=500)
+        if v and not re.match(r"^https?://[\w.\-]+\.[a-z]{2,}(/\S*)?$", v, re.I):
+            raise ValueError("لینک MRI معتبر نیست.")
+        return v
+
+    @field_validator("staff_note")
+    @classmethod
+    def _staff_note(cls, v: str) -> str:
+        return clean_text(v, max_len=2000)
+
+
 class SmsInboundIn(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     phone: str = Field(min_length=5, max_length=20)

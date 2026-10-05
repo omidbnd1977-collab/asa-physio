@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Body, File, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 
-from . import auth, cache, clinical, metrics, patients, repo, scheduling, schemas, sms
+from . import audit, auth, cache, clinical, metrics, patients, repo, scheduling, schemas, sms
 from .errors import BadRequest, Conflict, NotFound
 from .jalali import now_tehran, to_jalali_long, to_jalali_str
 from .logging_ import info
@@ -39,6 +39,18 @@ def full_appt(a: dict, p: dict | None = None) -> dict[str, Any]:
         "label": to_jalali_long(a["slot_date"]),
         "cabin": a["cabin"],
         "status": a["status"],
+        "status_label": {
+            "booked": "رزرو شده",
+            "attended": "مراجعه کرد",
+            "cancelled": "لغو شده",
+            "no_show": "بدون مراجعه",
+        }.get(a["status"], a["status"]),
+        "attendance_label": {
+            "unknown": "بدون تأیید",
+            "coming": "حضور تأیید شد",
+            "not_coming": "عدم حضور اعلام شد",
+        }.get(a["attendance"], a["attendance"]),
+        "changed": bool(a["moved_from"]),
         "kind": a["kind"],
         "booked_by": a["booked_by"],
         "attendance": a["attendance"],
@@ -185,35 +197,22 @@ async def move(
     patient = p[0]
 
     old_when = scheduling.describe(old)
-    # free the old slot first so a move inside the same half hour can reuse the cabin
-    repo.update(
-        SYSTEM,
-        "appointments",
-        {"status": "cancelled", "updated_at": _now()},
-        where="id = ?",
-        params=[old["id"]],
+    new = scheduling.move_atomic(
+        old,
+        data.slot_date,
+        data.slot_time,
+        booked_by="staff",
+        note=old["note"],
     )
-    try:
-        new = scheduling.allocate(
-            patient["id"],
-            data.slot_date,
-            data.slot_time,
-            kind=old["kind"],
-            booked_by="staff",
-            note=old["note"],
-            moved_from=f"{old['slot_date']} {old['slot_time']}",
-        )
-    except Exception:
-        repo.update(
-            SYSTEM,
-            "appointments",
-            {"status": old["status"], "updated_at": _now()},
-            where="id = ?",
-            params=[old["id"]],
-        )
-        raise
-
     new_when = scheduling.describe(new)
+    audit.record(
+        actor,
+        "appointment.rescheduled",
+        "appointment",
+        new["public_id"],
+        before={"public_id": old["public_id"], "slot_date": old["slot_date"], "slot_time": old["slot_time"], "status": old["status"]},
+        after={"public_id": new["public_id"], "slot_date": new["slot_date"], "slot_time": new["slot_time"], "status": "booked", "cabin": new["cabin"]},
+    )
     sent = False
     if data.notify:
         _, sent = sms.send_now(
@@ -275,6 +274,13 @@ async def followup(
             appointment_id=appt["id"],
         )
     metrics.record("followup_booked")
+    audit.record(
+        actor,
+        "appointment.followup_created",
+        "appointment",
+        appt["public_id"],
+        after={"patient_id": patient["id"], "slot_date": appt["slot_date"], "slot_time": appt["slot_time"], "kind": "followup", "cabin": appt["cabin"]},
+    )
     cache.purge("admin:appointments")
     return {
         "ok": True,
@@ -300,13 +306,22 @@ async def set_status(
     if not rows:
         raise NotFound("این نوبت پیدا نشد.")
     appt = rows[0]
-    repo.update(
-        actor,
-        "appointments",
-        {"status": data.status, "updated_at": _now()},
-        where="public_id = ?",
-        params=[public_id[:10]],
-    )
+    with repo.tx():
+        repo.update(
+            actor,
+            "appointments",
+            {"status": data.status, "updated_at": _now()},
+            where="public_id = ?",
+            params=[public_id[:10]],
+        )
+        audit.record(
+            actor,
+            "appointment.status_changed",
+            "appointment",
+            appt["public_id"],
+            before={"status": appt["status"], "attendance": appt["attendance"]},
+            after={"status": data.status, "attendance": appt["attendance"]},
+        )
     sent = False
     if data.status == "cancelled" and data.notify:
         p = repo.select(actor, "patients", where="id = ?", params=[appt["patient_id"]], limit=1)
@@ -414,6 +429,57 @@ async def list_patients(
     }
 
 
+@router.patch("/patients/{public_id}")
+async def update_patient(
+    public_id: str, request: Request, payload: dict[str, Any] = Body(default={})
+) -> dict[str, Any]:
+    actor = staff(request)
+    csrf(request, actor)
+    data = schemas.PatientUpdateIn.model_validate(payload)
+    rows = repo.select(actor, "patients", where="public_id = ?", params=[public_id[:12]], limit=1)
+    if not rows:
+        raise NotFound("بیمار پیدا نشد.")
+    old = rows[0]
+    changed = {
+        "full_name": data.full_name,
+        "phone": data.phone,
+        "ortho_doctor": data.ortho_doctor,
+        "mri_link": data.mri_link,
+        "staff_note": data.staff_note,
+        "updated_at": _now(),
+    }
+    with repo.tx():
+        repo.update(actor, "patients", changed, where="id = ?", params=[old["id"]])
+        audit.record(
+            actor,
+            "patient.updated",
+            "patient",
+            public_id,
+            before={k: old[k] for k in ("full_name", "phone", "ortho_doctor", "mri_link", "staff_note")},
+            after={k: changed[k] for k in ("full_name", "phone", "ortho_doctor", "mri_link", "staff_note")},
+        )
+    cache.purge("admin:appointments")
+    return {"ok": True, "patient": {"public_id": public_id, **{k: changed[k] for k in ("full_name", "phone", "ortho_doctor", "mri_link", "staff_note")}}}
+
+
+@router.get("/patients/{public_id}/audit")
+async def patient_audit(public_id: str, request: Request) -> dict[str, Any]:
+    staff(request)
+    rows = repo.select(SYSTEM, "patients", where="public_id = ?", params=[public_id[:12]], limit=1)
+    if not rows:
+        raise NotFound("بیمار پیدا نشد.")
+    return {"items": audit.list_for("patient", public_id)}
+
+
+@router.get("/appointments/{public_id}/audit")
+async def appointment_audit(public_id: str, request: Request) -> dict[str, Any]:
+    staff(request)
+    rows = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[public_id[:10]], limit=1)
+    if not rows:
+        raise NotFound("این نوبت پیدا نشد.")
+    return {"items": audit.list_for("appointment", public_id)}
+
+
 @router.patch("/patients/{public_id}/note")
 async def patient_note(
     public_id: str, request: Request, payload: dict[str, Any] = Body(default={})
@@ -421,15 +487,26 @@ async def patient_note(
     actor = staff(request)
     csrf(request, actor)
     data = schemas.PatientNoteIn.model_validate(payload)
-    n = repo.update(
-        actor,
-        "patients",
-        {"staff_note": data.staff_note, "updated_at": _now()},
-        where="public_id = ?",
-        params=[public_id[:12]],
-    )
-    if not n:
-        raise NotFound("بیمار پیدا نشد.")
+    old_rows = repo.select(actor, "patients", where="public_id = ?", params=[public_id[:12]], limit=1)
+    old_note = old_rows[0]["staff_note"] if old_rows else ""
+    with repo.tx():
+        n = repo.update(
+            actor,
+            "patients",
+            {"staff_note": data.staff_note, "updated_at": _now()},
+            where="public_id = ?",
+            params=[public_id[:12]],
+        )
+        if not n:
+            raise NotFound("بیمار پیدا نشد.")
+        audit.record(
+            actor,
+            "patient.note_updated",
+            "patient",
+            public_id,
+            before={"staff_note": old_note},
+            after={"staff_note": data.staff_note},
+        )
     return {"ok": True}
 
 
@@ -540,8 +617,23 @@ async def record_treatment(
             where="id = ?",
             params=[appt["id"]],
         )
+        audit.record(
+            actor,
+            "appointment.attended",
+            "appointment",
+            appt["public_id"],
+            before={"status": appt["status"]},
+            after={"status": "attended", "session": out["public_id"]},
+        )
         metrics.record("session_attended")
 
+    audit.record(
+        actor,
+        "clinical.session_recorded",
+        "patient",
+        public_id,
+        after={"session_id": out["public_id"], "session_date": out["session_date"], "appointment_id": data.appointment_id},
+    )
     sent = False
     if data.notify:
         names = [t["name"] for t in clinical._labels(actor, "treatments", data.treatment_ids)]
@@ -574,13 +666,22 @@ async def upload_mri(
     name = patients.save_upload(mri_file, prefix=f"mri-{public_id[:6]}")
     if not name:
         raise BadRequest("فایلی دریافت نشد.")
-    repo.update(
-        actor,
-        "patients",
-        {"mri_file": name, "updated_at": _now()},
-        where="id = ?",
-        params=[rows[0]["id"]],
-    )
+    with repo.tx():
+        repo.update(
+            actor,
+            "patients",
+            {"mri_file": name, "updated_at": _now()},
+            where="id = ?",
+            params=[rows[0]["id"]],
+        )
+        audit.record(
+            actor,
+            "patient.mri_uploaded",
+            "patient",
+            public_id,
+            before={"has_mri": bool(rows[0]["mri_file"])},
+            after={"has_mri": True},
+        )
     return {"ok": True, "file": name}
 
 

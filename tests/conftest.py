@@ -69,6 +69,7 @@ def _clean():
         "appointments",
         "patient_sessions",
         "patients",
+        "audit_logs",
     ):
         conn.execute(f"DELETE FROM {t}")
     conn.execute("UPDATE breaker_state SET open_until = 0, reason = ''")
