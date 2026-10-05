@@ -27,7 +27,7 @@ services:
         pip install --no-cache-dir -r requirements.txt &&
         exec python -m uvicorn api.main:app --host 0.0.0.0 --port 8080 --reload --reload-dir /srv/api
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/api/readyz',timeout=3).status==200 else 1)"]
+      test: ["CMD", "python", "-c", "import sys,urllib.request;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/api/readyz',timeout=3).status==200 else 1)"]
       interval: 15s
       timeout: 5s
       retries: 5
