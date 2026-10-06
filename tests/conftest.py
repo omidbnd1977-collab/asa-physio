@@ -64,6 +64,7 @@ def _clean():
         "rate_events",
         "cost_events",
         "sessions",
+        "messages",
         "sms_inbound",
         "sms_messages",
         "appointments",

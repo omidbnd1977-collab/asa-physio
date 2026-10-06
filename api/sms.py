@@ -88,6 +88,12 @@ def body_confirm(name: str, when: str) -> str:
     )
 
 
+def body_custom(name: str, text: str) -> str:
+    """A reply the doctor typed in the panel, forwarded to the patient's phone."""
+    body = text.strip()[:520]
+    return f"{name} عزیز، پیام {CLINIC}:\n{body}"
+
+
 # --------------------------------------------------------------------------
 # providers
 # --------------------------------------------------------------------------
