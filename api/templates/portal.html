@@ -156,6 +156,26 @@ body{min-height:100vh}
 .filebox b{display:block;font-size:.88rem;margin-bottom:4px}
 .filebox span{font-size:.72rem;color:var(--muted)}
 .filebox.has{border-color:var(--teal);background:rgba(45,212,191,.1)}
+/* ---- chat (doctor <-> patient thread) ---- */
+.chat{display:grid;gap:10px;margin-top:6px}
+.bubble{max-width:82%;padding:12px 15px;border-radius:16px;font-size:.88rem;line-height:1.9;
+  white-space:pre-wrap;word-break:break-word;position:relative}
+.bubble .when{display:block;font-size:.66rem;margin-top:6px;opacity:.75}
+.bubble.me{justify-self:start;background:linear-gradient(135deg,rgba(45,212,191,.24),rgba(56,189,248,.14));
+  border:1px solid rgba(45,212,191,.4);border-start-start-radius:4px}
+.bubble.them{justify-self:end;background:rgba(11,42,74,.5);
+  border:1px solid rgba(155,185,209,.2);border-start-end-radius:4px}
+.bubble.sys{justify-self:center;max-width:96%;text-align:center;font-size:.78rem;
+  color:var(--muted);background:rgba(11,42,74,.3);border:1px dashed rgba(45,212,191,.25);
+  border-radius:999px;padding:8px 18px}
+.composer{display:flex;gap:9px;margin-top:18px;align-items:flex-end}
+.composer textarea{flex:1;min-height:52px;max-height:140px;resize:vertical}
+.plan{border-inline-start:2px solid rgba(45,212,191,.35);padding-inline-start:14px;display:grid;gap:10px}
+.plan .rowp{padding:12px 14px;border-radius:13px;border:1px solid rgba(45,212,191,.14);
+  background:rgba(11,42,74,.34);font-size:.84rem;line-height:1.9}
+.plan .tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}
+.plan .tag{font-size:.7rem;padding:3px 8px;border-radius:7px;background:rgba(45,212,191,.13);
+  border:1px solid rgba(45,212,191,.32);color:var(--glow)}
 </style>
 </head>
 <body>
@@ -168,6 +188,13 @@ body{min-height:100vh}
       <span class="brand-tx"><b>آسا فیزیو کلینیک</b><span>ASA PHYSIO</span></span>
     </a>
     <span class="sp"></span>
+    <a href="/booking/messages" id="msgLink" class="btn btn-ghost hidden"
+       style="padding:8px 14px;font-size:.8rem;text-decoration:none;position:relative">
+      پیام‌ها
+      <span id="msgBadge" class="hidden" style="background:linear-gradient(135deg,var(--teal),var(--aqua));
+        color:#042027;border-radius:999px;font-size:.68rem;font-weight:800;padding:2px 8px;
+        margin-inline-start:6px"></span>
+    </a>
     <span class="pbadge" id="whoBadge"></span>
     <button class="btn btn-ghost hidden" id="outBtn" style="padding:8px 14px;font-size:.8rem">خروج</button>
   </header>
