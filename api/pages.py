@@ -128,6 +128,12 @@ function attachDateMask(el){
     badge.textContent=r.data.patient.full_name;
     if(out){out.classList.remove('hidden');
       out.onclick=async()=>{await api('/api/portal/logout',{method:'POST'});location.href='/booking';};}
+    const link=$('#msgLink');
+    if(link&&location.pathname!=='/booking/messages'){
+      link.classList.remove('hidden');
+      const n=r.data.unread_messages||0, b=$('#msgBadge');
+      if(n>0){b.textContent=fa(n);b.classList.remove('hidden');}
+    }
     window.__patient=r.data;
   } else { badge.textContent='رزرو نوبت آنلاین'; }
   document.dispatchEvent(new CustomEvent('who',{detail:window.__patient||null}));
@@ -180,7 +186,8 @@ document.addEventListener('who',e=>{
     d.className='state empty';
     d.style.cssText='grid-column:1/-1;border-style:solid;border-color:rgba(45,212,191,.3)';
     d.innerHTML='شما وارد شده‌اید. <a href="/booking/reserve" style="color:var(--glow)">'+
-                'ادامه به انتخاب نوبت ←</a>';
+                'ادامه به انتخاب نوبت ←</a> · <a href="/booking/messages" style="color:var(--glow)">'+
+                'پیام‌های من ←</a>';
     c.parentNode.insertBefore(d,c);
   }
 });
@@ -688,12 +695,129 @@ document.addEventListener('who',async e=>{
 });
 """
 
+# ==========================================================================
+# 6 — messages: the patient side of the doctor <-> patient channel
+# ==========================================================================
+MESSAGES_BODY = """
+<div class="pcard">
+  <h1 class="ptitle">پیام‌های شما و کلینیک</h1>
+  <p class="psub">
+    اینجا مستقیم با پزشک در ارتباطید. تغییر زمان نوبت، خلاصه‌ی جلسات و
+    برنامه‌ی درمان هم همین‌جا اطلاع‌رسانی می‌شود.
+  </p>
+
+  <div id="mLoading"><div class="skel"></div><div class="skel"></div></div>
+  <div id="mError" class="state error hidden"></div>
+  <div id="mEmpty" class="state empty hidden">
+    هنوز پیامی ردوبدل نشده است.
+    <span class="sub">اولین پیام را همین پایین بنویسید؛ پزشک در پنل خودش می‌بیند.</span>
+  </div>
+  <div class="chat hidden" id="mList"></div>
+
+  <div class="composer">
+    <div class="field" style="flex:1;margin:0">
+      <textarea id="msgText" placeholder=" " maxlength="1000" rows="2"></textarea>
+      <label for="msgText">پیام شما برای پزشک…</label>
+    </div>
+    <button class="btn btn-primary" id="msgSend" style="padding:13px 20px;flex:0 0 auto">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+      ارسال
+    </button>
+  </div>
+</div>
+
+<div class="pcard" id="planCard" style="display:none">
+  <h2 class="ptitle" style="font-size:1.05rem">برنامه‌ی درمان شما</h2>
+  <p class="psub" style="margin-bottom:14px">آنچه پزشک در جلسات گذشته برای شما ثبت کرده است.</p>
+  <div class="plan" id="planList"></div>
+</div>
+
+<a class="backlink" href="/booking/reserve">
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg>
+  بازگشت به نوبت‌ها
+</a>
+"""
+
+MESSAGES_JS = r"""
+document.addEventListener('who',e=>{
+  if(!e.detail){ location.href='/booking/login'; return; }
+  loadThread(); loadPlan();
+});
+
+function when(iso){
+  try{ return new Date(iso).toLocaleString('fa-IR',{month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'}); }
+  catch(e){ return ''; }
+}
+
+async function loadThread(){
+  $('#mLoading').classList.remove('hidden');
+  $('#mError').classList.add('hidden');
+  const r=await api('/api/portal/messages');
+  $('#mLoading').classList.add('hidden');
+  if(!r.ok) return errBox('#mError',r.error,loadThread);
+  const list=r.data.messages||[];
+  const box=$('#mList'); box.innerHTML='';
+  if(!list.length){ $('#mEmpty').classList.remove('hidden'); box.classList.add('hidden'); return; }
+  $('#mEmpty').classList.add('hidden');
+  list.forEach(m=>{
+    const d=document.createElement('div');
+    d.className='bubble '+(m.sender==='patient'?'me':m.sender==='system'?'sys':'them');
+    d.append(document.createTextNode(m.body));
+    const w=document.createElement('span'); w.className='when';
+    w.textContent=(m.sender==='staff'?'کلینیک · ':m.sender==='system'?'':'شما · ')+when(m.created_at);
+    d.appendChild(w);
+    box.appendChild(d);
+  });
+  box.classList.remove('hidden');
+  box.scrollTop=box.scrollHeight;
+}
+
+async function loadPlan(){
+  const r=await api('/api/portal/history');
+  if(!r.ok) return;
+  const list=(r.data.history||[]).filter(h=>h.plan||h.treatments.length);
+  if(!list.length) return;
+  $('#planCard').style.display='';
+  const box=$('#planList'); box.innerHTML='';
+  list.forEach(h=>{
+    const d=document.createElement('div'); d.className='rowp';
+    const b=document.createElement('b'); b.textContent=h.label; d.appendChild(b);
+    if(h.treatments.length){
+      const tags=document.createElement('div'); tags.className='tags';
+      h.treatments.forEach(t=>{const x=document.createElement('span');x.className='tag';x.textContent=t;tags.appendChild(x);});
+      d.appendChild(tags);
+    }
+    if(h.plan){
+      const p=document.createElement('div'); p.style.marginTop='6px';
+      p.textContent='برنامه‌ی بعد: '+h.plan; d.appendChild(p);
+    }
+    box.appendChild(d);
+  });
+}
+
+$('#msgSend').addEventListener('click',async function(){
+  const text=$('#msgText').value.trim();
+  if(text.length<2){flash('متن پیام را بنویسید.',true);return;}
+  await withBtn(this,'…',async()=>{
+    const r=await api('/api/portal/messages',{method:'POST',body:{body:text}});
+    if(!r.ok) return flash((r.error.message||'ارسال نشد.'),true);
+    $('#msgText').value='';
+    flash('پیام شما به کلینیک رسید ✓');
+    loadThread();
+  });
+});
+$('#msgText').addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();$('#msgSend').click();}
+});
+"""
+
 PAGES: dict[str, tuple[str, str, str]] = {
     "entry": ("رزرو نوبت", ENTRY_BODY, ENTRY_JS),
     "register": ("ثبت‌نام بیمار", REGISTER_BODY, REGISTER_JS),
     "login": ("ورود بیماران قبلی", LOGIN_BODY, LOGIN_JS),
     "reserve": ("انتخاب نوبت", RESERVE_BODY, RESERVE_JS),
     "done": ("نوبت ثبت شد", DONE_BODY, DONE_JS),
+    "messages": ("پیام‌های من", MESSAGES_BODY, MESSAGES_JS),
 }
 
 
