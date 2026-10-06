@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Body, File, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 
-from . import auth, cache, clinical, metrics, patients, repo, scheduling, schemas, sms
+from . import auth, cache, clinical, messages, metrics, patients, repo, scheduling, schemas, sms
 from .errors import BadRequest, Conflict, NotFound
 from .jalali import now_tehran, to_jalali_long, to_jalali_str
 from .logging_ import info
@@ -214,6 +214,12 @@ async def move(
         raise
 
     new_when = scheduling.describe(new)
+    messages.system_note(
+        patient["id"],
+        f"نوبت شما تغییر کرد. زمان قبلی: {old_when} — زمان جدید: {new_when}",
+        kind="rescheduled",
+        appointment_id=new["id"],
+    )
     sent = False
     if data.notify:
         _, sent = sms.send_now(
@@ -257,6 +263,12 @@ async def followup(
     )
     when = scheduling.describe(appt)
     gap = clinical.returning_after_gap(patient["id"], data.slot_date)
+    messages.system_note(
+        patient["id"],
+        f"جلسه‌ی بعدی شما ثبت شد: {when}" + (f" — {data.note}" if data.note else ""),
+        kind="followup",
+        appointment_id=appt["id"],
+    )
     sent = welcomed = False
     if data.notify:
         if gap:
@@ -307,6 +319,22 @@ async def set_status(
         where="public_id = ?",
         params=[public_id[:10]],
     )
+    if data.status == "cancelled":
+        messages.system_note(
+            appt["patient_id"],
+            f"نوبت {scheduling.describe(appt)} توسط کلینیک لغو شد."
+            " برای زمان جدید پیام بدهید یا تماس بگیرید.",
+            kind="cancelled",
+            appointment_id=appt["id"],
+        )
+    elif data.status == "no_show":
+        messages.system_note(
+            appt["patient_id"],
+            f"نوبت {scheduling.describe(appt)} بدون مراجعه ثبت شد."
+            " برای تعیین وقت جدید در خدمت شما هستیم.",
+            kind="cancelled",
+            appointment_id=appt["id"],
+        )
     sent = False
     if data.status == "cancelled" and data.notify:
         p = repo.select(actor, "patients", where="id = ?", params=[appt["patient_id"]], limit=1)
@@ -542,9 +570,16 @@ async def record_treatment(
         )
         metrics.record("session_attended")
 
+    names = [t["name"] for t in clinical._labels(actor, "treatments", data.treatment_ids)]
+    note = f"خلاصه‌ی جلسه‌ی {to_jalali_long(out['session_date'])} ثبت شد: {'، '.join(names)}"
+    if data.plan:
+        note += f" — برنامه‌ی جلسه‌ی بعد: {data.plan}"
+    messages.system_note(
+        patient["id"], note, kind="session", appointment_id=appt["id"] if appt else None
+    )
+
     sent = False
     if data.notify:
-        names = [t["name"] for t in clinical._labels(actor, "treatments", data.treatment_ids)]
         when = scheduling.describe(appt) if appt else to_jalali_long(out["session_date"])
         _, sent = sms.send_now(
             patient["phone"],
@@ -645,3 +680,64 @@ async def sms_retry(request: Request) -> dict[str, Any]:
     actor = staff(request)
     csrf(request, actor)
     return sms.retry_failed()
+
+
+# --------------------------------------------------------------------------
+# doctor <-> patient messaging
+# --------------------------------------------------------------------------
+@router.get("/messages")
+async def message_inbox(request: Request) -> dict[str, Any]:
+    """One row per patient: latest message + unread count, newest first."""
+    actor = staff(request)
+    return {"items": messages.inbox(actor), "unread": messages.unread_for_staff()}
+
+
+@router.get("/messages/unread")
+async def message_unread(request: Request) -> dict[str, int]:
+    """Lightweight badge endpoint the panel polls."""
+    staff(request)
+    return {"unread": messages.unread_for_staff()}
+
+
+@router.get("/patients/{public_id}/messages")
+async def patient_thread(public_id: str, request: Request) -> dict[str, Any]:
+    """The full thread with one patient. Fetching it marks their messages as read."""
+    actor = staff(request)
+    rows = repo.select(actor, "patients", where="public_id = ?", params=[public_id[:12]], limit=1)
+    if not rows:
+        raise NotFound("بیمار پیدا نشد.")
+    patient = rows[0]
+    out = messages.thread(patient["id"])
+    messages.mark_read_by_staff(patient["id"])
+    return {
+        "patient": {"public_id": patient["public_id"], "full_name": patient["full_name"]},
+        "messages": out,
+        "unread": messages.unread_for_staff(),
+    }
+
+
+@router.post("/patients/{public_id}/messages", status_code=201)
+async def reply_to_patient(
+    public_id: str, request: Request, payload: dict[str, Any] = Body(default={})
+) -> dict[str, Any]:
+    """The doctor writes back. The patient sees it in the portal; optionally it is
+    also sent by SMS so it reaches them even if they never open the portal."""
+    actor = staff(request)
+    csrf(request, actor)
+    data = schemas.MessageIn.model_validate(payload)
+    rows = repo.select(actor, "patients", where="public_id = ?", params=[public_id[:12]], limit=1)
+    if not rows:
+        raise NotFound("بیمار پیدا نشد.")
+    patient = rows[0]
+
+    saved = messages.post(patient["id"], "staff", data.body, created_by=actor.user_id)
+    sent = False
+    if data.notify:
+        _, sent = sms.send_now(
+            patient["phone"],
+            sms.body_custom(patient["full_name"], saved["body"]),
+            "custom",
+            patient_id=patient["id"],
+        )
+    info("doctor.replied", patient_id=patient["id"], sms_sent=sent)
+    return {"ok": True, "sms_sent": sent, **saved}

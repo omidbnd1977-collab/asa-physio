@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Body, File, Form, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 
-from . import clinical, metrics, patients, ratelimit, repo, scheduling, schemas, sms
+from . import clinical, messages, metrics, patients, ratelimit, repo, scheduling, schemas, sms
 from .config import settings
 from .errors import BadRequest, Forbidden, NotFound
 from .jalali import to_jalali_long, to_jalali_str
@@ -174,7 +174,11 @@ async def me(request: Request) -> dict[str, Any]:
         order_by="slot_date desc",
     )
     rows.sort(key=lambda a: (a["slot_date"], a["slot_time"]), reverse=True)
-    return {"patient": patients.public_view(p), "appointments": [appt_view(a) for a in rows]}
+    return {
+        "patient": patients.public_view(p),
+        "appointments": [appt_view(a) for a in rows],
+        "unread_messages": messages.unread_for_patient(p["id"]),
+    }
 
 
 # --------------------------------------------------------------------------
@@ -249,6 +253,12 @@ async def book(request: Request, payload: dict[str, Any] = Body(default={})) -> 
         appointment_id=appt["id"],
     )
     metrics.record("appointment_booked")
+    messages.system_note(
+        p["id"],
+        f"نوبت جدید ثبت شد: {when} — کد پیگیری {appt['public_id']}",
+        kind="booked",
+        appointment_id=appt["id"],
+    )
     from . import cache
 
     cache.purge("admin:appointments")
@@ -286,7 +296,62 @@ async def cancel(public_id: str, request: Request) -> dict[str, Any]:
     repo.update(
         SYSTEM, "appointments", {"status": "cancelled"}, where="id = ?", params=[appt["id"]]
     )
+    # attributed to the patient, so the doctor-panel inbox badge lights up
+    messages.system_note(
+        p["id"],
+        f"نوبت {scheduling.describe(appt)} توسط بیمار لغو شد.",
+        kind="cancelled",
+        appointment_id=appt["id"],
+        from_patient=True,
+    )
     from . import cache
 
     cache.purge("admin:appointments")
     return {"ok": True}
+
+
+# --------------------------------------------------------------------------
+# doctor <-> patient messaging  (the in-app channel between the two panels)
+# --------------------------------------------------------------------------
+@router.get("/messages")
+async def my_messages(request: Request) -> dict[str, Any]:
+    """The patient's own thread. Fetching it marks the clinic's messages as read."""
+    p = patients.require(current_patient(request))
+    out = messages.thread(p["id"])
+    messages.mark_read_by_patient(p["id"])
+    return {"messages": out, "unread": 0}
+
+
+@router.post("/messages", status_code=201)
+async def send_message(request: Request, payload: dict[str, Any] = Body(default={})) -> Any:
+    p = patients.require(current_patient(request))
+    ratelimit.enforce(
+        ratelimit.id_bucket("msg", str(p["id"])),
+        30,
+        86400,
+        message="تعداد پیام‌های امروز شما به حد مجاز رسیده است.",
+    )
+    data = schemas.MessageIn.model_validate(payload)
+    saved = messages.post(p["id"], "patient", data.body)
+    return {"ok": True, **saved}
+
+
+@router.get("/history")
+async def my_history(request: Request) -> dict[str, Any]:
+    """The treatment history the doctor recorded — findings stay with the clinic;
+    the patient sees what was done and what the plan for next time is."""
+    p = patients.require(current_patient(request))
+    hist = clinical.history(SYSTEM, p["id"], limit=50)
+    return {
+        "history": [
+            {
+                "label": h["label"],
+                "jalali": h["jalali"],
+                "treatments": h["treatments"],
+                "plan": h["plan"],
+                "pain_before": h["pain_before"],
+                "pain_after": h["pain_after"],
+            }
+            for h in hist
+        ]
+    }

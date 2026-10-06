@@ -268,6 +268,27 @@ class PatientNoteIn(BaseModel):
         return clean_text(v, max_len=2000)
 
 
+class MessageIn(BaseModel):
+    """One message in the doctor<->patient thread (either direction)."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    body: str = Field(min_length=1, max_length=1200)
+    notify: bool = False  # staff only: also send the reply by SMS
+
+    @field_validator("body")
+    @classmethod
+    def _b(cls, v: str) -> str:
+        v = clean_text(v, max_len=1000)
+        if len(v) < 2:
+            raise ValueError("متن پیام خیلی کوتاه است.")
+        if re.search(r"<\s*(script|iframe|object|embed)", v, re.I):
+            raise ValueError("متن نامعتبر است.")
+        if len(re.findall(r"https?://", v)) > 2:
+            raise ValueError("تعداد لینک‌های متن بیش از حد مجاز است.")
+        return v
+
+
 class SmsInboundIn(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     phone: str = Field(min_length=5, max_length=20)
