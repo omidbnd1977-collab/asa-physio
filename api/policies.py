@@ -121,6 +121,15 @@ POLICIES: dict[str, TablePolicy] = {
         note="Message log, including what was sent to whom.",
     ),
     "sms_inbound": TablePolicy(select="staff", insert="system", update="system", delete="owner"),
+    "messages": TablePolicy(
+        select="staff",
+        insert="system",
+        update="system",
+        delete="owner",
+        note="The doctor<->patient thread. Patients only ever reach their own rows "
+        "through the service layer (system actor, scoped by patient_id); staff see all. "
+        "Read markers are stamped by the service layer, not by either HTTP role.",
+    ),
     # ---- clinical record ---------------------------------------------------
     "body_parts": TablePolicy(
         select="staff",
