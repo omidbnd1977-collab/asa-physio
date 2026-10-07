@@ -1,0 +1,62 @@
+# Render Blueprint — asa-physio
+# Deploy: Render → New + → Blueprint → pick the omidbnd1977-collab/asa-physio repo.
+#
+# The `disk` block is not optional. The app stores bookings, patient records and the
+# audit trail in SQLite at DB_PATH. Render's filesystem is ephemeral without a disk, so
+# every deploy or restart would erase the clinic's data. Disks require a paid plan.
+services:
+  - type: web
+    name: asa-physio
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    region: frankfurt
+    healthCheckPath: /api/readyz
+    disk:
+      name: asa-data
+      mountPath: /srv/data
+      sizeGB: 1
+
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: WORKERS
+        value: "1"
+      - key: DB_PATH
+        value: /srv/data/asa.db
+      - key: BACKUP_DIR
+        value: /srv/data/backups
+      - key: STATIC_DIR
+        value: public
+      - key: APP_BASE_URL
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: TRUST_PROXY
+        value: "1"
+
+      # Booking delivery. `file` is refused at startup under APP_ENV=production, so a
+      # real channel must be set or the clinic silently receives nothing.
+      - key: NOTIFY_PROVIDER
+        value: telegram
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+
+      # Patient SMS (Kavenegar / sms.ir). Leave unset to disable sending.
+      - key: SMS_PROVIDER
+        sync: false
+      - key: SMS_API_KEY
+        sync: false
+      - key: SMS_SENDER
+        sync: false
+
+      # The only paid code path. Keep off until the budget ceiling is reviewed.
+      - key: AI_ENABLED
+        value: "0"
+      - key: AI_API_KEY
+        sync: false
+      - key: BUDGET_MONTHLY_USD
+        value: "10"
