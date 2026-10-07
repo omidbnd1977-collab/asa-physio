@@ -169,6 +169,32 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
   background:rgba(11,42,74,.3);margin-bottom:8px;font-size:.8rem}
 .smsrow pre{white-space:pre-wrap;font:inherit;color:var(--muted);margin-top:6px}
 .s-sent{color:#34d399}.s-failed{color:#f87171}.s-pending{color:#fbbf24}
+/* ---- doctor <-> patient chat ---- */
+.msgrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:13px;border-radius:13px;
+  border:1px solid rgba(45,212,191,.13);background:rgba(11,42,74,.34);margin-bottom:9px;
+  cursor:pointer;transition:.18s}
+.msgrow:hover{border-color:rgba(45,212,191,.45);transform:translateY(-2px)}
+.msgrow .nm{font-weight:700}
+.msgrow .snip{font-size:.78rem;color:var(--muted);flex-basis:100%;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.unreadpill{background:linear-gradient(135deg,var(--teal),var(--aqua));color:#042027;
+  border-radius:999px;font-size:.7rem;font-weight:800;padding:3px 10px}
+#msgTabBadge{background:var(--bad);color:#2b0505;border-radius:999px;font-size:.68rem;
+  font-weight:800;padding:2px 8px;margin-inline-start:5px}
+.chat{display:grid;gap:9px;margin-top:14px;max-height:44vh;overflow-y:auto;padding:2px}
+.bubble{max-width:85%;padding:10px 13px;border-radius:14px;font-size:.85rem;line-height:1.85;
+  white-space:pre-wrap;word-break:break-word}
+.bubble .when{display:block;font-size:.64rem;margin-top:5px;opacity:.75}
+.bubble.me{justify-self:end;background:linear-gradient(135deg,rgba(45,212,191,.24),rgba(56,189,248,.14));
+  border:1px solid rgba(45,212,191,.4)}
+.bubble.them{justify-self:start;background:rgba(11,42,74,.55);border:1px solid rgba(155,185,209,.2)}
+.bubble.sys{justify-self:center;max-width:96%;text-align:center;font-size:.74rem;
+  color:var(--muted);background:rgba(11,42,74,.3);border:1px dashed rgba(45,212,191,.25);
+  border-radius:999px;padding:6px 14px}
+.replyrow{display:flex;gap:8px;margin-top:14px;align-items:flex-end}
+.replyrow textarea{flex:1;min-height:46px;max-height:120px;resize:vertical;
+  background:rgba(3,13,26,.75);border:1px solid rgba(45,212,191,.2);border-radius:11px;
+  padding:10px 12px;color:var(--ink);font:inherit}
 /* ---- list ---- */
 .row{display:grid;gap:4px 12px;grid-template-columns:1fr auto;
   padding:13px;border:1px solid rgba(45,212,191,.12);border-radius:13px;
@@ -228,6 +254,7 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
     <div class="tabs" id="tabs">
       <button class="tab on" data-tab="sched">🗓 نوبت‌ها</button>
       <button class="tab" data-tab="pts">👤 بیماران</button>
+      <button class="tab" data-tab="msg">💬 پیام‌ها<span id="msgTabBadge" class="hidden"></span></button>
       <button class="tab" data-tab="sms">✉️ پیامک‌ها</button>
       <button class="tab" data-tab="req">📨 درخواست‌های سایت</button>
       <button class="tab" data-tab="ops">⚙️ سامانه</button>
@@ -269,6 +296,22 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
         </div>
         <div id="pError" class="state error hidden"></div>
         <div id="pList" class="hidden"></div>
+      </div>
+    </section>
+
+    <!-- ============ TAB: messages ============ -->
+    <section data-pane="msg" class="hidden">
+      <div class="card">
+        <h2>💬 پیام‌های بیماران
+          <span class="muted">— کانال مستقیم بیمار ↔ پزشک؛ رویدادهای نوبت هم اینجا ثبت می‌شود</span>
+        </h2>
+        <div id="gLoading"><div class="skel"></div><div class="skel"></div></div>
+        <div id="gEmpty" class="state empty hidden">
+          هنوز پیامی از بیماران نرسیده است.
+          <span class="sub">وقتی بیماری از پنل خودش پیام بدهد یا نوبتی را لغو کند، همین‌جا دیده می‌شود.</span>
+        </div>
+        <div id="gError" class="state error hidden"></div>
+        <div id="gList" class="hidden"></div>
       </div>
     </section>
 
@@ -440,6 +483,25 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
   <div class="mrow">
     <button class="btn primary" id="dlgOk" style="flex:1">تأیید</button>
     <button class="btn" id="dlgCancel">انصراف</button>
+  </div>
+</div></dialog>
+
+<dialog id="msgDlg"><div class="modal">
+  <h3 id="msgTitle">گفت‌وگو</h3>
+  <p class="muted" id="msgSub"></p>
+  <div id="msgLoading"><div class="skel"></div></div>
+  <div id="msgError" class="state error hidden"></div>
+  <div class="chat hidden" id="msgThread"></div>
+  <div class="replyrow">
+    <textarea id="msgText" maxlength="1000" rows="2" placeholder="پاسخ شما برای بیمار…"></textarea>
+    <button class="btn primary" id="msgSend" style="flex:0 0 auto">ارسال</button>
+  </div>
+  <label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:.82rem;color:var(--ink)">
+    <input type="checkbox" id="msgSms" style="width:auto;min-height:auto">
+    این پاسخ به‌صورت پیامک هم برای بیمار ارسال شود
+  </label>
+  <div class="mrow">
+    <button class="btn" id="msgClose">بستن</button>
   </div>
 </div></dialog>
 
@@ -630,6 +692,7 @@ async function boot() {
   $('#envBadge').textContent = h.ok ? (h.data.env + ' · ' + h.data.version) : '—';
   hide('#loginView'); show('#appView');
   showTab('sched');
+  pollMsgBadge();
 }
 
 $('#loginForm').addEventListener('submit', async e => {
@@ -661,6 +724,7 @@ function showTab(name){
   $$('[data-pane]').forEach(p=>p.classList.toggle('hidden',p.dataset.pane!==name));
   if(name==='sched') loadAppts();
   if(name==='pts')   loadPatients();
+  if(name==='msg')   loadMessages();
   if(name==='sms')   loadSms();
   if(name==='req'){ loadMetrics(); loadBookings(); }
   if(name==='ops')   loadOps();
@@ -1207,6 +1271,105 @@ $('#smsRetry').onclick=async function(){
     loadSms();
   });
 };
+
+// ======================= doctor <-> patient messages =======================
+const msgDlg=$('#msgDlg');
+let MSG_PATIENT=null;
+
+function msgWhen(iso){
+  try{ return new Date(iso).toLocaleString('fa-IR',{month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'}); }
+  catch(e){ return ''; }
+}
+
+function paintBadge(n){
+  const b=$('#msgTabBadge');
+  if(n>0){ b.textContent=fa(n); b.classList.remove('hidden'); }
+  else b.classList.add('hidden');
+}
+
+async function pollMsgBadge(){
+  if(!CSRF) return;
+  const r=await api('/api/admin/messages/unread');
+  if(r.ok) paintBadge(r.data.unread);
+}
+setInterval(pollMsgBadge,45000);
+
+async function loadMessages(){
+  show('#gLoading'); hide('#gError'); hide('#gEmpty'); hide('#gList');
+  const r=await api('/api/admin/messages');
+  hide('#gLoading');
+  if(!r.ok) return errBox('#gError',r.error,loadMessages);
+  paintBadge(r.data.unread);
+  const items=r.data.items||[];
+  if(!items.length){ show('#gEmpty'); return; }
+  const box=$('#gList'); box.innerHTML='';
+  items.forEach(it=>{
+    const d=document.createElement('div'); d.className='msgrow';
+    const nm=document.createElement('span'); nm.className='nm'; nm.textContent=it.patient.full_name;
+    const ph=document.createElement('span'); ph.className='muted'; ph.setAttribute('dir','ltr');
+    ph.textContent=it.patient.phone;
+    const ts=document.createElement('span'); ts.className='muted';
+    ts.style.marginInlineStart='auto'; ts.textContent=msgWhen(it.last.created_at);
+    d.append(nm,ph,ts);
+    if(it.unread>0){
+      const u=document.createElement('span'); u.className='unreadpill';
+      u.textContent=fa(it.unread)+' خوانده‌نشده'; d.appendChild(u);
+    }
+    const sn=document.createElement('span'); sn.className='snip';
+    sn.textContent=(it.last.sender==='patient'?'':it.last.sender==='staff'?'شما: ':'● ')+it.last.body;
+    d.appendChild(sn);
+    d.onclick=()=>openThread(it.patient);
+    box.appendChild(d);
+  });
+  show('#gList');
+}
+
+async function openThread(p){
+  MSG_PATIENT=p;
+  $('#msgTitle').textContent='گفت‌وگو با '+p.full_name;
+  $('#msgSub').textContent=p.phone;
+  $('#msgText').value=''; $('#msgSms').checked=false;
+  hide('#msgError'); show('#msgLoading'); hide('#msgThread');
+  msgDlg.showModal();
+  await reloadThread();
+}
+
+async function reloadThread(){
+  if(!MSG_PATIENT) return;
+  const r=await api('/api/admin/patients/'+MSG_PATIENT.public_id+'/messages');
+  hide('#msgLoading');
+  if(!r.ok) return errBox('#msgError',r.error,reloadThread);
+  paintBadge(r.data.unread);
+  const box=$('#msgThread'); box.innerHTML='';
+  (r.data.messages||[]).forEach(m=>{
+    const d=document.createElement('div');
+    d.className='bubble '+(m.sender==='staff'?'me':m.sender==='system'?'sys':'them');
+    d.append(document.createTextNode(m.body));
+    const w=document.createElement('span'); w.className='when';
+    w.textContent=(m.sender==='staff'?'شما · ':m.sender==='system'?'':'بیمار · ')+msgWhen(m.created_at);
+    d.appendChild(w);
+    box.appendChild(d);
+  });
+  show('#msgThread');
+  box.scrollTop=box.scrollHeight;
+}
+
+$('#msgClose').onclick=()=>{msgDlg.close();loadMessages();};
+$('#msgSend').onclick=async function(){
+  const text=$('#msgText').value.trim();
+  if(text.length<2) return toast('متن پیام را بنویسید.',false);
+  await withBtn(this,'…',async()=>{
+    const r=await api('/api/admin/patients/'+MSG_PATIENT.public_id+'/messages',
+      {method:'POST',body:{body:text,notify:$('#msgSms').checked}});
+    if(!r.ok) return toast(r.error.message,false);
+    $('#msgText').value='';
+    toast(r.data.sms_sent?'ارسال شد و پیامک هم رفت ✓':'ارسال شد ✓');
+    reloadThread();
+  });
+};
+$('#msgText').addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();$('#msgSend').click();}
+});
 
 boot();
 </script>

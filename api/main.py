@@ -645,6 +645,7 @@ PORTAL_ROUTES = {
     "/booking/login": "login",
     "/booking/reserve": "reserve",
     "/booking/done": "done",
+    "/booking/messages": "messages",
 }
 
 
