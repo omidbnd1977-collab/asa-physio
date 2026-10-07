@@ -177,6 +177,14 @@ POLICIES: dict[str, TablePolicy] = {
         delete="owner",
         note="Layer 14 metric.",
     ),
+    "audit_logs": TablePolicy(
+        select="staff",
+        insert="system",
+        delete="owner",
+        note="Immutable trail of patient and appointment changes. Only the service "
+        "layer writes it, through the system actor; update is left unset so no role "
+        "can rewrite history.",
+    ),
     "schema_migrations": TablePolicy(
         select="owner", insert="system", update="system", delete="system"
     ),
