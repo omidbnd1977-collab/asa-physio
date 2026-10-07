@@ -9,8 +9,8 @@ Entry point: `api.main:app` (uvicorn). Port 8080 inside the container, mapped to
 
 `docker compose -f docker-compose.base44.yml up -d --build` starts the app from cloned
 source with `uvicorn --reload`. Migrations run automatically on startup (the FastAPI
-lifespan calls `db.migrate()`). A `seed` one-shot service creates a default admin user
-(owner / `asa-dev-admin-2026`) after the app is healthy.
+lifespan calls `db.migrate()`). To create an admin for a fresh data volume, run
+`docker compose -f docker-compose.base44.yml run --rm -e ADMIN_USER=owner -e ADMIN_PASSWORD='<choose-a-password>' app python -m ops.seed`.
 
 ## No external credentials needed for dev
 
@@ -35,4 +35,4 @@ Telegram/SMS/AI integrations are optional and disabled by default in dev.
 
 ## Admin panel
 
-`/admin` — login with owner / `asa-dev-admin-2026` (seeded automatically in dev).
+`/admin` — create a local owner account with the seeding command above when working from a fresh data volume.
