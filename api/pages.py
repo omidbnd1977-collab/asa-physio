@@ -21,7 +21,11 @@ SHELL = HERE / "templates" / "portal.html"
 
 @functools.lru_cache(maxsize=1)
 def logo_path() -> str:
-    svg = (ROOT / "assets" / "mark.svg").read_text(encoding="utf-8")
+    svg_file = ROOT / "assets" / "mark.svg"
+    # The mark is decorative; a missing file must not take the whole portal down with it.
+    if not svg_file.is_file():
+        return ""
+    svg = svg_file.read_text(encoding="utf-8")
     m = re.search(r'<path d="([^"]+)"', svg)
     return m.group(1) if m else ""
 

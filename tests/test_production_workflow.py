@@ -160,3 +160,28 @@ def test_bootstrap_admin_is_opt_in_and_idempotent(monkeypatch):
     _bootstrap_admin()
     assert repo.count(SYSTEM, "admin_users", where=where, params=params) == 1
     repo.delete(SYSTEM, "admin_users", where=where, params=params)
+
+
+def test_dockerfile_ships_every_file_pages_reads_at_request_time():
+    """api/pages.py inlines assets/mark.svg while rendering the portal shell. The image
+    once omitted that directory and every portal page answered 500 instead of degrading
+    to no logo, so the copy is asserted rather than assumed."""
+    root = Path(__file__).resolve().parent.parent
+    dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
+    assert "COPY assets ./assets" in dockerfile
+    assert (root / "assets" / "mark.svg").is_file()
+
+
+def test_portal_logo_degrades_when_the_mark_is_missing(tmp_path, monkeypatch):
+    """A decorative SVG must never take a whole page down with it."""
+    from api import pages
+
+    pages.logo_path.cache_clear()
+    monkeypatch.setattr(pages, "ROOT", tmp_path)
+    try:
+        assert pages.logo_path() == ""
+    finally:
+        pages.logo_path.cache_clear()
+
+    real_root = Path(__file__).resolve().parent.parent
+    assert re.search(r'<path d="[^"]+"', (real_root / "assets" / "mark.svg").read_text("utf-8"))
