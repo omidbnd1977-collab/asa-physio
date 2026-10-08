@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,31 @@ def test_static_source_booking_links_are_github_pages_safe():
     assert "contact.html#bookForm" in source
     assert 'href="#bookForm"' in source
     assert 'href="/api/bookings"' not in source
+
+
+def test_built_bundle_has_no_root_absolute_local_links():
+    """The bundle is served from "/" on Render and "/asa-physio/" on GitHub Pages. A
+    root-absolute href only resolves under the first. This shipped broken once: the live
+    Pages site requested /style.<hash>.css, got 404, and rendered unstyled with dead nav."""
+    public = Path(__file__).resolve().parent.parent / "public"
+    if not public.is_dir():
+        pytest.skip("public/ is not built")
+    offenders = []
+    for page in sorted(public.glob("**/*.html")):
+        text = page.read_text(encoding="utf-8")
+        for attr, url in re.findall(r'(href|src)\s*=\s*"([^"]+)"', text):
+            if url.startswith("/") and not url.startswith("//"):
+                offenders.append(f'{page.name}: {attr}="{url}"')
+    assert not offenders, "\n".join(offenders)
+
+
+def test_built_bundle_preserves_url_fragments():
+    """build_static rewrites hrefs to fingerprinted names and must keep the #fragment,
+    or the booking CTA lands at the top of the page instead of on the form."""
+    index = Path(__file__).resolve().parent.parent / "public" / "index.html"
+    if not index.exists():
+        pytest.skip("public/ is not built")
+    assert 'href="contact.html#bookForm"' in index.read_text(encoding="utf-8")
 
 
 def test_patient_update_and_audit_are_staff_only(owner_client, patient, client):
@@ -85,14 +111,26 @@ def test_move_atomic_creates_one_new_booking_and_audit(owner_client, patient):
     rows = repo.select(SYSTEM, "appointments")
     assert sum(a["status"] != "cancelled" for a in rows) == 1
     assert moved.json()["code"] != old_code
-    assert owner_client.get(f"/api/admin/appointments/{moved.json()['code']}/audit").status_code == 200
+    assert (
+        owner_client.get(f"/api/admin/appointments/{moved.json()['code']}/audit").status_code == 200
+    )
 
 
 def test_all_required_slot_times_are_exposed():
     from api import scheduling
 
     assert scheduling.SLOTS == [
-        "16:00", "16:30", "17:00", "17:30", "18:00", "18:30",
-        "19:00", "19:30", "20:00", "20:30", "21:00", "21:30",
+        "16:00",
+        "16:30",
+        "17:00",
+        "17:30",
+        "18:00",
+        "18:30",
+        "19:00",
+        "19:30",
+        "20:00",
+        "20:30",
+        "21:00",
+        "21:30",
     ]
     assert scheduling.DAY_CAPACITY == 120

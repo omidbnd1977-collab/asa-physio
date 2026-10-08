@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import pathlib
+import posixpath
 import re
 import shutil
 import sys
@@ -73,15 +74,22 @@ def main() -> int:
     pattern = re.compile(r'(?P<attr>(?:href|src)\s*=\s*")(?P<url>[^"]+)"')
     for path in sorted(SRC.rglob("*.html")):
         rel = path.relative_to(SRC).as_posix()
+        page_dir = posixpath.dirname(rel) or "."
         html = path.read_text(encoding="utf-8")
 
-        def sub(m: re.Match[str]) -> str:
+        def sub(m: re.Match[str], page_dir: str = page_dir) -> str:
             url = m.group("url")
             if url.startswith(("http://", "https://", "data:", "tel:", "mailto:", "#")):
                 return m.group(0)
-            clean = url.split("?", 1)[0].split("#", 1)[0].lstrip("./")
+            parts = re.match(r"^([^?#]*)(\?[^#]*)?(#.*)?$", url)
+            path_part, query, frag = parts.group(1), parts.group(2) or "", parts.group(3) or ""
+            clean = path_part.lstrip("./")
             if clean in manifest:
-                return f'{m.group("attr")}/{manifest[clean]}"'
+                # Relative, not root-absolute: the same bundle is served from "/" on
+                # Render and from "/asa-physio/" on GitHub Pages. A leading slash only
+                # works for the first of those and 404s on the second.
+                target = posixpath.relpath(manifest[clean], page_dir)
+                return f'{m.group("attr")}{target}{query}{frag}"'
             return m.group(0)
 
         html = pattern.sub(sub, html)
