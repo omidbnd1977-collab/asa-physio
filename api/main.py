@@ -59,6 +59,19 @@ TEMPLATES = pathlib.Path(__file__).resolve().parent / "templates"
 # --------------------------------------------------------------------------
 # lifespan
 # --------------------------------------------------------------------------
+def _bootstrap_admin() -> None:
+    """Create the opt-in first-boot owner. Idempotent: a restart that finds the user
+    already there does nothing."""
+    user = settings.BOOTSTRAP_ADMIN_USER
+    password = settings.BOOTSTRAP_ADMIN_PASSWORD
+    if not user or not password:
+        return
+    if repo.count(SYSTEM, "admin_users", where="username = ?", params=[user]):
+        return
+    auth.create_user(user, password, role="owner")
+    warn("bootstrap.admin_created", user=user)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     setup_logging()
@@ -67,6 +80,7 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     missing = __import__("api.policies", fromlist=["x"]).missing_policies(db.tables())
     if missing:
         raise RuntimeError(f"tables without an access policy: {missing}")
+    _bootstrap_admin()
     info(
         "app.start",
         env=settings.ENV,

@@ -51,6 +51,13 @@ class Settings:
     TRUST_PROXY: bool = _b("TRUST_PROXY", "0")
     MAX_BODY_BYTES: int = _i("MAX_BODY_BYTES", 16 * 1024)
 
+    # Opt-in first-boot owner, for a deploy that starts from an empty database and has
+    # no shell to run `python -m ops.seed` in — a diskless instance is wiped on every
+    # restart, so without this the admin panel can never be reached. Off unless both
+    # are set; never enable it on a database holding real patient records.
+    BOOTSTRAP_ADMIN_USER: str = os.getenv("BOOTSTRAP_ADMIN_USER", "").strip().lower()
+    BOOTSTRAP_ADMIN_PASSWORD: str = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "")
+
     # --- layer 09: rate limits --------------------------------------------
     RL_IP_PER_MIN: int = _i("RL_IP_PER_MIN", 60)
     RL_IP_BURST: int = _i("RL_IP_BURST", 20)

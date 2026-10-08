@@ -25,6 +25,8 @@ os.environ.update(
         "ALERT_WEBHOOK": "",
         "AI_ENABLED": "0",
         "AI_API_KEY": "",
+        "BOOTSTRAP_ADMIN_USER": "",
+        "BOOTSTRAP_ADMIN_PASSWORD": "",
         "STATIC_DIR": str(TMP / "public"),
         "SMS_PROVIDER": "file",
         "SMS_FILE": str(TMP / "sms.txt"),

@@ -134,3 +134,29 @@ def test_all_required_slot_times_are_exposed():
         "21:30",
     ]
     assert scheduling.DAY_CAPACITY == 120
+
+
+def test_bootstrap_admin_is_opt_in_and_idempotent(monkeypatch):
+    """A diskless deploy wipes its SQLite file on every cold start, so without a
+    first-boot owner the admin panel is permanently unreachable. Stays off unless both
+    variables are set, and must not create a second owner on restart."""
+    from api import repo
+    from api.config import settings
+    from api.main import _bootstrap_admin
+    from api.policies import SYSTEM
+
+    where = "username = ?"
+    params = ["boot_owner"]
+    repo.delete(SYSTEM, "admin_users", where=where, params=params)
+
+    monkeypatch.setattr(settings, "BOOTSTRAP_ADMIN_USER", "")
+    monkeypatch.setattr(settings, "BOOTSTRAP_ADMIN_PASSWORD", "")
+    _bootstrap_admin()
+    assert repo.count(SYSTEM, "admin_users", where=where, params=params) == 0
+
+    monkeypatch.setattr(settings, "BOOTSTRAP_ADMIN_USER", "boot_owner")
+    monkeypatch.setattr(settings, "BOOTSTRAP_ADMIN_PASSWORD", "a-boot-password-12")
+    _bootstrap_admin()
+    _bootstrap_admin()
+    assert repo.count(SYSTEM, "admin_users", where=where, params=params) == 1
+    repo.delete(SYSTEM, "admin_users", where=where, params=params)
