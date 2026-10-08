@@ -268,6 +268,45 @@ class PatientNoteIn(BaseModel):
         return clean_text(v, max_len=2000)
 
 
+class PatientUpdateIn(BaseModel):
+    """Staff correction of a patient record. Every field is optional so a partial
+    PATCH only touches what was sent — national_id and birth_date are deliberately
+    absent, because they are the returning-patient login credentials."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    full_name: str | None = Field(default=None, min_length=3, max_length=80)
+    phone: str | None = Field(default=None, min_length=10, max_length=20)
+    mri_link: str | None = Field(default=None, max_length=500)
+    ortho_doctor: str | None = Field(default=None, max_length=80)
+    staff_note: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("full_name")
+    @classmethod
+    def _name(cls, v: str) -> str:
+        return PatientRegisterIn._name(v)
+
+    @field_validator("phone")
+    @classmethod
+    def _phone(cls, v: str) -> str:
+        return BookingIn._phone(v)
+
+    @field_validator("mri_link")
+    @classmethod
+    def _mri(cls, v: str) -> str:
+        return PatientRegisterIn._mri(v)
+
+    @field_validator("ortho_doctor")
+    @classmethod
+    def _ortho(cls, v: str) -> str:
+        return PatientRegisterIn._ortho(v)
+
+    @field_validator("staff_note")
+    @classmethod
+    def _note(cls, v: str) -> str:
+        return clean_text(v, max_len=2000)
+
+
 class MessageIn(BaseModel):
     """One message in the doctor<->patient thread (either direction)."""
 

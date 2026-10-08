@@ -9,7 +9,19 @@ from typing import Any
 from fastapi import APIRouter, Body, File, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 
-from . import auth, cache, clinical, messages, metrics, patients, repo, scheduling, schemas, sms
+from . import (
+    audit,
+    auth,
+    cache,
+    clinical,
+    messages,
+    metrics,
+    patients,
+    repo,
+    scheduling,
+    schemas,
+    sms,
+)
 from .errors import BadRequest, Conflict, NotFound
 from .jalali import now_tehran, to_jalali_long, to_jalali_str
 from .logging_ import info
@@ -230,6 +242,14 @@ async def move(
             appointment_id=new["id"],
         )
     cache.purge("admin:appointments")
+    audit.record(
+        actor,
+        "appointment.moved",
+        "appointment",
+        new["public_id"],
+        before={"public_id": old["public_id"], "when": old_when},
+        after={"public_id": new["public_id"], "when": new_when, "cabin": new["cabin"]},
+    )
     info("doctor.moved", from_id=old["public_id"], to_id=new["public_id"], sms_sent=sent)
     return {
         "ok": True,
@@ -318,6 +338,14 @@ async def set_status(
         {"status": data.status, "updated_at": _now()},
         where="public_id = ?",
         params=[public_id[:10]],
+    )
+    audit.record(
+        actor,
+        "appointment.status_changed",
+        "appointment",
+        appt["public_id"],
+        before={"status": appt["status"]},
+        after={"status": data.status},
     )
     if data.status == "cancelled":
         messages.system_note(
@@ -459,6 +487,57 @@ async def patient_note(
     if not n:
         raise NotFound("بیمار پیدا نشد.")
     return {"ok": True}
+
+
+@router.patch("/patients/{public_id}")
+async def patient_update(
+    public_id: str, request: Request, payload: dict[str, Any] = Body(default={})
+) -> dict[str, Any]:
+    """Staff correction of a patient record. Audited, because it overwrites data the
+    patient supplied themselves and the two must stay distinguishable."""
+    actor = staff(request)
+    csrf(request, actor)
+    data = schemas.PatientUpdateIn.model_validate(payload)
+    rows = repo.select(actor, "patients", where="public_id = ?", params=[public_id[:12]], limit=1)
+    if not rows:
+        raise NotFound("بیمار پیدا نشد.")
+    # dict() because `in` on a sqlite3.Row scans values, not column names
+    patient = dict(rows[0])
+    changes = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    if not changes:
+        return {"ok": True, "changed": []}
+    before = {k: patient[k] for k in changes if k in patient}
+    repo.update(
+        actor,
+        "patients",
+        {**changes, "updated_at": _now()},
+        where="public_id = ?",
+        params=[public_id[:12]],
+    )
+    audit.record(
+        actor, "patient.updated", "patient", patient["public_id"], before=before, after=changes
+    )
+    return {"ok": True, "changed": sorted(changes)}
+
+
+@router.get("/patients/{public_id}/audit")
+async def patient_audit(public_id: str, request: Request) -> dict[str, Any]:
+    actor = staff(request)
+    rows = repo.select(actor, "patients", where="public_id = ?", params=[public_id[:12]], limit=1)
+    if not rows:
+        raise NotFound("بیمار پیدا نشد.")
+    return {"items": audit.list_for("patient", rows[0]["public_id"])}
+
+
+@router.get("/appointments/{public_id}/audit")
+async def appointment_audit(public_id: str, request: Request) -> dict[str, Any]:
+    actor = staff(request)
+    rows = repo.select(
+        actor, "appointments", where="public_id = ?", params=[public_id[:10]], limit=1
+    )
+    if not rows:
+        raise NotFound("این نوبت پیدا نشد.")
+    return {"items": audit.list_for("appointment", rows[0]["public_id"])}
 
 
 @router.get("/patients/{public_id}/photo")
