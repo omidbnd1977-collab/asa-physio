@@ -203,11 +203,10 @@ document.addEventListener('who',e=>{
 # ==========================================================================
 REGISTER_BODY = """
 <div class="pcard">
-  <div class="steps"><i class="on"></i><i></i><i></i><span>۱ از ۳ — ثبت اطلاعات</span></div>
   <h1 class="ptitle">ثبت‌نام بیمار جدید</h1>
   <p class="psub">
-    این اطلاعات فقط یک بار گرفته می‌شود و در پرونده‌ی شما می‌ماند. پس از ثبت،
-    پیامک تأیید برای شما ارسال می‌شود و مستقیم به جدول انتخاب نوبت می‌روید.
+    اطلاعات پرونده را به ترتیب زیر وارد کنید. موارد ستاره‌دار برای ثبت نوبت الزامی‌اند؛
+    پس از ثبت، مستقیم به جدول انتخاب نوبت می‌روید.
   </p>
 
   <form id="regForm" novalidate enctype="multipart/form-data">
@@ -216,63 +215,62 @@ REGISTER_BODY = """
     </div>
 
     <div class="field">
-      <input type="text" id="full_name" placeholder=" " required minlength="3" maxlength="80" autocomplete="name">
-      <label for="full_name">نام و نام خانوادگی</label>
+      <input type="text" id="full_name" name="full_name" placeholder=" " required minlength="3" maxlength="80" autocomplete="name">
+      <label for="full_name">نام و نام خانوادگی <span class="req">*</span></label>
       <p class="err-msg" id="e-full_name"></p>
     </div>
 
-    <div class="grid2">
-      <div class="field">
-        <input type="text" id="national_id" placeholder=" " required inputmode="numeric"
-               maxlength="10" autocomplete="off" dir="ltr" style="text-align:right">
-        <label for="national_id">کد ملی (۱۰ رقم)</label>
-        <p class="hint">برای ورودهای بعدی لازم است.</p>
-        <p class="err-msg" id="e-national_id"></p>
-      </div>
-      <div class="field">
-        <input type="text" id="birth_date" placeholder=" " required inputmode="numeric"
-               maxlength="10" dir="ltr" style="text-align:right">
-        <label for="birth_date">تاریخ تولد — سال/ماه/روز</label>
-        <p class="hint">مثال: ۱۳۷۰/۰۵/۰۳</p>
-        <p class="err-msg" id="e-birth_date"></p>
-      </div>
+    <div class="field">
+      <input type="text" id="national_code" name="national_code" placeholder=" " required inputmode="numeric"
+             maxlength="10" autocomplete="off" dir="ltr" style="text-align:right">
+      <label for="national_code">کد ملی <span class="req">*</span></label>
+      <p class="hint">برای ورودهای بعدی لازم است.</p>
+      <p class="err-msg" id="e-national_code"></p>
     </div>
 
     <div class="field">
-      <input type="tel" id="phone" placeholder=" " required inputmode="numeric"
+      <label>تاریخ تولد (شمسی) <span class="req">*</span></label>
+      <div class="three birth-fields">
+        <input type="text" id="birth_year" name="birth_year" placeholder="سال" required inputmode="numeric" maxlength="4" dir="ltr" aria-label="سال تولد">
+        <input type="text" id="birth_month" name="birth_month" placeholder="ماه" required inputmode="numeric" maxlength="2" dir="ltr" aria-label="ماه تولد">
+        <input type="text" id="birth_day" name="birth_day" placeholder="روز" required inputmode="numeric" maxlength="2" dir="ltr" aria-label="روز تولد">
+      </div>
+      <p class="hint">سال، ماه و روز را جداگانه وارد کنید؛ مثال: ۱۳۷۰ / ۰۵ / ۰۳.</p>
+      <p class="err-msg" id="e-birth_year"></p>
+    </div>
+
+    <div class="field">
+      <input type="tel" id="mobile" name="mobile" placeholder=" " required inputmode="numeric"
              maxlength="20" autocomplete="tel" dir="ltr" style="text-align:right">
-      <label for="phone">شماره موبایل</label>
+      <label for="mobile">شماره موبایل <span class="req">*</span></label>
       <p class="hint">پیامک تأیید نوبت به همین شماره ارسال می‌شود.</p>
-      <p class="err-msg" id="e-phone"></p>
+      <p class="err-msg" id="e-mobile"></p>
     </div>
 
-    <div class="grid2">
-      <div class="field">
-        <input type="url" id="mri_link" placeholder=" " maxlength="500" dir="ltr" style="text-align:left">
-        <label for="mri_link">لینک MRI (اختیاری)</label>
-        <p class="hint">لینک گوگل‌درایو، آی‌کلود یا هر فضای اشتراکی.</p>
-        <p class="err-msg" id="e-mri_link"></p>
-      </div>
-      <div class="field">
-        <input type="text" id="ortho_doctor" placeholder=" " maxlength="80">
-        <label for="ortho_doctor">نام پزشک ارتوپد (اختیاری)</label>
-        <p class="err-msg" id="e-ortho_doctor"></p>
-      </div>
+    <div class="field">
+      <input type="url" id="mri_url" name="mri_url" placeholder=" " maxlength="500" dir="ltr" style="text-align:left">
+      <label for="mri_url">لینک MRI <span class="muted">(اختیاری)</span></label>
+      <p class="hint">فعلاً فقط لینک MRI دریافت می‌شود؛ آپلود مستقیم در فرم ثبت‌نام وجود ندارد.</p>
+      <p class="err-msg" id="e-mri_url"></p>
     </div>
 
-    <div class="grid2" style="margin-top:16px">
-      <label class="filebox" id="mriBox" for="mri_file">
-        <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 15l5-5 4 4 3-3 6 6"/><circle cx="9" cy="8" r="1.4"/></svg>
-        <b id="mriLabel">ارسال عکس MRI</b>
-        <span id="mriHint">عکس یا PDF — حداکثر ۵ مگابایت (اختیاری)</span>
-        <input type="file" id="mri_file" accept="image/jpeg,image/png,image/webp,application/pdf">
-      </label>
-      <label class="filebox" id="fileBox" for="med_photo">
-        <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5M12 3v12"/></svg>
-        <b id="fileLabel">ارسال عکس داروهای مصرفی</b>
-        <span id="fileHint">عکس یا PDF — حداکثر ۵ مگابایت (اختیاری)</span>
-        <input type="file" id="med_photo" accept="image/jpeg,image/png,image/webp,application/pdf">
-      </label>
+    <div class="field">
+      <input type="text" id="orthopedist" name="orthopedist" placeholder=" " maxlength="80">
+      <label for="orthopedist">نام پزشک ارتوپد <span class="muted">(اختیاری)</span></label>
+      <p class="err-msg" id="e-orthopedist"></p>
+    </div>
+
+    <label class="filebox" id="fileBox" for="meds_photo">
+      <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5M12 3v12"/></svg>
+      <b id="fileLabel">ارسال عکس داروهای مصرفی</b>
+      <span id="fileHint">عکس یا PDF — حداکثر ۵ مگابایت (اختیاری)</span>
+      <input type="file" id="meds_photo" name="meds_photo" accept="image/jpeg,image/png,image/webp,application/pdf">
+    </label>
+
+    <div class="field" style="margin-top:16px">
+      <textarea id="note" name="note" maxlength="500" placeholder=" "></textarea>
+      <label for="note">یادداشت <span class="muted">(اختیاری)</span></label>
+      <p class="hint">توضیح کوتاه درباره مشکل یا درخواست شما؛ در مرحله رزرو برای پزشک ثبت می‌شود.</p>
     </div>
 
     <div style="margin-top:22px">
@@ -294,13 +292,20 @@ REGISTER_BODY = """
 """
 
 REGISTER_JS = r"""
-const IDS=['full_name','national_id','birth_date','phone','mri_link','ortho_doctor'];
-attachDateMask($('#birth_date'));
-['national_id','phone'].forEach(id=>{
+const UI_IDS=['full_name','national_code','birth_year','birth_month','birth_day','mobile','mri_url','orthopedist','note'];
+const DIGITS=s=>String(s).replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
+  .replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d));
+['national_code','birth_year','birth_month','birth_day','mobile'].forEach(id=>{
   const el=document.getElementById(id);
-  el.addEventListener('input',()=>{el.value=el.value
-    .replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
-    .replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/[^\d+]/g,'');});
+  el.addEventListener('input',()=>{el.value=DIGITS(el.value).replace(/[^\d+]/g,'');});
+});
+['birth_year','birth_month','birth_day'].forEach((id,i,all)=>{
+  const el=document.getElementById(id);
+  el.addEventListener('input',()=>{
+    const max=el.maxLength;
+    el.value=DIGITS(el.value).replace(/\D/g,'').slice(0,max);
+    if(el.value.length===max && all[i+1]) all[i+1].focus();
+  });
 });
 function wireFile(inputId,boxId,labelId,hintId,idleLabel){
   const inp=document.getElementById(inputId), box=document.getElementById(boxId);
@@ -314,66 +319,63 @@ function wireFile(inputId,boxId,labelId,hintId,idleLabel){
     if(f.size>5*1024*1024){inp.value='';flash('حجم فایل بیشتر از ۵ مگابایت است.',true);return;}
     box.classList.add('has');
     document.getElementById(labelId).textContent='✓ '+f.name;
-    document.getElementById(hintId).textContent=
-      faDigits((f.size/1024).toFixed(0))+' کیلوبایت — برای تغییر کلیک کنید';
+    document.getElementById(hintId).textContent=faDigits((f.size/1024).toFixed(0))+' کیلوبایت — برای تغییر کلیک کنید';
   });
   return inp;
 }
-const fileInput=wireFile('med_photo','fileBox','fileLabel','fileHint','ارسال عکس داروهای مصرفی');
-const mriInput =wireFile('mri_file','mriBox','mriLabel','mriHint','ارسال عکس MRI');
-
+const fileInput=wireFile('meds_photo','fileBox','fileLabel','fileHint','ارسال عکس داروهای مصرفی');
 function nidValid(v){
   if(!/^\d{10}$/.test(v)||/^(\d)\1{9}$/.test(v))return false;
   let s=0; for(let i=0;i<9;i++)s+=+v[i]*(10-i);
-  const r=s%11, c=+v[9];
-  return r<2 ? c===r : c===11-r;
+  const r=s%11, c=+v[9]; return r<2 ? c===r : c===11-r;
 }
 function localCheck(){
   let first=null;
   const nm=$('#full_name').value.trim();
   if(nm.split(/\s+/).filter(Boolean).length<2){markErr('full_name','نام و نام خانوادگی را کامل وارد کنید.');first='full_name';}
-  const nid=$('#national_id').value.trim();
-  if(!nidValid(nid)){markErr('national_id','کد ملی معتبر نیست.');first=first||'national_id';}
-  const bd=$('#birth_date').value.trim();
-  if(!/^\d{4}\/\d{1,2}\/\d{1,2}$/.test(bd)){markErr('birth_date','تاریخ را به شکل ۱۳۷۰/۰۵/۰۳ وارد کنید.');first=first||'birth_date';}
-  const ph=$('#phone').value.trim();
-  if(!/^(09\d{9}|\+989\d{9}|9\d{9})$/.test(ph)){markErr('phone','شماره موبایل باید ۱۱ رقم و با ۰۹ شروع شود.');first=first||'phone';}
-  const mri=$('#mri_link').value.trim();
-  if(mri && !/^https?:\/\/\S+\.\S+/.test(mri)){markErr('mri_link','لینک باید با http:// یا https:// شروع شود.');first=first||'mri_link';}
+  const nid=DIGITS($('#national_code').value.trim());
+  if(!nidValid(nid)){markErr('national_code','کد ملی معتبر نیست.');first=first||'national_code';}
+  const y=DIGITS($('#birth_year').value.trim()), m=DIGITS($('#birth_month').value.trim()), d=DIGITS($('#birth_day').value.trim());
+  if(!/^\d{4}$/.test(y)||!/^\d{1,2}$/.test(m)||!/^\d{1,2}$/.test(d)){
+    markErr('birth_year','سال، ماه و روز تولد را کامل وارد کنید.'); first=first||'birth_year';
+  }
+  const ph=DIGITS($('#mobile').value.trim());
+  if(!/^(09\d{9}|\+989\d{9}|9\d{9})$/.test(ph)){markErr('mobile','شماره موبایل باید ۱۱ رقم و با ۰۹ شروع شود.');first=first||'mobile';}
+  const mri=$('#mri_url').value.trim();
+  if(mri && !/^https?:\/\/\S+\.\S+/.test(mri)){markErr('mri_url','لینک باید با http:// یا https:// شروع شود.');first=first||'mri_url';}
   return first;
 }
-
 let sending=false;
 $('#regForm').addEventListener('submit',async e=>{
-  e.preventDefault();
-  if(sending)return;
-  clearErrs(IDS);
+  e.preventDefault(); if(sending)return;
+  clearErrs(UI_IDS.concat(['birth_date']));
   const bad=localCheck();
   if(bad){document.getElementById(bad).focus();flash('لطفاً خطاهای فرم را برطرف کنید.',true);return;}
   sending=true;
   await withBtn($('#regBtn'),'در حال ثبت…',async()=>{
+    const birth_date=[$('#birth_year').value,$('#birth_month').value.padStart(2,'0'),$('#birth_day').value.padStart(2,'0')].join('/');
     const fd=new FormData();
-    IDS.forEach(id=>fd.append(id,document.getElementById(id).value.trim()));
+    fd.append('full_name',$('#full_name').value.trim());
+    fd.append('national_id',DIGITS($('#national_code').value.trim()));
+    fd.append('birth_date',DIGITS(birth_date));
+    fd.append('phone',DIGITS($('#mobile').value.trim()));
+    fd.append('mri_link',$('#mri_url').value.trim());
+    fd.append('ortho_doctor',$('#orthopedist').value.trim());
     fd.append('website',$('#website').value);
+    sessionStorage.setItem('asa_booking_note',$('#note').value.trim());
     if(fileInput&&fileInput.files[0]) fd.append('med_photo',fileInput.files[0]);
-    if(mriInput&&mriInput.files[0]) fd.append('mri_file',mriInput.files[0]);
     const r=await api('/api/portal/register',{method:'POST',body:fd});
     if(!r.ok){
       const err=r.error;
       if(err.fields){let f=null;for(const k in err.fields){
-        if(document.getElementById(k)){markErr(k,err.fields[k]);f=f||k;}}
+        const mapped={national_id:'national_code',phone:'mobile',birth_date:'birth_year',mri_link:'mri_url',ortho_doctor:'orthopedist'}[k]||k;
+        if(document.getElementById(mapped)){markErr(mapped,err.fields[k]);f=f||mapped;}}
         if(f)document.getElementById(f).focus();}
-      if(err.code==='already_registered'){
-        flash(err.message,true);
-        setTimeout(()=>location.href='/booking/login',2200);
-      } else {
-        flash((err.message||'ثبت نشد.')+(err.trace_id?' (کد: '+err.trace_id+')':''),true);
-      }
+      if(err.code==='already_registered'){flash(err.message,true);setTimeout(()=>location.href='/booking/login',2200);}
+      else flash((err.message||'ثبت نشد.')+(err.trace_id?' (کد: '+err.trace_id+')':''),true);
       return;
     }
-    flash(r.data.sms_sent
-      ? 'ثبت شد ✓ پیامک تأیید برای شما ارسال شد'
-      : 'ثبت شد ✓ (ارسال پیامک با تأخیر انجام می‌شود)');
+    flash(r.data.sms_sent?'ثبت شد ✓ پیامک تأیید برای شما ارسال شد':'ثبت شد ✓ (ارسال پیامک با تأخیر انجام می‌شود)');
     setTimeout(()=>location.href=r.data.redirect||'/booking/reserve',1300);
   });
   sending=false;
@@ -393,19 +395,23 @@ LOGIN_BODY = """
 
   <form id="loginForm" novalidate>
     <div class="field">
-      <input type="text" id="national_id" placeholder=" " required inputmode="numeric"
+      <input type="text" id="national_code" placeholder=" " required inputmode="numeric"
              maxlength="10" dir="ltr" style="text-align:right" autocomplete="off">
-      <label for="national_id">کد ملی</label>
-      <p class="err-msg" id="e-national_id"></p>
+      <label for="national_code">کد ملی <span class="req">*</span></label>
+      <p class="err-msg" id="e-national_code"></p>
     </div>
     <div class="field">
-      <input type="text" id="birth_date" placeholder=" " required inputmode="numeric"
-             maxlength="10" dir="ltr" style="text-align:right">
-      <label for="birth_date">تاریخ تولد — سال/ماه/روز</label>
-      <p class="hint">مثال: ۱۳۷۰/۰۵/۰۳</p>
-      <p class="err-msg" id="e-birth_date"></p>
+      <label>تاریخ تولد (شمسی) <span class="req">*</span></label>
+      <div class="three birth-fields">
+        <input type="text" id="birth_year" placeholder="سال" required inputmode="numeric" maxlength="4" dir="ltr" aria-label="سال تولد">
+        <input type="text" id="birth_month" placeholder="ماه" required inputmode="numeric" maxlength="2" dir="ltr" aria-label="ماه تولد">
+        <input type="text" id="birth_day" placeholder="روز" required inputmode="numeric" maxlength="2" dir="ltr" aria-label="روز تولد">
+      </div>
+      <p class="hint">سال، ماه و روز را جداگانه وارد کنید؛ مثال: ۱۳۷۰ / ۰۵ / ۰۳.</p>
+      <p class="err-msg" id="e-birth_year"></p>
     </div>
     <div style="margin-top:20px">
+
       <button class="btn btn-primary" type="submit" id="loginBtn" style="width:100%;padding:15px">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 17l5-5-5-5M15 12H3M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/></svg>
         ورود به پرونده
@@ -424,22 +430,25 @@ LOGIN_BODY = """
 """
 
 LOGIN_JS = r"""
-attachDateMask($('#birth_date'));
-$('#national_id').addEventListener('input',e=>{
-  e.target.value=e.target.value.replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
-    .replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/\D/g,'');
+const DIGITS_LOGIN=s=>String(s).replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
+  .replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d));
+['national_code','birth_year','birth_month','birth_day'].forEach(id=>{
+  const el=document.getElementById(id);
+  el.addEventListener('input',()=>{el.value=DIGITS_LOGIN(el.value).replace(/\D/g,'').slice(0,el.maxLength);});
 });
 $('#loginForm').addEventListener('submit',async e=>{
   e.preventDefault();
-  clearErrs(['national_id','birth_date']);
+  clearErrs(['national_code','birth_year','birth_month','birth_day','birth_date']);
   $('#loginErr').classList.add('hidden');
   let bad=null;
-  if(!/^\d{10}$/.test($('#national_id').value.trim())){markErr('national_id','کد ملی باید ۱۰ رقم باشد.');bad='national_id';}
-  if(!/^\d{4}\/\d{1,2}\/\d{1,2}$/.test($('#birth_date').value.trim())){markErr('birth_date','تاریخ را به شکل ۱۳۷۰/۰۵/۰۳ وارد کنید.');bad=bad||'birth_date';}
+  if(!/^\d{10}$/.test($('#national_code').value.trim())){markErr('national_code','کد ملی باید ۱۰ رقم باشد.');bad='national_code';}
+  const y=$('#birth_year').value.trim(),m=$('#birth_month').value.trim(),d=$('#birth_day').value.trim();
+  if(!/^\d{4}$/.test(y)||!/^\d{1,2}$/.test(m)||!/^\d{1,2}$/.test(d)){markErr('birth_year','سال، ماه و روز تولد را کامل وارد کنید.');bad=bad||'birth_year';}
   if(bad){document.getElementById(bad).focus();return;}
   await withBtn($('#loginBtn'),'در حال بررسی…',async()=>{
+    const birth_date=[y,m.padStart(2,'0'),d.padStart(2,'0')].join('/');
     const r=await api('/api/portal/login',{method:'POST',body:{
-      national_id:$('#national_id').value.trim(), birth_date:$('#birth_date').value.trim()}});
+      national_id:$('#national_code').value.trim(), birth_date:birth_date}});
     if(!r.ok){errBox('#loginErr',r.error);return;}
     flash('خوش آمدید '+r.data.patient.full_name);
     setTimeout(()=>location.href=r.data.redirect||'/booking/reserve',900);
@@ -453,7 +462,6 @@ $('#loginForm').addEventListener('submit',async e=>{
 # ==========================================================================
 RESERVE_BODY = """
 <div class="pcard">
-  <div class="steps"><i class="on"></i><i class="on"></i><i></i><span>۲ از ۳ — انتخاب زمان</span></div>
   <h1 class="ptitle">انتخاب تاریخ و ساعت مراجعه</h1>
   <p class="psub">
     کلینیک هر روز از ساعت <b>۱۶:۰۰ تا ۲۲:۰۰</b> فعال است و هر نوبت نیم‌ساعت طول می‌کشد.
@@ -487,7 +495,8 @@ RESERVE_BODY = """
 
   <div class="field hidden" id="noteWrap" style="margin-top:20px">
     <textarea id="note" placeholder=" " maxlength="500"></textarea>
-    <label for="note">توضیح کوتاه برای پزشک (اختیاری)</label>
+    <label for="note">یادداشت (اختیاری)</label>
+    <p class="hint">یادداشت ثبت‌نام را در صورت نیاز مرور یا تکمیل کنید.</p>
   </div>
 
   <div id="confirmWrap" class="hidden" style="margin-top:20px">
@@ -514,6 +523,7 @@ RESERVE_BODY = """
 
 RESERVE_JS = r"""
 let DAYS=[], SEL_DATE=null, SEL_TIME=null, ME=null;
+const REGISTER_NOTE=sessionStorage.getItem('asa_booking_note')||'';
 
 document.addEventListener('who',e=>{
   if(!e.detail){ location.href='/booking'; return; }
@@ -541,10 +551,17 @@ function renderMine(){
       const c=document.createElement('span'); c.className='pill p-coming';
       c.textContent='حضور تأیید شد'; d.appendChild(c);
     }
-    const code=document.createElement('span');
-    code.style.cssText='font-size:.72rem;color:var(--muted);direction:ltr;margin-inline-start:auto';
-    code.textContent=a.public_id; d.appendChild(code);
-    box.appendChild(d);
+      const code=document.createElement('span');
+      code.style.cssText='font-size:.72rem;color:var(--muted);direction:ltr;margin-inline-start:auto';
+      code.textContent='کد '+a.public_id; d.appendChild(code);
+      if(a.status==='booked'){
+        const cancel=document.createElement('button');
+        cancel.type='button'; cancel.className='btn btn-ghost mini cancel-appt';
+        cancel.dataset.cancelCode=a.public_id; cancel.textContent='لغو نوبت';
+        d.appendChild(cancel);
+      }
+      box.appendChild(d);
+
   });
 }
 
@@ -625,12 +642,23 @@ function pickSlot(time,btn){
   const day=DAYS.find(d=>d.date===SEL_DATE);
   $('#rDate').textContent=day?day.label:SEL_DATE;
   $('#rTime').textContent=time;
+  $('#note').value=REGISTER_NOTE;
   $('#noteWrap').classList.remove('hidden');
   $('#confirmWrap').classList.remove('hidden');
   $('#confirmWrap').scrollIntoView({behavior:'smooth',block:'nearest'});
 }
 
 document.addEventListener('click',async e=>{
+  const cancel=e.target.closest&&e.target.closest('.cancel-appt');
+  if(cancel){
+    if(!confirm('این نوبت لغو شود؟')) return;
+    cancel.disabled=true;
+    const r=await api('/api/portal/appointments/'+encodeURIComponent(cancel.dataset.cancelCode)+'/cancel',{method:'POST'});
+    if(!r.ok){cancel.disabled=false;flash(r.error.message||'لغو نوبت انجام نشد.',true);return;}
+    flash('نوبت لغو شد.');
+    setTimeout(()=>location.reload(),500);
+    return;
+  }
   const btn=e.target.closest&&e.target.closest('#bookBtn');
   if(!btn) return;
   if(!SEL_DATE||!SEL_TIME){flash('ابتدا تاریخ و ساعت را انتخاب کنید.',true);return;}
@@ -642,6 +670,7 @@ document.addEventListener('click',async e=>{
       if(r.error.code==='slot_full') pickDay(SEL_DATE);   // refresh the grid
       return;
     }
+    sessionStorage.removeItem('asa_booking_note');
     flash(r.data.sms_sent?'نوبت ثبت شد ✓ پیامک تأیید ارسال شد':'نوبت ثبت شد ✓');
     setTimeout(()=>location.href=r.data.redirect,1100);
   });
@@ -654,7 +683,6 @@ document.addEventListener('click',async e=>{
 # ==========================================================================
 DONE_BODY = """
 <div class="pcard ticket">
-  <div class="steps" style="margin-bottom:26px"><i class="on"></i><i class="on"></i><i class="on"></i><span>۳ از ۳ — ثبت شد</span></div>
   <div class="mark"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></div>
   <h1 class="ptitle">نوبت شما ثبت شد</h1>
   <p class="psub" id="doneSub">پیامک تأیید به شماره‌ی شما ارسال شد.</p>
