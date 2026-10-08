@@ -1,62 +1,67 @@
-# Render Blueprint — asa-physio
-# Deploy: Render → New + → Blueprint → pick the omidbnd1977-collab/asa-physio repo.
+# Render Blueprint — asa-physio PREVIEW (branch `preview`)
+# Deploy: Render → New + → Blueprint → pick omidbnd1977-collab/asa-physio → branch `preview`.
 #
-# The `disk` block is not optional. The app stores bookings, patient records and the
-# audit trail in SQLite at DB_PATH. Render's filesystem is ephemeral without a disk, so
-# every deploy or restart would erase the clinic's data. Disks require a paid plan.
+# This is deliberately NOT the production blueprint on `main`:
+#
+#   plan free, no disk   Free web services cannot attach a persistent disk, so the
+#                        SQLite file is wiped on every cold start. Fine for a customer
+#                        design review; unacceptable for real patient records. `main`
+#                        keeps plan starter plus a 1 GB disk for exactly that reason.
+#                        If Render refuses Docker on the free instance type, change
+#                        `plan` below to `starter` — nothing else needs to move.
+#   APP_ENV staging      Production refuses NOTIFY_PROVIDER=file and SMS_PROVIDER=file
+#                        at import time (api/config.py), and a public preview must
+#                        never page the clinic's real Telegram or text real patients.
+#   BOOTSTRAP_ADMIN_*    Recreates the demo owner after each wipe, so /admin stays
+#                        reachable without shell access. Set both in the dashboard.
+#
+# Free instances also spin down after 15 minutes without traffic, so the first click
+# after a pause takes about a minute to warm up. That is a free-tier property, not a
+# bug in the app.
 services:
   - type: web
-    name: asa-physio
+    name: asa-physio-preview
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    plan: starter
+    plan: free
     region: frankfurt
     healthCheckPath: /api/readyz
-    disk:
-      name: asa-data
-      mountPath: /srv/data
-      sizeGB: 1
 
     envVars:
       - key: APP_ENV
-        value: production
+        value: staging
       - key: WORKERS
         value: "1"
       - key: DB_PATH
         value: /srv/data/asa.db
       - key: BACKUP_DIR
         value: /srv/data/backups
+      - key: UPLOAD_DIR
+        value: /srv/data/uploads
       - key: STATIC_DIR
         value: public
-      - key: APP_BASE_URL
-        sync: false
-      - key: SECRET_KEY
-        generateValue: true
       - key: TRUST_PROXY
         value: "1"
+      - key: SECRET_KEY
+        generateValue: true
 
-      # Booking delivery. `file` is refused at startup under APP_ENV=production, so a
-      # real channel must be set or the clinic silently receives nothing.
+      # Only known after the first deploy creates the URL — fill it in the dashboard
+      # so links in outgoing messages point back at this preview.
+      - key: APP_BASE_URL
+        sync: false
+
+      # Every sink stays local: no Telegram, no SMS gateway, no paid AI calls.
       - key: NOTIFY_PROVIDER
-        value: telegram
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_CHAT_ID
-        sync: false
-
-      # Patient SMS (Kavenegar / sms.ir). Leave unset to disable sending.
+        value: file
       - key: SMS_PROVIDER
-        sync: false
-      - key: SMS_API_KEY
-        sync: false
-      - key: SMS_SENDER
-        sync: false
-
-      # The only paid code path. Keep off until the budget ceiling is reviewed.
+        value: file
       - key: AI_ENABLED
         value: "0"
-      - key: AI_API_KEY
+
+      # Demo login for /admin, recreated on every cold start. Use a throwaway
+      # password — this instance is reachable from the public internet.
+      - key: BOOTSTRAP_ADMIN_USER
         sync: false
-      - key: BUDGET_MONTHLY_USD
-        value: "10"
+      - key: BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
