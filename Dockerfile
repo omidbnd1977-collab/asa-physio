@@ -13,6 +13,9 @@ COPY migrations ./migrations
 COPY build_static.py ./
 COPY public ./public
 COPY ops ./ops
+# api/pages.py inlines the logo path from assets/mark.svg when it renders the portal
+# shell, so the portal 500s without it.
+COPY assets ./assets
 
 RUN mkdir -p /srv/data && chown -R app:app /srv
 USER app
