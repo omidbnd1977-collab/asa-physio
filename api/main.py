@@ -401,6 +401,71 @@ async def create_booking(request: Request, payload: dict[str, Any] = Body(defaul
     return JSONResponse(body, status_code=status)
 
 
+@app.post("/api/feedback", status_code=201)
+async def submit_feedback(request: Request, payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    ip = client_ip(request)
+    ratelimit.enforce(ratelimit.ip_bucket("feedback", ip), 5, 3600,
+                      message="تعداد ارسال پیام زیاد است. لطفاً بعداً تلاش کنید.")
+    name = str(payload.get("name", "")).strip()[:80]
+    category = str(payload.get("category", "")).strip()
+    body = str(payload.get("body", "")).strip()
+    website = str(payload.get("website", "")).strip()
+    if website:
+        return {"ok": True}
+    if category not in ("satisfaction", "suggestion", "complaint"):
+        raise BadRequest("نوع پیام را انتخاب کنید.")
+    if len(body) < 5 or len(body) > 2000:
+        raise BadRequest("متن پیام باید بین ۵ تا ۲۰۰۰ نویسه باشد.")
+    if name and len(name) < 2:
+        raise BadRequest("نام باید دست‌کم ۲ نویسه باشد.")
+    raw_rating = payload.get("rating")
+    try:
+        rating = int(raw_rating) if raw_rating not in (None, "") else None
+    except (TypeError, ValueError):
+        raise BadRequest("امتیاز نامعتبر است.")
+    if rating is not None and not 1 <= rating <= 5:
+        raise BadRequest("امتیاز باید بین ۱ تا ۵ باشد.")
+    public_id = secrets.token_hex(6)
+    with repo.tx():
+        repo.insert(SYSTEM, "feedback", {"public_id": public_id, "name": name,
+            "category": category, "body": body, "rating": rating, "ip_fp": fingerprint(ip)})
+    info("feedback.created", category=category)
+    return {"public_id": public_id, "status": "received"}
+
+
+@app.get("/api/feedback/public")
+async def public_feedback() -> dict[str, Any]:
+    items = repo.select(SYSTEM, "feedback",
+        columns=["public_id", "name", "category", "body", "rating", "created_at"],
+        where="published = 1", order_by="created_at desc", limit=50)
+    return {"items": items}
+
+
+@app.get("/api/admin/feedback")
+async def list_feedback(request: Request) -> dict[str, Any]:
+    actor = staff(request)
+    items = repo.select(actor, "feedback", order_by="created_at desc", limit=300)
+    for item in items:
+        item.pop("ip_fp", None)
+    return {"items": items, "total": len(items)}
+
+
+@app.patch("/api/admin/feedback/{public_id}")
+async def update_feedback(public_id: str, request: Request,
+                          payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    actor = staff(request)
+    auth.check_csrf(actor.session_id or "", request.headers.get("x-csrf-token"))
+    published = payload.get("published")
+    if published not in (True, False, 0, 1):
+        raise BadRequest("وضعیت انتشار نامعتبر است.")
+    with repo.tx():
+        n = repo.update(actor, "feedback", {"published": int(bool(published))},
+                        where="public_id = ?", params=[public_id[:12]])
+    if not n:
+        raise NotFound("این پیام پیدا نشد.")
+    return {"public_id": public_id, "published": bool(published)}
+
+
 @app.post("/api/outcome", status_code=204)
 async def track_outcome(request: Request, payload: dict[str, Any] = Body(default={})) -> Response:
     ratelimit.enforce(ratelimit.ip_bucket("outcome", client_ip(request)), 30, 3600)
