@@ -102,15 +102,15 @@ async def list_appointments(
     today = now_tehran().date().isoformat()
 
     if date:
-        where, params = "slot_date = ?", [date]
+        where, params = "slot_date = ? AND status = 'booked'", [date]
     elif scope == "today":
-        where, params = "slot_date = ?", [today]
+        where, params = "slot_date = ? AND status = 'booked'", [today]
     elif scope == "past":
         where, params = "slot_date < ?", [today]
     elif scope == "all":
         where, params = "1=1", []
     else:
-        where, params = "slot_date >= ?", [today]
+        where, params = "slot_date >= ? AND status = 'booked'", [today]
 
     key = f"admin:appointments:{where}:{params}:{page}:{per_page}"
 

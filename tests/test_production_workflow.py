@@ -93,6 +93,64 @@ def test_status_change_is_audited(owner_client, patient):
     assert any(x["action"] == "appointment.status_changed" for x in audit.json()["items"])
 
 
+def test_active_appointments_only_include_booked_and_records_keep_attended(owner_client, patient):
+    from api import repo
+    from api.policies import SYSTEM
+
+    book = owner_client.post(
+        "/api/portal/appointments",
+        json={"slot_date": tomorrow(), "slot_time": "18:00"},
+    )
+    assert book.status_code == 201, book.text
+    code = book.json()["code"]
+    patient_id = repo.select(SYSTEM, "patients")[0]["public_id"]
+
+    completed = owner_client.patch(
+        f"/api/admin/appointments/{code}/status", json={"status": "attended"}
+    )
+    assert completed.status_code == 200, completed.text
+
+    active = owner_client.get("/api/admin/appointments?scope=upcoming")
+    assert active.status_code == 200, active.text
+    assert all(item["status"] == "booked" for item in active.json()["items"])
+    assert code not in {item["public_id"] for item in active.json()["items"]}
+
+    all_appointments = owner_client.get("/api/admin/appointments?scope=all")
+    assert all_appointments.status_code == 200, all_appointments.text
+    kept = next(item for item in all_appointments.json()["items"] if item["public_id"] == code)
+    assert kept["status"] == "attended"
+
+    records = owner_client.get("/api/admin/patients?per_page=100")
+    assert records.status_code == 200, records.text
+    record = next(item for item in records.json()["items"] if item["public_id"] == patient_id)
+    assert any(item["public_id"] == code and item["status"] == "attended" for item in record["appointments"])
+
+
+def test_cancelled_and_no_show_stay_distinct_from_completed(owner_client, patient):
+    codes = {}
+    for slot_time, status in (("18:30", "cancelled"), ("19:00", "no_show")):
+        booked = owner_client.post(
+            "/api/portal/appointments",
+            json={"slot_date": tomorrow(), "slot_time": slot_time},
+        )
+        assert booked.status_code == 201, booked.text
+        code = booked.json()["code"]
+        changed = owner_client.patch(
+            f"/api/admin/appointments/{code}/status", json={"status": status}
+        )
+        assert changed.status_code == 200, changed.text
+        codes[code] = status
+
+    active = owner_client.get("/api/admin/appointments?scope=upcoming")
+    assert active.status_code == 200, active.text
+    assert not codes.keys() & {item["public_id"] for item in active.json()["items"]}
+
+    all_appointments = owner_client.get("/api/admin/appointments?scope=all")
+    assert all_appointments.status_code == 200, all_appointments.text
+    statuses = {item["public_id"]: item["status"] for item in all_appointments.json()["items"]}
+    assert {statuses[code] for code in codes} == {"cancelled", "no_show"}
+
+
 def test_move_atomic_creates_one_new_booking_and_audit(owner_client, patient):
     from api import repo
     from api.policies import SYSTEM

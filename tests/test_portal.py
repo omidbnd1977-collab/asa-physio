@@ -945,6 +945,9 @@ class TestTreatmentHistory:
         )
         a = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[book["code"]])[0]
         assert a["status"] == "attended"
+        sessions = repo.select(SYSTEM, "treatment_sessions", where="appointment_id = ?", params=[a["id"]])
+        assert len(sessions) == 1
+        assert sessions[0]["patient_id"] == a["patient_id"]
         assert metrics.outcome(30)["north_star"]["value"] == 1
 
     def test_a_session_needs_both_an_area_and_a_treatment(self, owner_client, patient):
