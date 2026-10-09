@@ -257,6 +257,7 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
       <button class="tab" data-tab="msg">💬 پیام‌ها<span id="msgTabBadge" class="hidden"></span></button>
       <button class="tab" data-tab="sms">✉️ پیامک‌ها</button>
       <button class="tab" data-tab="req">📨 درخواست‌های سایت</button>
+      <button class="tab" data-tab="feedback">⭐ دیدگاه‌ها</button>
       <button class="tab" data-tab="ops">⚙️ سامانه</button>
     </div>
 
@@ -312,6 +313,18 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
         </div>
         <div id="gError" class="state error hidden"></div>
         <div id="gList" class="hidden"></div>
+      </div>
+    </section>
+
+    <!-- ============ TAB: feedback ============ -->
+    <section data-pane="feedback" class="hidden">
+      <div class="card">
+        <h2>⭐ رضایت‌مندی، پیشنهادها و شکایت‌ها</h2>
+        <p class="muted" style="margin-bottom:12px">پیام‌ها به‌صورت خصوصی ثبت می‌شوند؛ با «تأیید و انتشار» به شکل کامنت فقط‌خواندنی در سایت نمایش داده خواهند شد.</p>
+        <div id="fbAdminLoading" class="state loading">در حال دریافت پیام‌ها…</div>
+        <div id="fbAdminError" class="state error hidden"></div>
+        <div id="fbAdminEmpty" class="state empty hidden">هنوز پیامی ثبت نشده است.</div>
+        <div id="fbAdminList" class="hidden"></div>
       </div>
     </section>
 
@@ -727,9 +740,42 @@ function showTab(name){
   if(name==='msg')   loadMessages();
   if(name==='sms')   loadSms();
   if(name==='req'){ loadMetrics(); loadBookings(); }
+  if(name==='feedback') loadFeedback();
   if(name==='ops')   loadOps();
 }
 $$('.tab').forEach(t=>t.onclick=()=>showTab(t.dataset.tab));
+
+// ======================= feedback moderation =======================
+async function loadFeedback(){
+  show('#fbAdminLoading'); hide('#fbAdminError'); hide('#fbAdminEmpty'); hide('#fbAdminList');
+  const r=await api('/api/admin/feedback');
+  hide('#fbAdminLoading');
+  if(!r.ok)return errBox('#fbAdminError',r.error,loadFeedback);
+  const list=$('#fbAdminList');list.innerHTML='';
+  const items=r.data.items||[];
+  if(!items.length){show('#fbAdminEmpty');return;}
+  const labels={satisfaction:'رضایت‌مندی',suggestion:'پیشنهاد',complaint:'شکایت'};
+  for(const item of items){
+    const card=document.createElement('div');card.className='row';
+    const title=document.createElement('div');title.className='nm';
+    title.textContent=(item.name||'بدون نام')+' — '+(labels[item.category]||item.category);
+    const state=document.createElement('span');state.className='pill '+(item.published?'p-done':'p-new');
+    state.textContent=item.published?'منتشرشده':'در انتظار بررسی';
+    const body=document.createElement('div');body.style.cssText='grid-column:1/-1;white-space:pre-wrap;line-height:1.9';body.textContent=item.body;
+    const meta=document.createElement('div');meta.className='meta';
+    meta.textContent=new Date(item.created_at).toLocaleString('fa-IR')+(item.rating?' · امتیاز: '+fa(item.rating)+' از ۵':'');
+    const acts=document.createElement('div');acts.className='acts';
+    const btn=document.createElement('button');btn.className='btn sm '+(item.published?'':'primary');
+    btn.textContent=item.published?'برداشتن از انتشار':'✓ تأیید و انتشار';
+    btn.onclick=()=>withBtn(btn,'در حال ثبت…',async()=>{
+      const x=await api('/api/admin/feedback/'+item.public_id,{method:'PATCH',body:{published:!item.published}});
+      if(!x.ok)return toast(x.error.message,false);
+      toast(x.data.published?'پیام منتشر شد':'انتشار پیام برداشته شد');loadFeedback();
+    });
+    acts.appendChild(btn);card.append(title,state,body,meta,acts);list.appendChild(card);
+  }
+  show('#fbAdminList');
+}
 
 // ======================= appointments =======================
 const AST={booked:'ثبت‌شده',attended:'انجام شد',cancelled:'لغو شد',no_show:'مراجعه نشد'};
