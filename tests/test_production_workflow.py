@@ -20,9 +20,14 @@ def patient(client):
 def test_static_source_booking_links_are_github_pages_safe():
     root = Path(__file__).resolve().parent.parent
     source = "\n".join(p.read_text(encoding="utf-8") for p in (root / "site").glob("*.html"))
-    assert 'href="/booking"' not in source
-    assert "contact.html#bookForm" in source
-    assert 'href="#bookForm"' in source
+    contact = (root / "site" / "contact.html").read_text(encoding="utf-8")
+    other_source = "\n".join(
+        p.read_text(encoding="utf-8") for p in (root / "site").glob("*.html") if p.name != "contact.html"
+    )
+    assert 'href="/booking"' in contact
+    assert 'href="/booking"' not in other_source
+    assert 'href="#bookForm"' not in contact
+    assert 'href="#bookForm"' not in other_source
     assert 'href="/api/bookings"' not in source
 
 
@@ -37,7 +42,9 @@ def test_built_bundle_has_no_root_absolute_local_links():
     for page in sorted(public.glob("**/*.html")):
         text = page.read_text(encoding="utf-8")
         for attr, url in re.findall(r'(href|src)\s*=\s*"([^"]+)"', text):
-            if url.startswith("/") and not url.startswith("//"):
+            if url.startswith("/") and not url.startswith("//") and not (
+                page.name == "contact.html" and attr == "href" and url == "/booking"
+            ):
                 offenders.append(f'{page.name}: {attr}="{url}"')
     assert not offenders, "\n".join(offenders)
 

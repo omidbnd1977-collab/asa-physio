@@ -3,19 +3,72 @@
 from __future__ import annotations
 
 import datetime as dt
+import ipaddress
+import socket
 from typing import Any
+from urllib.parse import urljoin, urlparse
 
+import httpx
 from fastapi import APIRouter, Body, File, Form, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 
 from . import clinical, messages, metrics, patients, ratelimit, repo, scheduling, schemas, sms
 from .config import settings
-from .errors import BadRequest, Forbidden, NotFound
+from .errors import AppError, BadRequest, Forbidden, NotFound, PayloadTooLarge
 from .jalali import to_jalali_long, to_jalali_str
 from .logging_ import info
 from .policies import SYSTEM
 
 router = APIRouter(prefix="/api/portal", tags=["portal"])
+
+
+def _public_mri_url(raw: str) -> str:
+    parsed = urlparse(raw)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        raise BadRequest("لینک MRI باید یک آدرس معتبر http یا https باشد.", code="bad_mri_url")
+    host = parsed.hostname.rstrip(".").lower()
+    if host in {"localhost", "localhost.localdomain", "metadata.google.internal"}:
+        raise BadRequest("این آدرس برای دریافت MRI مجاز نیست.", code="blocked_mri_url")
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise BadRequest("آدرس MRI قابل دسترسی نیست.", code="unreachable_mri_url") from exc
+    for addr_info in infos:
+        address = addr_info[4][0]
+        ip = ipaddress.ip_address(address)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_unspecified:
+            raise BadRequest("دریافت از شبکه داخلی یا آدرس خصوصی مجاز نیست.", code="blocked_mri_url")
+    return raw
+
+
+async def _download_remote_mri(url: str) -> tuple[bytes, str]:
+    current = _public_mri_url(url)
+    async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=5.0), follow_redirects=False) as client:
+        for _ in range(4):
+            async with client.stream("GET", current, headers={"Accept": "image/*"}) as response:
+                if response.status_code in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("location", "")
+                    if not location:
+                        raise BadRequest("لینک MRI قابل دریافت نیست.", code="mri_download_failed")
+                    current = _public_mri_url(urljoin(current, location))
+                    continue
+                if response.status_code != 200:
+                    raise BadRequest("لینک MRI قابل دریافت نیست.", code="mri_download_failed")
+                content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
+                if not content_type.startswith("image/"):
+                    raise BadRequest("لینک MRI باید به یک فایل تصویر اشاره کند.", code="bad_mri_type")
+                length = response.headers.get("content-length")
+                if length and int(length) > settings.MRI_REMOTE_MAX_BYTES:
+                    raise PayloadTooLarge("حجم فایل MRI از سقف فنی مجاز بیشتر است.")
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in response.aiter_bytes(1024 * 1024):
+                    total += len(chunk)
+                    if total > settings.MRI_REMOTE_MAX_BYTES:
+                        raise PayloadTooLarge("حجم فایل MRI از سقف فنی مجاز بیشتر است.")
+                    chunks.append(chunk)
+                return b"".join(chunks), content_type
+    raise BadRequest("تعداد redirectهای لینک MRI بیش از حد مجاز است.", code="mri_download_failed")
 
 
 def client_ip(request: Request) -> str:
@@ -102,8 +155,22 @@ async def register(
         message="برای این کد ملی امروز ثبت‌نام انجام شده است.",
     )
 
-    photo = patients.save_upload(med_photo, prefix=data.national_id[-4:])
+    photo = patients.save_upload(
+        med_photo, prefix=data.national_id[-4:], max_bytes=settings.MEDS_UPLOAD_MAX_BYTES
+    )
     mri = patients.save_upload(mri_file, prefix=f"mri-{data.national_id[-4:]}")
+    mri_warning = ""
+    if data.mri_link:
+        try:
+            remote_blob, _ = await _download_remote_mri(data.mri_link)
+            mri = patients.save_bytes(
+                remote_blob, prefix=f"mri-{data.national_id[-4:]}", max_bytes=settings.MRI_REMOTE_MAX_BYTES
+            )
+        except AppError as exc:
+            mri_warning = exc.message
+        except (httpx.HTTPError, TimeoutError, OSError) as exc:
+            info("portal.mri_download_failed", error=type(exc).__name__)
+            mri_warning = "لینک MRI قابل دریافت نیست؛ ثبت‌نام شما انجام شد و پزشک می‌تواند بعداً فایل را بارگذاری کند."
     patient = patients.register(data.model_dump(), med_photo=photo, mri_file=mri, ip=ip)
 
     # layer: the SMS the user asked for — "اطلاعات شما ثبت شد"
@@ -121,6 +188,7 @@ async def register(
             "ok": True,
             "sms_sent": sent,
             "patient": patients.public_view(patient),
+            "mri_warning": mri_warning,
             "redirect": "/booking/reserve",
         },
         status_code=201,

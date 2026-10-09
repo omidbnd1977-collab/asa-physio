@@ -155,6 +155,48 @@ class TestRegistration:
         assert len(sms) == 1 and sms[0]["status"] == "sent"
         assert "اطلاعات شما" in sms[0]["body"]
 
+    def test_mri_url_is_saved_as_private_file_when_image_download_succeeds(self, client, monkeypatch):
+        from api import repo
+        from api.policies import SYSTEM
+        async def fake_download(url):
+            assert url == "https://cdn.example/mri.png"
+            return PNG, "image/png"
+
+        monkeypatch.setattr("api.routes_booking._download_remote_mri", fake_download)
+        r = client.post(
+            "/api/portal/register",
+            data=reg_form(national_id=NID_B, mri_link="https://cdn.example/mri.png"),
+        )
+        assert r.status_code == 201, r.text
+        patient = repo.select(SYSTEM, "patients", where="national_id = ?", params=[NID_B])[0]
+        assert patient["mri_file"].endswith(".png")
+        assert r.json()["mri_warning"] == ""
+
+    def test_mri_download_failure_does_not_abort_registration(self, client, monkeypatch):
+        from api import repo
+        from api.errors import BadRequest
+        from api.policies import SYSTEM
+
+        async def failed_download(url):
+            raise BadRequest("لینک MRI قابل دریافت نیست.", code="mri_download_failed")
+
+        monkeypatch.setattr("api.routes_booking._download_remote_mri", failed_download)
+        r = client.post(
+            "/api/portal/register",
+            data=reg_form(national_id=NID_B, mri_link="https://cdn.example/missing.png"),
+        )
+        assert r.status_code == 201, r.text
+        assert "قابل دریافت" in r.json()["mri_warning"]
+        patient = repo.select(SYSTEM, "patients", where="national_id = ?", params=[NID_B])[0]
+        assert patient["mri_file"] == ""
+
+    def test_mri_private_url_is_rejected(self):
+        from api.errors import BadRequest
+        from api.routes_booking import _public_mri_url
+
+        with pytest.raises(BadRequest):
+            _public_mri_url("http://127.0.0.1/mri.png")
+
     def test_the_session_cookie_is_set_so_the_patient_goes_straight_to_booking(self, client):
         r = client.post("/api/portal/register", data=reg_form())
         assert r.status_code == 201
@@ -199,13 +241,26 @@ class TestRegistration:
     def test_oversized_upload_is_refused(self, client, monkeypatch):
         from api.config import settings
 
-        monkeypatch.setattr(settings, "MAX_UPLOAD_BYTES", 100)
+        monkeypatch.setattr(settings, "MEDS_UPLOAD_MAX_BYTES", 100)
         r = client.post(
             "/api/portal/register",
             data=reg_form(),
             files={"med_photo": ("m.png", io.BytesIO(PNG + b"\x00" * 500), "image/png")},
         )
         assert r.status_code == 413
+
+    def test_medication_upload_uses_exact_two_megabyte_limit(self, client, monkeypatch):
+        from api.config import settings
+
+        monkeypatch.setattr(settings, "MEDS_UPLOAD_MAX_BYTES", 2 * 1024 * 1024)
+        oversized = PNG + b"\\x00" * (2 * 1024 * 1024)
+        r = client.post(
+            "/api/portal/register",
+            data=reg_form(national_id=NID_B),
+            files={"med_photo": ("m.png", io.BytesIO(oversized), "image/png")},
+        )
+        assert r.status_code == 413
+        assert "2 مگابایت" in r.json()["error"]["message"]
 
     def test_honeypot_is_absorbed(self, client):
         from api import repo

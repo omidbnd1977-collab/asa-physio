@@ -263,7 +263,7 @@ REGISTER_BODY = """
     <label class="filebox" id="fileBox" for="meds_photo">
       <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5M12 3v12"/></svg>
       <b id="fileLabel">ارسال عکس داروهای مصرفی</b>
-      <span id="fileHint">عکس یا PDF — حداکثر ۵ مگابایت (اختیاری)</span>
+      <span id="fileHint">عکس یا PDF — حداکثر ۲ مگابایت (اختیاری)</span>
       <input type="file" id="meds_photo" name="meds_photo" accept="image/jpeg,image/png,image/webp,application/pdf">
     </label>
 
@@ -314,9 +314,9 @@ function wireFile(inputId,boxId,labelId,hintId,idleLabel){
     const f=inp.files[0];
     if(!f){box.classList.remove('has');
       document.getElementById(labelId).textContent=idleLabel;
-      document.getElementById(hintId).textContent='عکس یا PDF — حداکثر ۵ مگابایت (اختیاری)';
+      document.getElementById(hintId).textContent='عکس یا PDF — حداکثر ۲ مگابایت (اختیاری)';
       return;}
-    if(f.size>5*1024*1024){inp.value='';flash('حجم فایل بیشتر از ۵ مگابایت است.',true);return;}
+    if(f.size>2*1024*1024){inp.value='';flash('حجم عکس داروها نباید بیشتر از ۲ مگابایت باشد.',true);return;}
     box.classList.add('has');
     document.getElementById(labelId).textContent='✓ '+f.name;
     document.getElementById(hintId).textContent=faDigits((f.size/1024).toFixed(0))+' کیلوبایت — برای تغییر کلیک کنید';
@@ -375,7 +375,7 @@ $('#regForm').addEventListener('submit',async e=>{
       else flash((err.message||'ثبت نشد.')+(err.trace_id?' (کد: '+err.trace_id+')':''),true);
       return;
     }
-    flash(r.data.sms_sent?'ثبت شد ✓ پیامک تأیید برای شما ارسال شد':'ثبت شد ✓ (ارسال پیامک با تأخیر انجام می‌شود)');
+    flash(r.data.mri_warning ? 'ثبت شد؛ '+r.data.mri_warning : (r.data.sms_sent?'ثبت شد ✓ پیامک تأیید برای شما ارسال شد':'ثبت شد ✓ (ارسال پیامک با تأخیر انجام می‌شود)'), !!r.data.mri_warning);
     setTimeout(()=>location.href=r.data.redirect||'/booking/reserve',1300);
   });
   sending=false;

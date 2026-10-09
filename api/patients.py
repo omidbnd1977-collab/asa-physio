@@ -43,20 +43,13 @@ def _iso(d: dt.datetime) -> str:
 # --------------------------------------------------------------------------
 # uploads
 # --------------------------------------------------------------------------
-def save_upload(file: UploadFile | None, prefix: str) -> str:
-    """Store a medication photo. Content is sniffed, the client's name is never trusted."""
-    if file is None or not file.filename:
-        return ""
-    raw = file.file.read(settings.MAX_UPLOAD_BYTES + 1)
-    if len(raw) > settings.MAX_UPLOAD_BYTES:
-        raise PayloadTooLarge(
-            f"حجم فایل بیشتر از {settings.MAX_UPLOAD_BYTES // (1024 * 1024)} مگابایت است."
-        )
+def save_bytes(raw: bytes, prefix: str, *, max_bytes: int | None = None) -> str:
+    """Store validated private upload bytes using the same path as file uploads."""
+    limit = settings.MAX_UPLOAD_BYTES if max_bytes is None else max_bytes
+    if len(raw) > limit:
+        raise PayloadTooLarge(f"حجم فایل بیشتر از {limit // (1024 * 1024)} مگابایت است.")
     if not raw:
         return ""
-
-    # Sniff the real content. `imghdr` was removed in Python 3.13 and the client's
-    # filename is attacker-controlled, so magic bytes are the only thing we trust.
     kind = None
     for magic, name in MAGIC.items():
         if raw.startswith(magic):
@@ -69,13 +62,20 @@ def save_upload(file: UploadFile | None, prefix: str) -> str:
             "فقط عکس (JPG، PNG، WEBP) یا فایل PDF قابل ارسال است.",
             fields={"med_photo": "نوع فایل مجاز نیست"},
         )
-
     ext = {"jpeg": ".jpg", "png": ".png", "webp": ".webp", "pdf": ".pdf"}[kind]
     name = f"{prefix}-{hashlib.sha256(raw).hexdigest()[:16]}{ext}"
     settings.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     (settings.UPLOAD_DIR / name).write_bytes(raw)
     info("upload.saved", kind=kind, bytes=len(raw))
     return name
+
+
+def save_upload(file: UploadFile | None, prefix: str, *, max_bytes: int | None = None) -> str:
+    """Store a private patient upload after sniffing its content and size."""
+    if file is None or not file.filename:
+        return ""
+    limit = settings.MAX_UPLOAD_BYTES if max_bytes is None else max_bytes
+    return save_bytes(file.file.read(limit + 1), prefix, max_bytes=limit)
 
 
 def upload_path(name: str) -> pathlib.Path | None:

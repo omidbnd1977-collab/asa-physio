@@ -203,8 +203,18 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 class BodyLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable):  # type: ignore[no-untyped-def]
         cl = request.headers.get("content-length")
-        if cl and cl.isdigit() and int(cl) > settings.MAX_BODY_BYTES:
-            raise PayloadTooLarge()
+        if cl and cl.isdigit():
+            limit = (
+                settings.MAX_UPLOAD_REQUEST_BYTES
+                if request.method == "POST"
+                and request.url.path in {"/api/portal/register"}
+                or request.method == "POST"
+                and request.url.path.startswith("/api/admin/patients/")
+                and request.url.path.endswith("/mri")
+                else settings.MAX_BODY_BYTES
+            )
+            if int(cl) > limit:
+                raise PayloadTooLarge()
         return await call_next(request)
 
 

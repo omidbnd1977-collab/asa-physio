@@ -50,6 +50,7 @@ class Settings:
     ]
     TRUST_PROXY: bool = _b("TRUST_PROXY", "0")
     MAX_BODY_BYTES: int = _i("MAX_BODY_BYTES", 16 * 1024)
+    MAX_UPLOAD_REQUEST_BYTES: int = _i("MAX_UPLOAD_REQUEST_BYTES", 52 * 1024 * 1024)
 
     # Opt-in first-boot owner, for a deploy that starts from an empty database and has
     # no shell to run `python -m ops.seed` in — a diskless instance is wiped on every
@@ -107,7 +108,9 @@ class Settings:
     # --- patient portal -----------------------------------------------------
     PATIENT_SESSION_TTL_H: int = _i("PATIENT_SESSION_TTL_HOURS", 6)
     UPLOAD_DIR: pathlib.Path = pathlib.Path(os.getenv("UPLOAD_DIR", str(ROOT / "data" / "uploads")))
-    MAX_UPLOAD_BYTES: int = _i("MAX_UPLOAD_BYTES", 50 * 1024 * 1024)  # 50 MB
+    MAX_UPLOAD_BYTES: int = _i("MAX_UPLOAD_BYTES", 50 * 1024 * 1024)  # staff MRI upload
+    MEDS_UPLOAD_MAX_BYTES: int = _i("MEDS_UPLOAD_MAX_BYTES", 2 * 1024 * 1024)
+    MRI_REMOTE_MAX_BYTES: int = _i("MRI_REMOTE_MAX_BYTES", 200 * 1024 * 1024)
     REMINDER_LEAD_MIN: int = _i("REMINDER_LEAD_MIN", 120)  # confirm SMS 2 h before
     REMINDER_TICK_S: int = _i("REMINDER_TICK_S", 60)
     # patients often share one IP (clinic wifi, a family, carrier NAT), so the
