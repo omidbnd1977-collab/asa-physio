@@ -492,18 +492,42 @@ if(bf){
  });
  async function loadPublished(){
   const box=document.getElementById('publishedFeedback');
+  if(!box)return;
   try{
    const r=await fetch('/api/feedback/public',{cache:'no-store'});if(!r.ok)return;
    const d=await r.json();if(!d.items||!d.items.length)return;
+   const items=d.items;
    const title=document.createElement('h3');title.textContent='نظرهای منتشرشده';box.appendChild(title);
-   d.items.forEach(item=>{
-    const card=document.createElement('div');card.style.cssText='padding:14px;margin-top:10px;border:1px solid rgba(8,126,170,.2);border-radius:12px;background:#f8fbfd';
-    const meta=document.createElement('p');meta.style.cssText='font-weight:700;margin:0 0 7px';
-    const labels={satisfaction:'رضایت‌مندی',suggestion:'پیشنهاد',complaint:'نظر مراجع'};
+   const viewport=document.createElement('div');
+   viewport.style.cssText='position:relative;margin-top:10px;padding:16px;border:1px solid rgba(8,126,170,.2);border-radius:12px;background:#f8fbfd;min-height:150px;max-height:260px;overflow-y:auto;overflow-wrap:anywhere;overscroll-behavior:contain;transition:opacity .25s ease';
+   viewport.setAttribute('aria-live','polite');
+   viewport.setAttribute('aria-label','نظرهای منتشرشده؛ هر بار یک پیام');
+   const meta=document.createElement('p');meta.style.cssText='font-weight:700;margin:0 0 9px';
+   const body=document.createElement('p');body.style.cssText='white-space:pre-wrap;line-height:1.9;margin:0;overflow-wrap:anywhere';
+   const counter=document.createElement('div');counter.style.cssText='font-size:12px;opacity:.7;text-align:left;margin-top:10px;direction:ltr';
+   viewport.append(meta,body,counter);box.appendChild(viewport);
+   const labels={satisfaction:'رضایت‌مندی',suggestion:'پیشنهاد',complaint:'شکایت'};
+   let index=0,timer=null,paused=false;
+   function render(){
+    const item=items[index];
     meta.textContent=(item.name||'مراجع کلینیک')+' · '+(labels[item.category]||'نظر مراجع')+(item.rating?' · '+'★'.repeat(item.rating):'');
-    const body=document.createElement('p');body.style.cssText='white-space:pre-wrap;line-height:1.9;margin:0';body.textContent=item.body;
-    card.append(meta,body);box.appendChild(card);
-   });
+    body.textContent=item.body||'';
+    counter.textContent=(index+1)+' / '+items.length;
+    viewport.scrollTop=0;
+   }
+   function next(){
+    if(paused||items.length<2)return;
+    viewport.style.opacity='.25';
+    setTimeout(()=>{index=(index+1)%items.length;render();viewport.style.opacity='1';},250);
+   }
+   function startRotation(){if(timer)clearInterval(timer);if(items.length>1)timer=setInterval(next,7000);}
+   viewport.addEventListener('mouseenter',()=>{paused=true;});
+   viewport.addEventListener('mouseleave',()=>{paused=false;});
+   viewport.addEventListener('focusin',()=>{paused=true;});
+   viewport.addEventListener('focusout',()=>{paused=false;});
+   viewport.addEventListener('touchstart',()=>{paused=true;},{passive:true});
+   viewport.addEventListener('touchend',()=>{paused=false;},{passive:true});
+   render();startRotation();
   }catch(_){}
  }
  loadPublished();
