@@ -548,3 +548,35 @@ footer{margin-top:90px;padding:60px 0 26px;border-top:1px solid var(--line);
   .brand-tx span{display:none}
 }
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition-duration:.01ms!important}}
+
+/* RTL alignment for the contact information panel only */
+.contact-info-panel {
+  direction: rtl;
+  text-align: right;
+}
+
+.contact-info-panel h3 {
+  direction: rtl;
+  text-align: right;
+}
+
+.contact-info-panel .info a,
+.contact-info-panel .info > div {
+  direction: rtl;
+  text-align: right;
+  flex-direction: row-reverse;
+}
+
+.contact-info-panel .info a:hover {
+  transform: translateX(6px);
+}
+
+.contact-info-panel .info > a > span,
+.contact-info-panel .info > div > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.contact-info-panel .info svg {
+  margin-inline-start: 0;
+}
