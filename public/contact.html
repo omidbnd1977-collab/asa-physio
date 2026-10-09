@@ -114,31 +114,32 @@
       </div>
 
       <div class="panel rv d1" id="bookForm">
-        <h3>رضایت‌مندی از خدمات</h3>
-        <p style="margin:-6px 0 18px;line-height:1.9">
-          تجربه و نظر شما به ما کمک می‌کند خدمات فیزیوتراپی آسا فیزیو را بهتر کنیم.
-        </p>
-        <div style="display:flex;gap:8px;justify-content:center;direction:ltr;margin:18px 0 22px" aria-label="رضایت از خدمات">
-          <span style="font-size:30px;color:#fbbf24" aria-hidden="true">★</span>
-          <span style="font-size:30px;color:#fbbf24" aria-hidden="true">★</span>
-          <span style="font-size:30px;color:#fbbf24" aria-hidden="true">★</span>
-          <span style="font-size:30px;color:#fbbf24" aria-hidden="true">★</span>
-          <span style="font-size:30px;color:#fbbf24" aria-hidden="true">★</span>
-        </div>
-        <p style="margin:0 0 18px;text-align:center;line-height:1.9">
-          از اینکه تجربه‌تان را با ما به اشتراک می‌گذارید سپاسگزاریم.
-        </p>
-        <p style="margin:0 0 12px">
-          <a class="btn btn-primary" href="https://instagram.com/asa_physio_clinic" target="_blank" rel="noopener" style="width:100%;padding:13px">
-            ارسال نظر و پیشنهاد در اینستاگرام
-          </a>
-        </p>
-        <p style="margin:0">
-          <a class="btn btn-ghost" href="https://maps.app.goo.gl/CNfgbyCG1fTbzYXS8" target="_blank" rel="noopener noreferrer" style="width:100%;padding:13px">
-            مشاهده آسا فیزیو در Google Maps
-          </a>
-        </p>
-      </div>   </div>
+        <h3>ثبت رضایت‌مندی، پیشنهاد یا شکایت</h3>
+        <p style="margin:-6px 0 18px;line-height:1.9">پیام شما برای بررسی در پنل کلینیک ثبت می‌شود. فقط پیام‌هایی که پزشک تأیید کند در سایت نمایش داده خواهند شد.</p>
+        <form id="feedbackForm" novalidate>
+          <label for="fbName">نام (اختیاری)</label>
+          <input id="fbName" name="name" maxlength="80" autocomplete="name" placeholder="نام شما">
+          <div style="height:12px"></div>
+          <label for="fbCategory">نوع پیام</label>
+          <select id="fbCategory" name="category" required style="width:100%;padding:12px;border:1px solid rgba(45,212,191,.2);border-radius:11px;font:inherit">
+            <option value="satisfaction">رضایت‌مندی</option>
+            <option value="suggestion">نقطه‌نظر و پیشنهاد</option>
+            <option value="complaint">شکایت</option>
+          </select>
+          <div style="height:12px"></div>
+          <label for="fbRating">امتیاز (اختیاری)</label>
+          <select id="fbRating" name="rating" style="width:100%;padding:12px;border:1px solid rgba(45,212,191,.2);border-radius:11px;font:inherit">
+            <option value="">بدون امتیاز</option><option value="5">۵ ستاره</option><option value="4">۴ ستاره</option><option value="3">۳ ستاره</option><option value="2">۲ ستاره</option><option value="1">۱ ستاره</option>
+          </select>
+          <div style="height:12px"></div>
+          <label for="fbBody">متن پیام</label>
+          <textarea id="fbBody" name="body" required minlength="5" maxlength="2000" rows="5" placeholder="تجربه، پیشنهاد یا شکایت خود را بنویسید" style="width:100%;padding:12px;border:1px solid rgba(45,212,191,.2);border-radius:11px;font:inherit;resize:vertical"></textarea>
+          <div style="position:absolute;left:-10000px" aria-hidden="true"><label for="fbWebsite">Website</label><input id="fbWebsite" tabindex="-1" autocomplete="off"></div>
+          <button class="btn btn-primary" id="fbSubmit" type="submit" style="width:100%;margin-top:14px;padding:13px">ثبت پیام</button>
+          <p id="fbStatus" role="status" aria-live="polite" style="margin-top:12px;line-height:1.8"></p>
+        </form>
+        <div id="publishedFeedback" style="margin-top:26px"></div>
+      </div>
   </div>
 </section>
 <section class="sec" style="padding-top:0">
@@ -470,6 +471,42 @@ if(bf){
     if(h.indexOf('tel:')===0)send('call_click');
     else if(h.indexOf('instagram.com')>-1)send('instagram_click');
   },{passive:true});
+})();
+</script>
+<script>
+(function(){
+ const form=document.getElementById('feedbackForm'); if(!form)return;
+ const status=document.getElementById('fbStatus'),btn=document.getElementById('fbSubmit');
+ form.addEventListener('submit',async e=>{
+   e.preventDefault(); status.textContent=''; btn.disabled=true; btn.textContent='در حال ثبت…';
+   const payload={name:document.getElementById('fbName').value.trim(),category:document.getElementById('fbCategory').value,
+     rating:document.getElementById('fbRating').value,body:document.getElementById('fbBody').value.trim(),
+     website:document.getElementById('fbWebsite').value};
+   try{
+     const r=await fetch('/api/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+     const d=await r.json();
+     if(!r.ok)throw new Error((d.error&&d.error.message)||'ثبت پیام انجام نشد.');
+     form.reset();status.textContent='پیام شما ثبت شد و پس از بررسی پزشک، در صورت تأیید منتشر می‌شود.';status.style.color='#059669';
+   }catch(err){status.textContent=err.message||'ارتباط با سرور برقرار نشد.';status.style.color='#dc2626';}
+   finally{btn.disabled=false;btn.textContent='ثبت پیام';}
+ });
+ async function loadPublished(){
+  const box=document.getElementById('publishedFeedback');
+  try{
+   const r=await fetch('/api/feedback/public',{cache:'no-store'});if(!r.ok)return;
+   const d=await r.json();if(!d.items||!d.items.length)return;
+   const title=document.createElement('h3');title.textContent='نظرهای منتشرشده';box.appendChild(title);
+   d.items.forEach(item=>{
+    const card=document.createElement('div');card.style.cssText='padding:14px;margin-top:10px;border:1px solid rgba(8,126,170,.2);border-radius:12px;background:#f8fbfd';
+    const meta=document.createElement('p');meta.style.cssText='font-weight:700;margin:0 0 7px';
+    const labels={satisfaction:'رضایت‌مندی',suggestion:'پیشنهاد',complaint:'نظر مراجع'};
+    meta.textContent=(item.name||'مراجع کلینیک')+' · '+(labels[item.category]||'نظر مراجع')+(item.rating?' · '+'★'.repeat(item.rating):'');
+    const body=document.createElement('p');body.style.cssText='white-space:pre-wrap;line-height:1.9;margin:0';body.textContent=item.body;
+    card.append(meta,body);box.appendChild(card);
+   });
+  }catch(_){}
+ }
+ loadPublished();
 })();
 </script>
 </body>
