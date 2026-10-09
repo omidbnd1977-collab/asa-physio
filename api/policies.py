@@ -121,6 +121,13 @@ POLICIES: dict[str, TablePolicy] = {
         note="Message log, including what was sent to whom.",
     ),
     "sms_inbound": TablePolicy(select="staff", insert="system", update="system", delete="owner"),
+    "feedback": TablePolicy(
+        select="staff",
+        insert="system",
+        update="staff",
+        delete="owner",
+        note="Public feedback is created through validation/rate limiting; staff control publication.",
+    ),
     "messages": TablePolicy(
         select="staff",
         insert="system",
