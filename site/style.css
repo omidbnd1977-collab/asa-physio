@@ -349,13 +349,8 @@ form{display:grid;gap:14px}
 .field textarea:focus+label,.field textarea:not(:placeholder-shown)+label,
 .field select:focus+label,.field select:valid+label{top:5px;font-size:.7rem;color:var(--teal)}
 .note{font-size:.8rem;color:var(--muted)}
-.map{margin-top:20px;border-radius:18px;overflow:hidden;border:1px solid var(--line);position:relative;height:190px;
-  background:radial-gradient(circle at 60% 40%,#0e3a5e,#04121f);display:grid;place-items:center}
-.map .pin{position:relative;width:20px;height:20px;border-radius:50%;background:var(--teal);box-shadow:0 0 0 0 rgba(45,212,191,.6);animation:ping 2s infinite}
-.map .isle{position:absolute;inset:0;opacity:.35;
-  background:radial-gradient(closest-side,rgba(45,212,191,.5),transparent 70%) 30% 70%/44% 55% no-repeat,
-             radial-gradient(closest-side,rgba(56,189,248,.35),transparent 70%) 72% 34%/38% 46% no-repeat;filter:blur(6px)}
-.map b{position:absolute;bottom:14px;inset-inline-start:16px;font-size:.85rem;color:#d6f2fb}
+.map-container{margin-top:20px;border-radius:18px;overflow:hidden;border:1px solid var(--line);position:relative;width:100%;height:320px;background:#04121f}
+.map-container iframe{display:block;width:100%;height:100%;min-height:320px;border:0}
 
 /* ===================== CTA BANNER ===================== */
 .cta{position:relative;border-radius:34px;padding:56px 44px;text-align:center;overflow:hidden;
