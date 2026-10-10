@@ -606,8 +606,6 @@ async function loadMetrics() {
   $('#kShow').textContent  = f.show_rate === null ? '—' : fa(f.show_rate) + '٪';
   $('#kConf').textContent  = fa(o.supporting.attendance_confirmed);
   $('#kDeliv').textContent = fa(o.supporting.booking_delivered);
-  $('#kCall').textContent  = fa(o.vanity.call_click);
-  $('#kIg').textContent    = fa(o.vanity.instagram_click);
   $('#kFunnel').textContent =
     'مسیر: ' + fa(f.patient_registered) + ' ثبت‌نام ← ' +
     fa(f.appointment_booked) + ' رزرو ← ' + fa(o.north_star.value) + ' جلسه‌ی انجام‌شده';
