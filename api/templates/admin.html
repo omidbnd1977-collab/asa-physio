@@ -414,13 +414,7 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
         <div class="acts"><a class="btn sm" href="https://www.ihio.gov.ir/" target="_blank" rel="noopener noreferrer">ورود به وب‌سایت</a></div>
       </div>
     </div>
-    <div class="card hidden" id="opsCard">
-      <div id="oLoading"><div class="skel" style="height:80px"></div></div>
-      <div id="oError" class="state error hidden"></div>
-      <div id="oBody" class="hidden"><div class="grid" id="opsGrid"></div>
-        <div style="margin-top:12px"><button class="btn sm" id="breakerBtn">بستن قطع‌کننده</button></div>
-      </div>
-    </div>
+
     </section>
   </section>
 </div>
@@ -705,29 +699,7 @@ function redeliver(id, btn) {
 }
 
 // ---------- ops ----------
-async function loadOps() {
-  if (ROLE !== 'owner') return;
-  show('#opsCard'); show('#oLoading'); hide('#oError'); hide('#oBody');
-  const [o, c] = await Promise.all([api('/api/admin/ops'), api('/api/admin/costs')]);
-  hide('#oLoading');
-  if (!o.ok) return errBox('#oError', o.error, loadOps);
-  const d = o.data, g = $('#opsGrid'); g.innerHTML = '';
-  const add = (v, l, cls) => { const k = document.createElement('div');
-    k.className = 'kpi ' + (cls || ''); const b = document.createElement('b'); b.textContent = v;
-    const s = document.createElement('span'); s.textContent = l; k.append(b, s); g.appendChild(k); };
-  add(d.breaker.open ? 'باز' : 'بسته', 'قطع‌کننده‌ی سراسری');
-  add(fa(d.cache.hit_rate_pct) + '٪', 'نرخ اصابت کش');
-  add('\u2066' + fa(d.db.size_kb) + ' KB\u2069', 'حجم پایگاه‌داده');
-  add(fa(d.backups.count), 'نسخه‌ی پشتیبان');
-  add(d.notify_provider, 'کانال تحویل');
-  add('\u2066' + fa(Math.round(d.uptime_s / 60)) + ' دقیقه\u2069', 'مدت فعالیت');
-  if (c.ok) for (const [k, v] of Object.entries(c.data.resources)) {
-    const used = '\u2066' + v.spent_usd.toFixed(3) + ' / ' + Number(v.cap_usd).toFixed(2) + ' $\u2069';
-    add(used, v.label + ' — خرج‌شده از سقف ماهانه (' + fa(v.pct) + '٪)',
-        v.pct >= 80 ? 'vanity' : '');
-  }
-  show('#oBody');
-}
+async function loadOps() { return;
 
 // ---------- session ----------
 async function boot() {
@@ -776,10 +748,7 @@ $('#refreshBtn').onclick = () => { const t=document.querySelector('.tab.on'); sh
 $('#filter').onchange = () => { PAGE = 1; loadBookings(); };
 $('#prevBtn').onclick = () => { if (PAGE > 1) { PAGE--; loadBookings(); } };
 $('#nextBtn').onclick = () => { PAGE++; loadBookings(); };
-$('#breakerBtn').onclick = async () => {
-  const r = await api('/api/admin/breaker/close', { method: 'POST' });
-  toast(r.ok ? 'قطع‌کننده بسته شد' : r.error.message, r.ok); loadOps();
-};
+
 
 // ======================= tabs =======================
 function showTab(name){
