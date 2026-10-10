@@ -248,6 +248,7 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
       <span class="badge" id="envBadge">—</span>
       <span class="sp"></span>
       <button class="btn sm" id="refreshBtn">تازه‌سازی</button>
+      <button class="btn sm" id="changePasswordBtn">تغییر گذرواژه</button>
       <button class="btn sm" id="logoutBtn">خروج</button>
     </header>
 
@@ -415,6 +416,24 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
   </div>
   <div id="lbBody"></div>
 </div>
+
+<dialog id="passwordDlg"><div class="modal">
+  <h3>تغییر گذرواژه</h3>
+  <p class="muted" style="margin-bottom:14px">برای امنیت، گذرواژه فعلی را وارد کنید. گذرواژه جدید باید حداقل ۱۲ نویسه باشد.</p>
+  <form id="passwordForm">
+    <label for="currentPassword">گذرواژه فعلی</label>
+    <input id="currentPassword" type="password" autocomplete="current-password" required maxlength="256">
+    <label for="newPassword" style="margin-top:12px">گذرواژه جدید</label>
+    <input id="newPassword" type="password" autocomplete="new-password" required minlength="12" maxlength="256">
+    <label for="confirmPassword" style="margin-top:12px">تکرار گذرواژه جدید</label>
+    <input id="confirmPassword" type="password" autocomplete="new-password" required minlength="12" maxlength="256">
+    <div id="passwordErr" class="state error hidden" style="margin-top:12px;padding:10px"></div>
+    <div class="mrow">
+      <button class="btn primary" id="savePasswordBtn" type="submit">ذخیره گذرواژه جدید</button>
+      <button class="btn" id="cancelPasswordBtn" type="button">انصراف</button>
+    </div>
+  </form>
+</div></dialog>
 
 <dialog id="sessDlg"><div class="modal">
   <h3>ثبت جلسه درمان</h3>
@@ -718,6 +737,22 @@ $('#loginForm').addEventListener('submit', async e => {
     if (!r.ok) return errBox('#loginErr', r.error);
     $('#p').value = ''; 
 boot();
+  });
+});
+$('#changePasswordBtn').onclick = () => {
+  $('#passwordForm').reset(); hide('#passwordErr'); $('#passwordDlg').showModal();
+};
+$('#cancelPasswordBtn').onclick = () => $('#passwordDlg').close();
+$('#passwordForm').addEventListener('submit', async e => {
+  e.preventDefault(); hide('#passwordErr');
+  const current = $('#currentPassword').value;
+  const next = $('#newPassword').value;
+  if (next.length < 12) { errBox('#passwordErr', {message:'گذرواژه جدید باید دست‌کم ۱۲ نویسه داشته باشد.'}); show('#passwordErr'); return; }
+  if (next !== $('#confirmPassword').value) { $('#passwordErr').textContent='تکرار گذرواژه جدید یکسان نیست.'; show('#passwordErr'); return; }
+  await withBtn($('#savePasswordBtn'), 'در حال ذخیره…', async () => {
+    const r = await api('/api/admin/change-password', {method:'POST', body:{current_password:current,new_password:next}});
+    if (!r.ok) { $('#passwordErr').textContent=r.error.message||'تغییر گذرواژه انجام نشد.'; show('#passwordErr'); return; }
+    $('#passwordDlg').close(); toast('گذرواژه با موفقیت تغییر کرد.', true);
   });
 });
 $('#logoutBtn').onclick = async () => { await api('/api/admin/logout', { method: 'POST' });
