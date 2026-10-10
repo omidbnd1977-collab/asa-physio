@@ -516,6 +516,37 @@ async def logout(request: Request, response: Response) -> Response:
     return Response(status_code=204)
 
 
+@app.post("/api/admin/change-password")
+async def change_admin_password(
+    request: Request, payload: dict[str, Any] = Body(default={})
+) -> dict[str, Any]:
+    actor = staff(request)
+    auth.check_csrf(actor.session_id or "", request.headers.get("x-csrf-token"))
+    current_password = payload.get("current_password", "")
+    new_password = payload.get("new_password", "")
+    if not isinstance(current_password, str) or not isinstance(new_password, str):
+        raise BadRequest("اطلاعات گذرواژه نامعتبر است.")
+    if len(new_password) < 12:
+        raise BadRequest("گذرواژه جدید باید دست‌کم ۱۲ نویسه داشته باشد.")
+    if len(new_password) > 256 or len(current_password) > 256:
+        raise BadRequest("گذرواژه بیش از حد طولانی است.")
+    rows = repo.select(SYSTEM, "admin_users",
+        where="id = ? AND is_active = 1", params=[actor.user_id], limit=1)
+    if not rows:
+        raise BadRequest("حساب کاربری فعال پیدا نشد.")
+    from argon2.exceptions import InvalidHashError, VerifyMismatchError
+    try:
+        valid = auth.ph.verify(rows[0]["password_hash"], current_password)
+    except (VerifyMismatchError, InvalidHashError):
+        valid = False
+    if not valid:
+        raise BadRequest("گذرواژه فعلی درست نیست.")
+    repo.update(SYSTEM, "admin_users",
+        {"password_hash": auth.hash_password(new_password)},
+        where="id = ?", params=[actor.user_id])
+    return {"ok": True, "message": "گذرواژه با موفقیت تغییر کرد."}
+
+
 @app.get("/api/admin/me")
 async def me(request: Request) -> dict[str, Any]:
     actor = staff(request)
