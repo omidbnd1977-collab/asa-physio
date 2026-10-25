@@ -42,9 +42,6 @@ jobs:
       - name: Format check
         run: ruff format --check api tests build_static.py
 
-      - name: Temporary format diff diagnostic
-        if: always()
-        run: ruff format --diff api/main.py api/routes_booking.py tests/test_portal.py tests/test_production_workflow.py || true
 
       - name: Secret scan
         run: |
