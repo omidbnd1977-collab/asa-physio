@@ -155,9 +155,12 @@ class TestRegistration:
         assert len(sms) == 1 and sms[0]["status"] == "sent"
         assert "اطلاعات شما" in sms[0]["body"]
 
-    def test_mri_url_is_saved_as_private_file_when_image_download_succeeds(self, client, monkeypatch):
+    def test_mri_url_is_saved_as_private_file_when_image_download_succeeds(
+        self, client, monkeypatch
+    ):
         from api import repo
         from api.policies import SYSTEM
+
         async def fake_download(url):
             assert url == "https://cdn.example/mri.png"
             return PNG, "image/png"
@@ -1000,7 +1003,9 @@ class TestTreatmentHistory:
         )
         a = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[book["code"]])[0]
         assert a["status"] == "attended"
-        sessions = repo.select(SYSTEM, "treatment_sessions", where="appointment_id = ?", params=[a["id"]])
+        sessions = repo.select(
+            SYSTEM, "treatment_sessions", where="appointment_id = ?", params=[a["id"]]
+        )
         assert len(sessions) == 1
         assert sessions[0]["patient_id"] == a["patient_id"]
         assert metrics.outcome(30)["north_star"]["value"] == 1
