@@ -260,6 +260,7 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
 
     <div class="tabs" id="tabs">
       <button class="tab on" data-tab="sched">🗓 نوبت‌ها</button>
+      <button class="tab" data-tab="closed">🔒 تعطیلات</button>
       <button class="tab" data-tab="pts">👤 بیماران</button>
       <button class="tab" data-tab="msg">💬 پیام‌ها<span id="msgTabBadge" class="hidden"></span></button>
       <button class="tab" data-tab="sms">✉️ پیامک‌ها</button>
@@ -287,6 +288,33 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
         </div>
         <div id="aError" class="state error hidden"></div>
         <div id="aList" class="hidden"></div>
+      </div>
+    </section>
+
+    <!-- ============ TAB: clinic closure dates ============ -->
+    <section data-pane="closed" class="hidden">
+      <div class="card">
+        <h2>🔒 قفل کردن روز تعطیل یا تعمیرات</h2>
+        <p class="muted" style="margin-bottom:14px">
+          روزهای قفل‌شده برای بیماران قابل انتخاب نیستند. اگر آن روز نوبت ثبت‌شده داشته باشد، ابتدا باید نوبت‌ها را تعیین تکلیف کنید.
+        </p>
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));align-items:end">
+          <div>
+            <label for="closedDate">انتخاب روز</label>
+            <select id="closedDate"></select>
+          </div>
+          <div>
+            <label for="closedReason">دلیل (اختیاری)</label>
+            <input id="closedReason" maxlength="200" placeholder="مثلاً تعمیرات یا مرخصی">
+          </div>
+          <div>
+            <button class="btn primary" id="closeDayBtn" style="width:100%">قفل کردن روز</button>
+          </div>
+        </div>
+        <div id="closedLoading" class="state loading hidden">در حال دریافت روزهای قفل‌شده…</div>
+        <div id="closedError" class="state error hidden" style="margin-top:12px"></div>
+        <div id="closedEmpty" class="state empty hidden" style="margin-top:12px">هیچ روزی قفل نشده است.</div>
+        <div id="closedList" style="margin-top:12px"></div>
       </div>
     </section>
 
@@ -756,6 +784,7 @@ function showTab(name){
   $$('.tab').forEach(t=>t.classList.toggle('on',t.dataset.tab===name));
   $$('[data-pane]').forEach(p=>p.classList.toggle('hidden',p.dataset.pane!==name));
   if(name==='sched') loadAppts();
+  if(name==='closed') loadClosedDays();
   if(name==='pts')   loadPatients();
   if(name==='msg')   loadMessages();
   if(name==='sms')   loadSms();
@@ -796,6 +825,53 @@ async function loadFeedback(){
   }
   show('#fbAdminList');
 }
+
+// ======================= clinic closure dates =======================
+async function loadClosedDays(){
+  show('#closedLoading'); hide('#closedError'); hide('#closedEmpty');
+  const r=await api('/api/admin/closed-days');
+  hide('#closedLoading');
+  if(!r.ok) return errBox('#closedError',r.error,loadClosedDays);
+  const select=$('#closedDate'); select.innerHTML='';
+  const available=(r.data.days||[]).filter(d=>!d.closed);
+  available.forEach(d=>{
+    const o=document.createElement('option'); o.value=d.date; o.textContent=d.label;
+    select.appendChild(o);
+  });
+  $('#closeDayBtn').disabled=!available.length;
+  if(!available.length){
+    const o=document.createElement('option'); o.value=''; o.textContent='روز آزادی برای قفل کردن وجود ندارد';
+    select.appendChild(o);
+  }
+  const list=$('#closedList'); list.innerHTML='';
+  const items=r.data.closed_days||[];
+  if(!items.length){ show('#closedEmpty'); return; }
+  items.forEach(item=>{
+    const row=document.createElement('div'); row.className='row';
+    const name=document.createElement('div'); name.className='nm';
+    name.textContent=item.label+(item.reason?' — '+item.reason:'');
+    const action=document.createElement('div'); action.className='acts';
+    const btn=document.createElement('button'); btn.className='btn sm'; btn.textContent='باز کردن روز';
+    btn.onclick=()=>withBtn(btn,'در حال باز کردن…',async()=>{
+      const x=await api('/api/admin/closed-days/'+encodeURIComponent(item.slot_date),{method:'DELETE'});
+      if(!x.ok)return toast(x.error.message,false);
+      toast('روز دوباره برای نوبت‌دهی باز شد'); loadClosedDays();
+    });
+    action.appendChild(btn); row.append(name,action); list.appendChild(row);
+  });
+}
+$('#closeDayBtn').onclick=async function(){
+  const date=$('#closedDate').value;
+  if(!date)return toast('ابتدا یک روز را انتخاب کنید.',false);
+  await withBtn(this,'در حال قفل کردن…',async()=>{
+    const r=await api('/api/admin/closed-days',{method:'POST',
+      body:{date:date,reason:$('#closedReason').value.trim()}});
+    if(!r.ok)return toast(r.error.message,false);
+    $('#closedReason').value='';
+    toast('روز انتخاب‌شده قفل شد؛ بیماران نمی‌توانند برای آن نوبت بگیرند');
+    loadClosedDays();
+  });
+};
 
 // ======================= appointments =======================
 const AST={booked:'ثبت‌شده',attended:'انجام شد',cancelled:'لغو شد',no_show:'مراجعه نشد'};
