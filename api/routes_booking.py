@@ -355,3 +355,108 @@ async def my_history(request: Request) -> dict[str, Any]:
             for h in hist
         ]
     }
+
+
+# --------------------------------------------------------------------------
+# MRI viewer — patient-only access; file bytes are never publicly exposed.
+# --------------------------------------------------------------------------
+@router.get("/mri/viewer")
+async def mri_viewer(request: Request) -> Response:
+    p = patients.require(current_patient(request))
+    if not p.get("mri_file") or not patients.upload_path(p["mri_file"]):
+        html = """<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>نمایش MRI | آسا فیزیو</title>
+<body style="margin:0;background:#080b10;color:#f4f6f8;font:16px sans-serif;padding:32px;line-height:2">
+<h1>هنوز فایل MRI در پرونده ثبت نشده است</h1><p>هنگام ثبت‌نام می‌توانید فایل DICOM یا ZIP حاوی تصاویر MRI را ارسال کنید.</p>
+<a style="color:#8ee7df" href="/booking/reserve">بازگشت به پنل بیمار</a></body></html>"""
+        return Response(
+            content=html,
+            media_type="text/html; charset=utf-8",
+            headers={"Cache-Control": "no-store"},
+        )
+    html = r"""<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
+<title>نمایش MRI | آسا فیزیو</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#080a0d;color:#f2f4f7;font:15px system-ui,sans-serif}
+header{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:14px 18px;background:#11151b;border-bottom:1px solid #29313c}
+h1{font-size:1rem;margin:0}a{color:#8be4dc;text-decoration:none}.tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px 0}
+button,input{font:inherit}button{background:#202833;border:1px solid #3b4654;color:#fff;padding:8px 12px;border-radius:8px;cursor:pointer}
+button:disabled{opacity:.4}input[type=range]{width:110px;accent-color:#72d8d0}
+main{max-width:1200px;margin:auto;padding:14px}.viewer{background:#000;border:1px solid #303844;border-radius:12px;min-height:55vh;display:grid;place-items:center;overflow:auto}
+canvas{max-width:100%;max-height:68vh;object-fit:contain;cursor:grab;touch-action:pan-x pan-y}.status{padding:22px;text-align:center;color:#aab4c2;line-height:1.9}
+.meta{display:flex;gap:12px;flex-wrap:wrap;color:#aab4c2;font-size:.82rem;padding:12px 2px}.bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:12px 0}
+.bar input{flex:1;min-width:120px}.notice{font-size:.78rem;color:#aab4c2;line-height:1.8}
+@media(max-width:600px){header{align-items:flex-start}.viewer{min-height:48vh}.tools{width:100%}}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicomParser.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+</head><body><header><div><h1>نمایشگر تصاویر MRI</h1><div class="notice">پرونده خصوصی آسا فیزیو</div></div><a href="/booking/reserve">بازگشت به پنل بیمار ←</a></header>
+<main><div class="tools"><button id="prev" disabled>برش قبلی</button><button id="next" disabled>برش بعدی</button>
+<label>مرکز <input id="center" type="range" min="-1000" max="3000" value="40"></label>
+<label>عرض پنجره <input id="width" type="range" min="1" max="4000" value="400"></label>
+<button id="zoomOut">− زوم</button><button id="zoomIn">+ زوم</button><button id="reset">بازنشانی</button></div>
+<div class="viewer"><canvas id="image"></canvas><div id="status" class="status">در حال بارگذاری فایل MRI…</div></div>
+<div class="bar"><span id="sliceText">برش —</span><input id="slice" type="range" min="0" max="0" value="0" disabled></div><div id="meta" class="meta"></div>
+<p class="notice">در این نسخه، نمایش مستقیم برای DICOM بدون فشرده‌سازی فراهم است. اگر فایل از فشرده‌سازی اختصاصی استفاده کند، ممکن است نمایش داده نشود؛ فایل اصلی محفوظ می‌ماند. این ابزار جایگزین تفسیر پزشک نیست.</p></main>
+<script>
+(async function(){
+var $=function(id){return document.getElementById(id)},canvas=$('image'),ctx=canvas.getContext('2d'),slices=[],idx=0,zoom=1,center=40,width=400;
+function say(t){$('status').textContent=t;$('status').style.display='block';canvas.style.display='none'}
+function val(ds,tag,def){try{var x=ds.string(tag);return x===undefined?def:x}catch(e){return def}}
+function num(ds,tag,def){try{return ds.uint16(tag)}catch(e){var n=parseInt(val(ds,tag,''),10);return isNaN(n)?def:n}}
+function parse(buf,name){var arr=new Uint8Array(buf),ds;try{ds=dicomParser.parseDicom(arr)}catch(e){return null}
+var pe=ds.elements.x7fe00010,rows=num(ds,'x00280010',0),cols=num(ds,'x00280011',0),bits=num(ds,'x00280100',16),signed=num(ds,'x00280103',0)===1;
+if(!pe||!rows||!cols||![8,16].includes(bits)||rows*cols>16000000)return null;
+var ts=val(ds,'x00020010','1.2.840.10008.1.2');if(!['1.2.840.10008.1.2','1.2.840.10008.1.2.1'].includes(ts))return {unsupported:true,name:name};
+var count=rows*cols,bpc=bits/8;if(pe.length<count*bpc)return null;var dv=new DataView(arr.buffer,arr.byteOffset,arr.byteLength),vals=new Float64Array(count),mn=Infinity,mx=-Infinity;
+for(var i=0;i<count;i++){var v=bits===8?dv.getUint8(pe.dataOffset+i):dv.getUint16(pe.dataOffset+i*2,true);if(bits===16&&signed&&v>32767)v-=65536;vals[i]=v;mn=Math.min(mn,v);mx=Math.max(mx,v)}
+var ipp=val(ds,'x00200032','').split('\\').map(Number);
+return {name:name,ds:ds,rows:rows,cols:cols,vals:vals,min:mn,max:mx,ipp:ipp,inst:num(ds,'x00200013',0),photo:val(ds,'x00280004','MONOCHROME2'),slope:Number(val(ds,'x00281053','1'))||1,intercept:Number(val(ds,'x00281052','0'))||0};}
+function draw(){var s=slices[idx];if(!s||s.unsupported){say('این فایل فشرده یا ناسازگار است و در این نسخه قابل نمایش نیست. فایل اصلی محفوظ مانده است.');return}
+canvas.style.display='block';$('status').style.display='none';canvas.width=s.cols;canvas.height=s.rows;var out=ctx.createImageData(s.cols,s.rows),lo=center-width/2,hi=center+width/2;
+for(var i=0;i<s.vals.length;i++){var v=s.vals[i]*s.slope+s.intercept;v=Math.max(0,Math.min(255,Math.round((v-lo)/Math.max(1,hi-lo)*255)));if(s.photo==='MONOCHROME1')v=255-v;var j=i*4;out.data[j]=out.data[j+1]=out.data[j+2]=v;out.data[j+3]=255}
+ctx.putImageData(out,0,0);canvas.style.width=(s.cols*zoom)+'px';canvas.style.height=(s.rows*zoom)+'px';$('sliceText').textContent='برش '+(idx+1)+' از '+slices.length;$('slice').value=idx;
+$('prev').disabled=idx===0;$('next').disabled=idx>=slices.length-1;$('meta').textContent=s.cols+' × '+s.rows+' · '+s.name+' · Instance '+(s.inst||'—');}
+function setIdx(n){idx=Math.max(0,Math.min(slices.length-1,n));draw()}
+$('prev').onclick=function(){setIdx(idx-1)};$('next').onclick=function(){setIdx(idx+1)};$('slice').oninput=function(e){setIdx(+e.target.value)};
+$('center').oninput=function(e){center=+e.target.value;draw()};$('width').oninput=function(e){width=+e.target.value;draw()};
+$('zoomIn').onclick=function(){zoom=Math.min(5,zoom*1.2);draw()};$('zoomOut').onclick=function(){zoom=Math.max(.2,zoom/1.2);draw()};
+$('reset').onclick=function(){zoom=1;center=40;width=400;$('center').value=center;$('width').value=width;draw()};
+canvas.addEventListener('wheel',function(e){e.preventDefault();setIdx(idx+(e.deltaY>0?1:-1))},{passive:false});
+try{var res=await fetch('/api/portal/mri/file',{credentials:'same-origin',cache:'no-store'});if(!res.ok)throw Error('دریافت فایل MRI ناموفق بود.');
+var blob=await res.blob(),buf=await blob.arrayBuffer(),list=[];
+if(new Uint8Array(buf,0,Math.min(4,buf.byteLength))[0]===0x50){var zip=await JSZip.loadAsync(buf),entries=Object.values(zip.files).filter(function(f){return !f.dir});if(entries.length>1000)throw Error('تعداد فایل‌های ZIP بیش از حد مجاز است.');var total=0;
+for(var k=0;k<entries.length;k++){var f=entries[k];if(/\.(pdf|jpg|jpeg|png|webp)$/i.test(f.name))continue;var b=await f.async('arraybuffer');total+=b.byteLength;if(total>500*1024*1024)throw Error('حجم بازشده ZIP بیش از حد مجاز است.');var item=parse(b,f.name);if(item)list.push(item)}
+}else{var one=parse(buf,'MRI DICOM');if(one)list.push(one)}
+if(!list.length)throw Error('فایل DICOM قابل‌خواندن پیدا نشد.');list.sort(function(a,b){if(a.unsupported||b.unsupported)return 0;var az=a.ipp[2],bz=b.ipp[2];return Number.isFinite(az)&&Number.isFinite(bz)?az-bz:(a.inst||0)-(b.inst||0)});
+slices=list;var first=list.find(function(x){return !x.unsupported});if(first){center=Number(val(first.ds,'x00281050','40').split('\\')[0])||Math.round((first.min+first.max)/2);width=Number(val(first.ds,'x00281051','400').split('\\')[0])||Math.max(1,first.max-first.min);$('center').value=Math.max(-1000,Math.min(3000,center));$('width').value=Math.max(1,Math.min(4000,width))}
+$('slice').max=slices.length-1;$('slice').disabled=false;setIdx(0);
+}catch(e){say(e.message||'خواندن فایل MRI ممکن نشد.')}
+})();
+</script></body></html>"""
+    return Response(
+        content=html,
+        media_type="text/html; charset=utf-8",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.get("/mri/file")
+async def mri_file(request: Request) -> Response:
+    p = patients.require(current_patient(request))
+    path = patients.upload_path(p.get("mri_file", ""))
+    if not path:
+        raise NotFound("فایل MRI در پرونده پیدا نشد.")
+    return Response(
+        content=path.read_bytes(),
+        media_type="application/octet-stream",
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": 'attachment; filename="mri-upload"',
+        },
+    )
