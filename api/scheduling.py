@@ -1,9 +1,7 @@
 """Clinic hours, the slot grid, and race-safe cabin allocation.
 
-Opening hours: 16:00 to 22:00 Tehran time, one appointment every 30 minutes,
-10 cabins running in parallel.
-
-    12 start times (16:00 … 21:30) x 10 cabins = 120 appointments per day.
+Clinic window: 16:00–22:00 Tehran time. Each appointment lasts 90 minutes,
+with start times at 16:00, 17:30, 19:00, and 20:30 across 10 cabins.
 
 A slot is "full" when all 10 cabins are taken for that start time. Allocation happens
 inside `BEGIN IMMEDIATE`; the `UNIQUE(slot_date, slot_time, cabin)` constraint in
@@ -23,7 +21,7 @@ from .policies import SYSTEM
 
 OPEN_HOUR = 16
 CLOSE_HOUR = 22
-STEP_MIN = 30
+STEP_MIN = 90
 CABINS = 10
 BOOKING_HORIZON_DAYS = 30
 # a patient cannot book a slot that starts in less than this many minutes

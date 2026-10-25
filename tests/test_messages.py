@@ -110,7 +110,7 @@ class TestEventTrail:
         appt = book_one(client)
         r = owner_client.patch(
             f"/api/admin/appointments/{appt['code']}/move",
-            json={"slot_date": tomorrow(), "slot_time": "17:00"},
+            json={"slot_date": tomorrow(), "slot_time": "17:30"},
         )
         assert r.status_code == 200, r.text
         thread = client.get("/api/portal/messages").json()["messages"]
