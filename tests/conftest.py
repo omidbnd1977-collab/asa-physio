@@ -74,6 +74,7 @@ def _clean():
         "patients",
     ):
         conn.execute(f"DELETE FROM {t}")
+    conn.execute("DELETE FROM audit_logs WHERE entity = 'clinic_closed_day'")
     conn.execute("UPDATE breaker_state SET open_until = 0, reason = ''")
     from api import cache
 

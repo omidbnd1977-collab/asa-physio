@@ -575,14 +575,24 @@ async function loadDays(){
   const row=$('#dayRow'); row.innerHTML='';
   DAYS.forEach((d,i)=>{
     const b=document.createElement('button');
-    b.type='button'; b.className='daybtn'; b.dataset.date=d.date;
+    b.type='button'; b.className='daybtn'+(d.closed?' closed':''); b.dataset.date=d.date;
+    b.disabled=!!d.closed;
+    if(d.closed) b.title=d.closed_reason||'کلینیک در این روز تعطیل است';
     const parts=d.label.split(' ');
-    b.innerHTML='<span>'+parts[0]+'</span><b>'+faDigits(parts[1])+'</b><span>'+parts[2]+'</span>';
-    b.onclick=()=>pickDay(d.date);
+    b.innerHTML='<span>'+parts[0]+'</span><b>'+faDigits(parts[1])+'</b><span>'+(d.closed?'تعطیل':parts[2])+'</span>';
+    if(!d.closed) b.onclick=()=>pickDay(d.date);
     row.appendChild(b);
   });
   row.classList.remove('hidden');
-  pickDay(DAYS[0].date);
+  const firstOpen=DAYS.find(d=>!d.closed);
+  if(firstOpen) pickDay(firstOpen.date);
+  else {
+    $('#gridHead').classList.add('hidden');
+    $('#slotGrid').classList.add('hidden');
+    $('#slotLoading').classList.add('hidden');
+    $('#slotEmpty').textContent='در بازهٔ فعلی روز قابل رزرو وجود ندارد.';
+    $('#slotEmpty').classList.remove('hidden');
+  }
 }
 
 let dayReq=0;
@@ -609,6 +619,12 @@ async function pickDay(date){
   const g=r.data;
   $('#gridHead').classList.remove('hidden');
   $('#dayLabel').textContent=g.label;
+  if(g.closed){
+    $('#dayFree').textContent='کلینیک در این روز تعطیل است'+(g.closed_reason?' — '+g.closed_reason:'');
+    $('#slotEmpty').textContent='در این روز نوبت ارائه نمی‌شود.';
+    $('#slotEmpty').classList.remove('hidden');
+    return;
+  }
   const freeTotal=g.slots.reduce((s,x)=>s+(x.disabled?0:x.free),0);
   $('#dayFree').textContent=freeTotal
     ? faDigits(freeTotal)+' نوبت خالی از '+faDigits(g.capacity)

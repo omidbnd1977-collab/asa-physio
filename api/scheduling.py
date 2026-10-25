@@ -12,6 +12,7 @@ the same cabin.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import secrets
 
 from . import repo
@@ -48,9 +49,37 @@ def slot_datetime(slot_date: str, slot_time: str) -> dt.datetime:
     return dt.datetime(d.year, d.month, d.day, h, m, tzinfo=TEHRAN)
 
 
+def closed_days_map() -> dict[str, str]:
+    """Current closure state derived from immutable audit events (no schema change)."""
+    rows = repo.select(
+        SYSTEM,
+        "audit_logs",
+        columns=["action", "entity_id", "after_json"],
+        where="entity = ? AND action IN (?, ?)",
+        params=["clinic_closed_day", "clinic.day_closed", "clinic.day_reopened"],
+        order_by="id desc",
+        limit=5000,
+    )
+    closed: dict[str, str] = {}
+    seen: set[str] = set()
+    for row in rows:
+        day = row["entity_id"]
+        if day in seen:
+            continue
+        seen.add(day)
+        if row["action"] == "clinic.day_closed":
+            try:
+                reason = json.loads(row["after_json"]).get("reason", "")
+            except (TypeError, ValueError):
+                reason = ""
+            closed[day] = reason if isinstance(reason, str) else ""
+    return closed
+
+
 def open_days() -> list[dict[str, str | bool]]:
     """The dates a patient may pick, starting today (Tehran)."""
     today = now_tehran().date()
+    closed = closed_days_map()
     out = []
     for i in range(BOOKING_HORIZON_DAYS):
         d = today + dt.timedelta(days=i)
@@ -61,6 +90,8 @@ def open_days() -> list[dict[str, str | bool]]:
                 "jalali": to_jalali_str(d),
                 "label": to_jalali_long(d),
                 "is_today": i == 0,
+                "closed": iso in closed,
+                "closed_reason": closed.get(iso, ""),
             }
         )
     return out
@@ -84,6 +115,11 @@ def validate_slot(slot_date: str, slot_time: str) -> dt.datetime:
             f"فعلاً فقط تا {BOOKING_HORIZON_DAYS} روز آینده می‌توانید نوبت بگیرید.",
             fields={"slot_date": "خارج از بازه"},
         )
+    if is_closed_day(slot_date):
+        raise Conflict(
+            "کلینیک در این روز تعطیل است و امکان ثبت نوبت وجود ندارد.",
+            code="day_closed",
+        )
     when = slot_datetime(slot_date, slot_time)
     if when - now_tehran() < dt.timedelta(minutes=MIN_LEAD_MIN):
         raise BadRequest(
@@ -91,6 +127,11 @@ def validate_slot(slot_date: str, slot_time: str) -> dt.datetime:
             fields={"slot_time": "دیر است"},
         )
     return when
+
+
+def is_closed_day(slot_date: str) -> bool:
+    """Return whether staff have explicitly closed the clinic for this date."""
+    return slot_date in closed_days_map()
 
 
 def taken_map(slot_date: str) -> dict[str, int]:
@@ -112,6 +153,9 @@ def day_grid(slot_date: str, *, for_patient: bool = True) -> dict[str, object]:
     taken = taken_map(slot_date)
     now = now_tehran()
     d = dt.date.fromisoformat(slot_date)
+    closures = closed_days_map()
+    closed = slot_date in closures
+    closed_reason = closures.get(slot_date, "")
     rows = []
     for t in SLOTS:
         used = taken.get(t, 0)
@@ -125,7 +169,7 @@ def day_grid(slot_date: str, *, for_patient: bool = True) -> dict[str, object]:
                 "capacity": CABINS,
                 "full": free <= 0,
                 "past": too_soon,
-                "disabled": free <= 0 or too_soon,
+                "disabled": closed or free <= 0 or too_soon,
             }
         )
     return {
@@ -134,6 +178,8 @@ def day_grid(slot_date: str, *, for_patient: bool = True) -> dict[str, object]:
         "label": to_jalali_long(d),
         "capacity": DAY_CAPACITY,
         "booked": sum(taken.values()),
+        "closed": closed,
+        "closed_reason": closed_reason,
         "slots": rows,
     }
 
@@ -152,6 +198,11 @@ def allocate(
     validate_slot(slot_date, slot_time)
     public_id = secrets.token_hex(5)
     with repo.tx() as conn:
+        if is_closed_day(slot_date):
+            raise Conflict(
+                "کلینیک در این روز تعطیل است و امکان ثبت نوبت وجود ندارد.",
+                code="day_closed",
+            )
         rows = conn.execute(
             "SELECT cabin FROM appointments "
             "WHERE slot_date = ? AND slot_time = ? AND status != 'cancelled'",

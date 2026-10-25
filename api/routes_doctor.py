@@ -171,6 +171,97 @@ async def grid(request: Request, date: str = "") -> dict[str, Any]:
     return g
 
 
+# --------------------------------------------------------------------------
+# clinic closure dates
+# --------------------------------------------------------------------------
+@router.get("/closed-days")
+async def list_closed_days(request: Request) -> dict[str, Any]:
+    staff(request)
+    days = scheduling.open_days()
+    labels = {day["date"]: day["label"] for day in days}
+    today = now_tehran().date().isoformat()
+    closed = scheduling.closed_days_map()
+    return {
+        "days": days,
+        "closed_days": [
+            {
+                "slot_date": date,
+                "reason": reason,
+                "label": labels.get(date, to_jalali_long(date)),
+            }
+            for date, reason in sorted(closed.items())
+            if date >= today
+        ],
+    }
+
+
+@router.post("/closed-days", status_code=201)
+async def close_clinic_day(
+    request: Request, payload: dict[str, Any] = Body(default={})
+) -> dict[str, Any]:
+    actor = staff(request)
+    csrf(request, actor)
+    slot_date = payload.get("date", "")
+    reason = payload.get("reason", "")
+    if not isinstance(slot_date, str) or not isinstance(reason, str):
+        raise BadRequest("تاریخ یا توضیح تعطیلی معتبر نیست.")
+    reason = reason.strip()
+    if len(reason) > 200:
+        raise BadRequest("توضیح تعطیلی نباید بیشتر از ۲۰۰ نویسه باشد.")
+    try:
+        dt.date.fromisoformat(slot_date)
+    except ValueError as exc:
+        raise BadRequest("تاریخ تعطیلی معتبر نیست.") from exc
+    available_dates = {day["date"] for day in scheduling.open_days()}
+    if slot_date not in available_dates:
+        raise BadRequest("فقط می‌توانید روزهای بازهٔ نوبت‌دهی را قفل کنید.")
+    with repo.tx():
+        if repo.count(
+            actor,
+            "appointments",
+            where="slot_date = ? AND status = 'booked'",
+            params=[slot_date],
+        ):
+            raise Conflict(
+                "برای این روز نوبت ثبت شده است؛ ابتدا نوبت‌های بیماران را تعیین تکلیف کنید.",
+                code="day_has_bookings",
+            )
+        if slot_date in scheduling.closed_days_map():
+            raise Conflict("این روز از قبل قفل شده است.", code="day_already_closed")
+        audit.record(
+            actor,
+            "clinic.day_closed",
+            "clinic_closed_day",
+            slot_date,
+            after={"date": slot_date, "reason": reason},
+        )
+    info("doctor.closed_day", date=slot_date)
+    return {"date": slot_date, "label": to_jalali_long(slot_date), "reason": reason}
+
+
+@router.delete("/closed-days/{slot_date}")
+async def reopen_clinic_day(slot_date: str, request: Request) -> dict[str, Any]:
+    actor = staff(request)
+    csrf(request, actor)
+    try:
+        dt.date.fromisoformat(slot_date)
+    except ValueError as exc:
+        raise BadRequest("تاریخ تعطیلی معتبر نیست.") from exc
+    with repo.tx():
+        closed = scheduling.closed_days_map()
+        if slot_date not in closed:
+            raise NotFound("این روز قفل نشده است.")
+        audit.record(
+            actor,
+            "clinic.day_reopened",
+            "clinic_closed_day",
+            slot_date,
+            before={"date": slot_date, "reason": closed[slot_date]},
+        )
+    info("doctor.reopened_day", date=slot_date)
+    return {"date": slot_date, "reopened": True}
+
+
 @router.patch("/appointments/{public_id}/move")
 async def move(
     public_id: str, request: Request, payload: dict[str, Any] = Body(default={})
