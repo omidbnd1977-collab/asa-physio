@@ -89,7 +89,7 @@ def test_patient_update_and_audit_are_staff_only(owner_client, patient, client):
 def test_status_change_is_audited(owner_client, patient):
     r = owner_client.post(
         "/api/portal/appointments",
-        json={"slot_date": tomorrow(), "slot_time": "18:00"},
+        json={"slot_date": tomorrow(), "slot_time": "16:00"},
     )
     assert r.status_code == 201, r.text
     code = r.json()["code"]
@@ -106,7 +106,7 @@ def test_active_appointments_only_include_booked_and_records_keep_attended(owner
 
     book = owner_client.post(
         "/api/portal/appointments",
-        json={"slot_date": tomorrow(), "slot_time": "18:00"},
+        json={"slot_date": tomorrow(), "slot_time": "16:00"},
     )
     assert book.status_code == 201, book.text
     code = book.json()["code"]
@@ -135,7 +135,7 @@ def test_active_appointments_only_include_booked_and_records_keep_attended(owner
 
 def test_cancelled_and_no_show_stay_distinct_from_completed(owner_client, patient):
     codes = {}
-    for slot_time, status in (("18:30", "cancelled"), ("19:00", "no_show")):
+    for slot_time, status in (("17:30", "cancelled"), ("19:00", "no_show")):
         booked = owner_client.post(
             "/api/portal/appointments",
             json={"slot_date": tomorrow(), "slot_time": slot_time},
@@ -164,7 +164,7 @@ def test_move_atomic_creates_one_new_booking_and_audit(owner_client, patient):
 
     book = owner_client.post(
         "/api/portal/appointments",
-        json={"slot_date": tomorrow(), "slot_time": "18:30"},
+        json={"slot_date": tomorrow(), "slot_time": "17:30"},
     )
     assert book.status_code == 201, book.text
     old_code = book.json()["code"]
@@ -189,8 +189,8 @@ def test_all_required_slot_times_are_exposed():
         "16:30",
         "17:00",
         "17:30",
-        "18:00",
-        "18:30",
+        "16:00",
+        "17:30",
         "19:00",
         "19:30",
         "20:00",
