@@ -1140,8 +1140,8 @@ class TestWelcomeBack:
 @pytest.mark.parametrize(
     ("filename", "payload", "suffix"),
     [
-        ("scan.dcm", b"\\x00" * 128 + b"DICM" + b"test", ".dcm"),
-        ("study.zip", b"PK\\x03\\x04" + b"test", ".zip"),
+        ("scan.dcm", b"\x00" * 128 + b"DICM" + b"test", ".dcm"),
+        ("study.zip", b"PK\x03\x04" + b"test", ".zip"),
     ],
 )
 def test_mri_dicom_and_zip_uploads_are_stored(client, filename, payload, suffix):
