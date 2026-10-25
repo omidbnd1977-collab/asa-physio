@@ -23,6 +23,10 @@ def test_closed_day_disables_patient_slots_and_can_be_reopened(owner_client, pat
     assert grid.json()["closed"] is True
     assert grid.json()["closed_reason"] == "تعمیرات"
     assert all(slot["disabled"] for slot in grid.json()["slots"])
+    days = owner_client.get("/api/portal/days")
+    closed_day = next(d for d in days.json()["days"] if d["date"] == date)
+    assert closed_day["closed"] is True
+    assert closed_day["closed_reason"] == "تعمیرات"
 
     booking = owner_client.post(
         "/api/portal/appointments", json={"slot_date": date, "slot_time": "16:00"}
