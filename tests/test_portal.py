@@ -1135,3 +1135,26 @@ class TestWelcomeBack:
         )
         gap = clinical.returning_after_gap(p["id"], tomorrow())
         assert gap is not None and gap > 190
+
+
+@pytest.mark.parametrize(
+    ("filename", "payload", "suffix"),
+    [
+        ("scan.dcm", b"\\x00" * 128 + b"DICM" + b"test", ".dcm"),
+        ("study.zip", b"PK\\x03\\x04" + b"test", ".zip"),
+    ],
+)
+def test_mri_dicom_and_zip_uploads_are_stored(client, filename, payload, suffix):
+    from api import repo
+    from api.config import settings
+    from api.policies import SYSTEM
+
+    response = client.post(
+        "/api/portal/register",
+        data=reg_form(),
+        files={"mri_file": (filename, io.BytesIO(payload), "application/octet-stream")},
+    )
+    assert response.status_code == 201, response.text
+    patient = repo.select(SYSTEM, "patients")[0]
+    assert patient["mri_file"].endswith(suffix)
+    assert (settings.UPLOAD_DIR / patient["mri_file"]).is_file()
