@@ -58,14 +58,14 @@ jobs:
             echo "::error::an applied migration was modified or deleted: $CHANGED"; exit 1
           fi
 
-      - name: Tests
-        run: python -m pytest -q
-
       - name: Static build is reproducible
         run: |
           python work/build_pages.py
           python build_static.py
           test -f public/asset-manifest.json
+
+      - name: Tests
+        run: python -m pytest -q
 
       - name: Boot smoke test
         run: |
