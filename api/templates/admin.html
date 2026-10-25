@@ -1019,10 +1019,10 @@ async function loadDlgGrid(date){
   const g=$('#dlgGrid'); g.innerHTML='';
   r.data.slots.forEach(s=>{
     const b=document.createElement('button');
-    b.type='button'; b.className='mslot'; b.disabled=s.full;
-    b.innerHTML='<b>'+s.time+'</b><small>'+(s.full?'تکمیل':fa(s.free)+' خالی')+'</small>';
-    b.onclick=()=>{DLG_PICK={date:date,time:s.time};
-      $$('.mslot').forEach(x=>x.classList.toggle('on',x===b));};
+    b.type='button'; b.className='mslot'; b.disabled=!!r.data.closed||s.disabled;
+    b.innerHTML='<b>'+s.time+'</b><small>'+(r.data.closed?'تعطیل':(s.full?'تکمیل':fa(s.free)+' خالی'))+'</small>';
+    if(!b.disabled) b.onclick=()=>{DLG_PICK={date:date,time:s.time};
+      $('.mslot').forEach(x=>x.classList.toggle('on',x===b));};
     g.appendChild(b);
   });
   g.classList.remove('hidden');
