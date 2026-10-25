@@ -807,8 +807,8 @@ class TestPortalPolicies:
         a = scheduling.allocate(pid, tomorrow(), "16:00")
         with pytest.raises(sqlite3.IntegrityError):
             db.get_conn().execute(
-                "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin)"
-                " VALUES ('dupdupdup1', ?, ?, '16:00', ?)",
+                "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin, status)"
+                " VALUES ('dupdupdup1', ?, ?, '16:00', ?, 'booked')",
                 (pid, tomorrow(), a["cabin"]),
             )
 
