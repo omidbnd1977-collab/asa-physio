@@ -563,6 +563,7 @@ async def change_admin_password(
     if not rows:
         raise BadRequest("حساب کاربری فعال پیدا نشد.")
     from argon2.exceptions import InvalidHashError, VerifyMismatchError
+
     try:
         valid = auth.ph.verify(rows[0]["password_hash"], current_password)
     except (VerifyMismatchError, InvalidHashError):
