@@ -1,9 +1,7 @@
 """Clinic hours, the slot grid, and race-safe cabin allocation.
 
-Opening hours: 16:00 to 22:00 Tehran time, one appointment every 90 minutes,
-10 cabins running in parallel.
-
-    4 start times (16:00, 17:30, 19:00, 20:30) x 10 cabins = 40 appointments per day.
+Clinic window: 16:00–22:00 Tehran time. Each appointment lasts 90 minutes,
+with start times at 16:00, 17:30, 19:00, and 20:30 across 10 cabins.
 
 A slot is "full" when all 10 cabins are taken for that start time. Allocation happens
 inside `BEGIN IMMEDIATE`; the `UNIQUE(slot_date, slot_time, cabin)` constraint in
