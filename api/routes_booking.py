@@ -30,20 +30,32 @@ def _public_mri_url(raw: str) -> str:
     if host in {"localhost", "localhost.localdomain", "metadata.google.internal"}:
         raise BadRequest("این آدرس برای دریافت MRI مجاز نیست.", code="blocked_mri_url")
     try:
-        infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+        infos = socket.getaddrinfo(
+            host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM
+        )
     except socket.gaierror as exc:
         raise BadRequest("آدرس MRI قابل دسترسی نیست.", code="unreachable_mri_url") from exc
     for addr_info in infos:
         address = addr_info[4][0]
         ip = ipaddress.ip_address(address)
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_unspecified:
-            raise BadRequest("دریافت از شبکه داخلی یا آدرس خصوصی مجاز نیست.", code="blocked_mri_url")
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            raise BadRequest(
+                "دریافت از شبکه داخلی یا آدرس خصوصی مجاز نیست.", code="blocked_mri_url"
+            )
     return raw
 
 
 async def _download_remote_mri(url: str) -> tuple[bytes, str]:
     current = _public_mri_url(url)
-    async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=5.0), follow_redirects=False) as client:
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(20.0, connect=5.0), follow_redirects=False
+    ) as client:
         for _ in range(4):
             async with client.stream("GET", current, headers={"Accept": "image/*"}) as response:
                 if response.status_code in {301, 302, 303, 307, 308}:
@@ -56,7 +68,9 @@ async def _download_remote_mri(url: str) -> tuple[bytes, str]:
                     raise BadRequest("لینک MRI قابل دریافت نیست.", code="mri_download_failed")
                 content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
                 if not content_type.startswith("image/"):
-                    raise BadRequest("لینک MRI باید به یک فایل تصویر اشاره کند.", code="bad_mri_type")
+                    raise BadRequest(
+                        "لینک MRI باید به یک فایل تصویر اشاره کند.", code="bad_mri_type"
+                    )
                 length = response.headers.get("content-length")
                 if length and int(length) > settings.MRI_REMOTE_MAX_BYTES:
                     raise PayloadTooLarge("حجم فایل MRI از سقف فنی مجاز بیشتر است.")
@@ -164,7 +178,9 @@ async def register(
         try:
             remote_blob, _ = await _download_remote_mri(data.mri_link)
             mri = patients.save_bytes(
-                remote_blob, prefix=f"mri-{data.national_id[-4:]}", max_bytes=settings.MRI_REMOTE_MAX_BYTES
+                remote_blob,
+                prefix=f"mri-{data.national_id[-4:]}",
+                max_bytes=settings.MRI_REMOTE_MAX_BYTES,
             )
         except AppError as exc:
             mri_warning = exc.message
