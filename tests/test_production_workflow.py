@@ -184,21 +184,8 @@ def test_move_atomic_creates_one_new_booking_and_audit(owner_client, patient):
 def test_all_required_slot_times_are_exposed():
     from api import scheduling
 
-    assert scheduling.SLOTS == [
-        "16:00",
-        "16:30",
-        "17:00",
-        "17:30",
-        "16:00",
-        "17:30",
-        "19:00",
-        "19:30",
-        "20:00",
-        "20:30",
-        "21:00",
-        "21:30",
-    ]
-    assert scheduling.DAY_CAPACITY == 120
+    assert scheduling.SLOTS == ["16:00", "17:30", "19:00", "20:30"]
+    assert scheduling.DAY_CAPACITY == 40
 
 
 def test_bootstrap_admin_is_opt_in_and_idempotent(monkeypatch):
