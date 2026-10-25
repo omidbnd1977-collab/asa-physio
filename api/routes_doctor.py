@@ -180,15 +180,17 @@ async def list_closed_days(request: Request) -> dict[str, Any]:
     days = scheduling.open_days()
     labels = {day["date"]: day["label"] for day in days}
     today = now_tehran().date().isoformat()
-    rows = repo.select(
-        actor, "clinic_closed_days",
-        where="slot_date >= ?", params=[today], order_by="slot_date",
-    )
+    closed = scheduling.closed_days_map()
     return {
         "days": days,
         "closed_days": [
-            {**row, "label": labels.get(row["slot_date"], to_jalali_long(row["slot_date"]))}
-            for row in rows
+            {
+                "slot_date": date,
+                "reason": reason,
+                "label": labels.get(date, to_jalali_long(date)),
+            }
+            for date, reason in sorted(closed.items())
+            if date >= today
         ],
     }
 
@@ -222,18 +224,12 @@ async def close_clinic_day(
                 "برای این روز نوبت ثبت شده است؛ ابتدا نوبت‌های بیماران را تعیین تکلیف کنید.",
                 code="day_has_bookings",
             )
-        if repo.select(
-            actor, "clinic_closed_days", where="slot_date = ?", params=[slot_date], limit=1,
-        ):
+        if slot_date in scheduling.closed_days_map():
             raise Conflict("این روز از قبل قفل شده است.", code="day_already_closed")
-        repo.insert(
-            actor, "clinic_closed_days",
-            {"slot_date": slot_date, "reason": reason, "created_by": actor.user_id},
+        audit.record(
+            actor, "clinic.day_closed", "clinic_closed_day", slot_date,
+            after={"date": slot_date, "reason": reason},
         )
-    audit.record(
-        actor, "clinic.day_closed", "clinic_closed_day", slot_date,
-        after={"date": slot_date, "reason": reason},
-    )
     info("doctor.closed_day", date=slot_date)
     return {"date": slot_date, "label": to_jalali_long(slot_date), "reason": reason}
 
@@ -246,16 +242,14 @@ async def reopen_clinic_day(slot_date: str, request: Request) -> dict[str, Any]:
         dt.date.fromisoformat(slot_date)
     except ValueError as exc:
         raise BadRequest("تاریخ تعطیلی معتبر نیست.") from exc
-    rows = repo.select(
-        actor, "clinic_closed_days", where="slot_date = ?", params=[slot_date], limit=1,
-    )
-    if not rows:
-        raise NotFound("این روز قفل نشده است.")
-    repo.delete(actor, "clinic_closed_days", where="slot_date = ?", params=[slot_date])
-    audit.record(
-        actor, "clinic.day_reopened", "clinic_closed_day", slot_date,
-        before={"date": slot_date, "reason": rows[0]["reason"]},
-    )
+    with repo.tx():
+        closed = scheduling.closed_days_map()
+        if slot_date not in closed:
+            raise NotFound("این روز قفل نشده است.")
+        audit.record(
+            actor, "clinic.day_reopened", "clinic_closed_day", slot_date,
+            before={"date": slot_date, "reason": closed[slot_date]},
+        )
     info("doctor.reopened_day", date=slot_date)
     return {"date": slot_date, "reopened": True}
 
