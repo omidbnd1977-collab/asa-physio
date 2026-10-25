@@ -402,10 +402,16 @@ async def create_booking(request: Request, payload: dict[str, Any] = Body(defaul
 
 
 @app.post("/api/feedback", status_code=201)
-async def submit_feedback(request: Request, payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+async def submit_feedback(
+    request: Request, payload: dict[str, Any] = Body(default={})
+) -> dict[str, Any]:
     ip = client_ip(request)
-    ratelimit.enforce(ratelimit.ip_bucket("feedback", ip), 5, 3600,
-                      message="تعداد ارسال پیام زیاد است. لطفاً بعداً تلاش کنید.")
+    ratelimit.enforce(
+        ratelimit.ip_bucket("feedback", ip),
+        5,
+        3600,
+        message="تعداد ارسال پیام زیاد است. لطفاً بعداً تلاش کنید.",
+    )
     name = str(payload.get("name", "")).strip()[:80]
     category = str(payload.get("category", "")).strip()
     body = str(payload.get("body", "")).strip()
@@ -427,17 +433,32 @@ async def submit_feedback(request: Request, payload: dict[str, Any] = Body(defau
         raise BadRequest("امتیاز باید بین ۱ تا ۵ باشد.")
     public_id = secrets.token_hex(6)
     with repo.tx():
-        repo.insert(SYSTEM, "feedback", {"public_id": public_id, "name": name,
-            "category": category, "body": body, "rating": rating, "ip_fp": fingerprint(ip)})
+        repo.insert(
+            SYSTEM,
+            "feedback",
+            {
+                "public_id": public_id,
+                "name": name,
+                "category": category,
+                "body": body,
+                "rating": rating,
+                "ip_fp": fingerprint(ip),
+            },
+        )
     info("feedback.created", category=category)
     return {"public_id": public_id, "status": "received"}
 
 
 @app.get("/api/feedback/public")
 async def public_feedback() -> dict[str, Any]:
-    items = repo.select(SYSTEM, "feedback",
+    items = repo.select(
+        SYSTEM,
+        "feedback",
         columns=["public_id", "name", "category", "body", "rating", "created_at"],
-        where="published = 1", order_by="created_at desc", limit=50)
+        where="published = 1",
+        order_by="created_at desc",
+        limit=50,
+    )
     return {"items": items}
 
 
@@ -451,16 +472,22 @@ async def list_feedback(request: Request) -> dict[str, Any]:
 
 
 @app.patch("/api/admin/feedback/{public_id}")
-async def update_feedback(public_id: str, request: Request,
-                          payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+async def update_feedback(
+    public_id: str, request: Request, payload: dict[str, Any] = Body(default={})
+) -> dict[str, Any]:
     actor = staff(request)
     auth.check_csrf(actor.session_id or "", request.headers.get("x-csrf-token"))
     published = payload.get("published")
     if published not in (True, False, 0, 1):
         raise BadRequest("وضعیت انتشار نامعتبر است.")
     with repo.tx():
-        n = repo.update(actor, "feedback", {"published": int(bool(published))},
-                        where="public_id = ?", params=[public_id[:12]])
+        n = repo.update(
+            actor,
+            "feedback",
+            {"published": int(bool(published))},
+            where="public_id = ?",
+            params=[public_id[:12]],
+        )
     if not n:
         raise NotFound("این پیام پیدا نشد.")
     return {"public_id": public_id, "published": bool(published)}
@@ -530,20 +557,26 @@ async def change_admin_password(
         raise BadRequest("گذرواژه جدید باید دست‌کم ۱۲ نویسه داشته باشد.")
     if len(new_password) > 256 or len(current_password) > 256:
         raise BadRequest("گذرواژه بیش از حد طولانی است.")
-    rows = repo.select(SYSTEM, "admin_users",
-        where="id = ? AND is_active = 1", params=[actor.user_id], limit=1)
+    rows = repo.select(
+        SYSTEM, "admin_users", where="id = ? AND is_active = 1", params=[actor.user_id], limit=1
+    )
     if not rows:
         raise BadRequest("حساب کاربری فعال پیدا نشد.")
     from argon2.exceptions import InvalidHashError, VerifyMismatchError
+
     try:
         valid = auth.ph.verify(rows[0]["password_hash"], current_password)
     except (VerifyMismatchError, InvalidHashError):
         valid = False
     if not valid:
         raise BadRequest("گذرواژه فعلی درست نیست.")
-    repo.update(SYSTEM, "admin_users",
+    repo.update(
+        SYSTEM,
+        "admin_users",
         {"password_hash": auth.hash_password(new_password)},
-        where="id = ?", params=[actor.user_id])
+        where="id = ?",
+        params=[actor.user_id],
+    )
     return {"ok": True, "message": "گذرواژه با موفقیت تغییر کرد."}
 
 

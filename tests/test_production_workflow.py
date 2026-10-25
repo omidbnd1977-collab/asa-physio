@@ -22,7 +22,9 @@ def test_static_source_booking_links_are_github_pages_safe():
     source = "\n".join(p.read_text(encoding="utf-8") for p in (root / "site").glob("*.html"))
     contact = (root / "site" / "contact.html").read_text(encoding="utf-8")
     other_source = "\n".join(
-        p.read_text(encoding="utf-8") for p in (root / "site").glob("*.html") if p.name != "contact.html"
+        p.read_text(encoding="utf-8")
+        for p in (root / "site").glob("*.html")
+        if p.name != "contact.html"
     )
     assert 'href="/booking"' in contact
     assert 'href="/booking"' not in other_source
@@ -42,8 +44,10 @@ def test_built_bundle_has_no_root_absolute_local_links():
     for page in sorted(public.glob("**/*.html")):
         text = page.read_text(encoding="utf-8")
         for attr, url in re.findall(r'(href|src)\s*=\s*"([^"]+)"', text):
-            if url.startswith("/") and not url.startswith("//") and not (
-                page.name == "contact.html" and attr == "href" and url == "/booking"
+            if (
+                url.startswith("/")
+                and not url.startswith("//")
+                and not (page.name == "contact.html" and attr == "href" and url == "/booking")
             ):
                 offenders.append(f'{page.name}: {attr}="{url}"')
     assert not offenders, "\n".join(offenders)
@@ -130,7 +134,10 @@ def test_active_appointments_only_include_booked_and_records_keep_attended(owner
     records = owner_client.get("/api/admin/patients?per_page=100")
     assert records.status_code == 200, records.text
     record = next(item for item in records.json()["items"] if item["public_id"] == patient_id)
-    assert any(item["public_id"] == code and item["status"] == "attended" for item in record["appointments"])
+    assert any(
+        item["public_id"] == code and item["status"] == "attended"
+        for item in record["appointments"]
+    )
 
 
 def test_cancelled_and_no_show_stay_distinct_from_completed(owner_client, patient):
