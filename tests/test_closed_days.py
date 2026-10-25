@@ -14,7 +14,8 @@ def future_day() -> str:
 def test_closed_day_disables_patient_slots_and_can_be_reopened(owner_client, patient):
     date = future_day()
     closed = owner_client.post(
-        "/api/admin/closed-days", json={"date": date, "reason": "تعمیرات"}
+        "/api/admin/closed-days",
+        json={"date": date, "reason": "تعمیرات"},
     )
     assert closed.status_code == 201, closed.text
 
@@ -29,7 +30,8 @@ def test_closed_day_disables_patient_slots_and_can_be_reopened(owner_client, pat
     assert closed_day["closed_reason"] == "تعمیرات"
 
     booking = owner_client.post(
-        "/api/portal/appointments", json={"slot_date": date, "slot_time": "16:00"}
+        "/api/portal/appointments",
+        json={"slot_date": date, "slot_time": "16:00"},
     )
     assert booking.status_code == 409, booking.text
     assert booking.json()["error"]["code"] == "day_closed"
@@ -44,16 +46,23 @@ def test_closed_day_disables_patient_slots_and_can_be_reopened(owner_client, pat
 def test_staff_cannot_close_a_day_with_existing_bookings(owner_client, patient):
     date = future_day()
     booking = owner_client.post(
-        "/api/portal/appointments", json={"slot_date": date, "slot_time": "16:00"}
+        "/api/portal/appointments",
+        json={"slot_date": date, "slot_time": "16:00"},
     )
     assert booking.status_code == 201, booking.text
 
-    closed = owner_client.post("/api/admin/closed-days", json={"date": date})
+    closed = owner_client.post(
+        "/api/admin/closed-days",
+        json={"date": date},
+    )
     assert closed.status_code == 409, closed.text
     assert closed.json()["error"]["code"] == "day_has_bookings"
 
 
 def test_closed_day_controls_require_staff_authentication(client):
     date = future_day()
-    response = client.post("/api/admin/closed-days", json={"date": date})
+    response = client.post(
+        "/api/admin/closed-days",
+        json={"date": date},
+    )
     assert response.status_code == 401
