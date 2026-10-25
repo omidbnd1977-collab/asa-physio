@@ -1199,6 +1199,7 @@ class TestWelcomeBack:
         gap = clinical.returning_after_gap(p["id"], tomorrow())
         assert gap is not None and gap > 190
 
+
 # ======================================================================
 # Clinic closure dates
 # ======================================================================
