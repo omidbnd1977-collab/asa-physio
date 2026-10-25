@@ -330,24 +330,24 @@ class TestReturningPatient:
         )
         scheduling.allocate(other, tomorrow(), "19:00")
         client.post(
-            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "20:00"}
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "20:30"}
         )
         mine = client.get("/api/portal/me").json()["appointments"]
-        assert len(mine) == 1 and mine[0]["slot_time"] == "20:00"
+        assert len(mine) == 1 and mine[0]["slot_time"] == "20:30"
 
 
 # ======================================================================
 # The slot grid
 # ======================================================================
 class TestSlots:
-    def test_hours_are_1600_to_2200_every_thirty_minutes(self):
+    def test_hours_are_1600_to_2200_every_ninety_minutes(self):
         from api import scheduling
 
         assert scheduling.SLOTS[0] == "16:00"
-        assert scheduling.SLOTS[-1] == "21:30"
-        assert len(scheduling.SLOTS) == 12
+        assert scheduling.SLOTS == ["16:00", "17:30", "19:00", "20:30"]
+        assert len(scheduling.SLOTS) == 4
         assert scheduling.CABINS == 10
-        assert scheduling.DAY_CAPACITY == 120
+        assert scheduling.DAY_CAPACITY == 40
 
     def test_anonymous_cannot_read_the_grid(self, client):
         assert client.get("/api/portal/slots?date=" + tomorrow()).status_code == 401
@@ -355,7 +355,7 @@ class TestSlots:
 
     def test_grid_reports_free_cabins(self, client, patient):
         g = client.get("/api/portal/slots?date=" + tomorrow()).json()
-        assert g["capacity"] == 120 and len(g["slots"]) == 12
+        assert g["capacity"] == 40 and len(g["slots"]) == 4
         assert all(s["free"] == 10 for s in g["slots"])
 
     def test_cabins_are_handed_out_in_order(self, client, patient):
@@ -376,7 +376,7 @@ class TestSlots:
                     "phone": f"091300000{i:02d}",
                 },
             )
-            cabins.append(scheduling.allocate(pid, tomorrow(), "18:00")["cabin"])
+            cabins.append(scheduling.allocate(pid, tomorrow(), "16:00")["cabin"])
         assert sorted(cabins) == list(range(1, 11))
 
     def test_the_eleventh_booking_in_a_slot_is_refused(self, client, patient):
@@ -397,13 +397,13 @@ class TestSlots:
                     "phone": f"091400000{i:02d}",
                 },
             )
-            scheduling.allocate(pid, tomorrow(), "18:00")
+            scheduling.allocate(pid, tomorrow(), "16:00")
         with pytest.raises(Conflict) as exc:
-            scheduling.allocate(999999, tomorrow(), "18:00")
+            scheduling.allocate(999999, tomorrow(), "16:00")
         assert exc.value.code == "slot_full"
 
         r = client.post(
-            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "18:00"}
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
         )
         assert r.status_code == 409
         assert r.json()["error"]["code"] == "slot_full"
@@ -425,9 +425,9 @@ class TestSlots:
                     "phone": f"091500000{i:02d}",
                 },
             )
-            scheduling.allocate(pid, tomorrow(), "17:00")
+            scheduling.allocate(pid, tomorrow(), "17:30")
         g = client.get("/api/portal/slots?date=" + tomorrow()).json()
-        slot = next(s for s in g["slots"] if s["time"] == "17:00")
+        slot = next(s for s in g["slots"] if s["time"] == "17:30")
         assert slot["free"] == 0 and slot["full"] and slot["disabled"]
 
     @pytest.mark.parametrize("time_", ["09:00", "15:30", "22:00", "23:30"])
@@ -441,14 +441,14 @@ class TestSlots:
         from api.jalali import now_tehran
 
         past = (now_tehran().date() - dt.timedelta(days=1)).isoformat()
-        r = client.post("/api/portal/appointments", json={"slot_date": past, "slot_time": "18:00"})
+        r = client.post("/api/portal/appointments", json={"slot_date": past, "slot_time": "16:00"})
         assert r.status_code == 400
 
     def test_too_far_ahead_is_refused(self, client, patient):
         from api.jalali import now_tehran
 
         far = (now_tehran().date() + dt.timedelta(days=60)).isoformat()
-        r = client.post("/api/portal/appointments", json={"slot_date": far, "slot_time": "18:00"})
+        r = client.post("/api/portal/appointments", json={"slot_date": far, "slot_time": "16:00"})
         assert r.status_code == 400
 
     def test_cancelling_frees_the_cabin(self, client, patient):
@@ -474,20 +474,20 @@ class TestBooking:
 
         r = client.post(
             "/api/portal/appointments",
-            json={"slot_date": tomorrow(), "slot_time": "18:30", "note": "درد زانو"},
+            json={"slot_date": tomorrow(), "slot_time": "17:30", "note": "درد زانو"},
         )
         assert r.status_code == 201, r.text
         body = r.json()
         assert body["ok"] and body["sms_sent"] and body["cabin"] == 1
         sms = repo.select(SYSTEM, "sms_messages", where="kind = 'booked'")[0]
-        assert body["code"] in sms["body"] and "18:30" in sms["body"]
+        assert body["code"] in sms["body"] and "17:30" in sms["body"]
 
     def test_the_same_patient_cannot_double_book_one_slot(self, client, patient):
         client.post(
-            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "18:30"}
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "17:30"}
         )
         r = client.post(
-            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "18:30"}
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "17:30"}
         )
         assert r.status_code == 409
         assert r.json()["error"]["code"] == "duplicate_booking"
@@ -500,14 +500,14 @@ class TestBooking:
             client.post(
                 "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": t}
             ).status_code
-            for t in ("16:00", "16:30", "17:00", "17:30")
+            for t in ("16:00", "17:30", "19:00", "20:30")
         ]
         assert codes[:2] == [201, 201] and 429 in codes[2:]
 
     def test_anonymous_cannot_book(self, client):
         assert (
             client.post(
-                "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "18:00"}
+                "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
             ).status_code
             == 401
         )
@@ -519,7 +519,7 @@ class TestBooking:
 class TestDoctorPanel:
     def test_staff_see_the_full_record(self, owner_client, patient):
         owner_client.post(
-            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "18:00"}
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
         )
         items = owner_client.get("/api/admin/appointments").json()["items"]
         assert items
@@ -559,26 +559,26 @@ class TestDoctorPanel:
         from api.policies import SYSTEM
 
         book = owner_client.post(
-            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "18:00"}
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
         ).json()
         r = owner_client.patch(
             f"/api/admin/appointments/{book['code']}/move",
-            json={"slot_date": tomorrow(), "slot_time": "20:00"},
+            json={"slot_date": tomorrow(), "slot_time": "20:30"},
         )
         assert r.status_code == 200, r.text
         assert r.json()["sms_sent"]
         sms = repo.select(SYSTEM, "sms_messages", where="kind = 'rescheduled'")[0]
-        assert "18:00" in sms["body"] and "20:00" in sms["body"]
+        assert "16:00" in sms["body"] and "20:30" in sms["body"]
         g = owner_client.get("/api/portal/slots?date=" + tomorrow()).json()
-        assert next(s for s in g["slots"] if s["time"] == "18:00")["free"] == 10
-        assert next(s for s in g["slots"] if s["time"] == "20:00")["free"] == 9
+        assert next(s for s in g["slots"] if s["time"] == "16:00")["free"] == 10
+        assert next(s for s in g["slots"] if s["time"] == "20:30")["free"] == 9
 
     def test_a_failed_reschedule_leaves_the_original_intact(self, owner_client, patient):
         from api import repo, scheduling
         from api.policies import SYSTEM
 
         book = owner_client.post(
-            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "18:00"}
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
         ).json()
         for i in range(10):  # fill the target slot
             pid = repo.insert(
@@ -593,14 +593,14 @@ class TestDoctorPanel:
                     "phone": f"091600000{i:02d}",
                 },
             )
-            scheduling.allocate(pid, tomorrow(), "21:00")
+            scheduling.allocate(pid, tomorrow(), "20:30")
         r = owner_client.patch(
             f"/api/admin/appointments/{book['code']}/move",
-            json={"slot_date": tomorrow(), "slot_time": "21:00"},
+            json={"slot_date": tomorrow(), "slot_time": "20:30"},
         )
         assert r.status_code == 409
         still = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[book["code"]])[0]
-        assert still["status"] == "booked" and still["slot_time"] == "18:00"
+        assert still["status"] == "booked" and still["slot_time"] == "16:00"
 
     def test_next_session_is_booked_and_texted(self, owner_client, patient):
         from api import repo
@@ -609,21 +609,21 @@ class TestDoctorPanel:
         p = repo.select(SYSTEM, "patients")[0]
         r = owner_client.post(
             f"/api/admin/patients/{p['public_id']}/followup",
-            json={"slot_date": tomorrow(), "slot_time": "19:30", "note": "جلسه دوم"},
+            json={"slot_date": tomorrow(), "slot_time": "19:00", "note": "جلسه دوم"},
         )
         assert r.status_code == 201, r.text
         assert r.json()["sms_sent"]
         appt = repo.select(SYSTEM, "appointments", where="kind = 'followup'")[0]
-        assert appt["booked_by"] == "staff" and appt["slot_time"] == "19:30"
+        assert appt["booked_by"] == "staff" and appt["slot_time"] == "19:00"
         assert repo.select(SYSTEM, "sms_messages", where="kind = 'followup'")
 
     def test_staff_writes_need_csrf(self, owner_client, patient):
         book = owner_client.post(
-            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "18:00"}
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
         ).json()
         r = owner_client.patch(
             f"/api/admin/appointments/{book['code']}/move",
-            json={"slot_date": tomorrow(), "slot_time": "20:00"},
+            json={"slot_date": tomorrow(), "slot_time": "20:30"},
             headers={"X-CSRF-Token": "nope"},
         )
         assert r.status_code == 403
@@ -632,7 +632,7 @@ class TestDoctorPanel:
         from api import metrics
 
         book = owner_client.post(
-            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "18:00"}
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
         ).json()
         owner_client.patch(
             f"/api/admin/appointments/{book['code']}/status", json={"status": "attended"}
@@ -653,7 +653,7 @@ class TestReminders:
         from api.policies import SYSTEM
 
         client.post(
-            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "18:00"}
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
         )
         out = reminders.run_once(lead_min=60 * 24 * 7)
         assert out["due"] == 1 and out["sent"] == 1
@@ -665,7 +665,7 @@ class TestReminders:
         from api import reminders
 
         client.post(
-            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "18:00"}
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
         )
         reminders.run_once(lead_min=60 * 24 * 7)
         assert reminders.run_once(lead_min=60 * 24 * 7)["sent"] == 0
@@ -674,7 +674,7 @@ class TestReminders:
         from api import reminders
 
         client.post(
-            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "21:30"}
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "20:30"}
         )
         assert reminders.run_once(lead_min=5)["due"] == 0
 
@@ -684,7 +684,7 @@ class TestReminders:
         from api.policies import SYSTEM
 
         client.post(
-            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "18:00"}
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
         )
         out = reminders.handle_inbound("09121112233", reply)
         assert out["handled"] == "confirmed"
@@ -696,7 +696,7 @@ class TestReminders:
         from api.policies import SYSTEM
 
         client.post(
-            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "18:00"}
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
         )
         assert reminders.handle_inbound("09121112233", "2")["handled"] == "declined"
         assert repo.select(SYSTEM, "appointments")[0]["attendance"] == "not_coming"
@@ -859,11 +859,11 @@ class TestPortalPolicies:
                 "phone": "09170000001",
             },
         )
-        a = scheduling.allocate(pid, tomorrow(), "18:00")
+        a = scheduling.allocate(pid, tomorrow(), "16:00")
         with pytest.raises(sqlite3.IntegrityError):
             db.get_conn().execute(
                 "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin)"
-                " VALUES ('dupdupdup1', ?, ?, '18:00', ?)",
+                " VALUES ('dupdupdup1', ?, ?, '16:00', ?)",
                 (pid, tomorrow(), a["cabin"]),
             )
 
@@ -875,7 +875,7 @@ class TestPortalPolicies:
         with pytest.raises(sqlite3.IntegrityError):
             db.get_conn().execute(
                 "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin)"
-                " VALUES ('dupdupdup2', 1, '2026-10-05', '18:00', 11)"
+                " VALUES ('dupdupdup2', 1, '2026-10-05', '16:00', 11)"
             )
 
 
@@ -955,7 +955,7 @@ class TestTreatmentHistory:
         bp, tx = self._ids(owner_client)
         p = repo.select(SYSTEM, "patients")[0]
         book = owner_client.post(
-            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "18:00"}
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
         ).json()
         r = owner_client.post(
             f"/api/admin/patients/{p['public_id']}/sessions",
@@ -987,7 +987,7 @@ class TestTreatmentHistory:
         bp, tx = self._ids(owner_client)
         p = repo.select(SYSTEM, "patients")[0]
         book = owner_client.post(
-            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "18:00"}
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
         ).json()
         owner_client.post(
             f"/api/admin/patients/{p['public_id']}/sessions",
