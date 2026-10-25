@@ -213,22 +213,23 @@ async def close_clinic_day(
     available_dates = {day["date"] for day in scheduling.open_days()}
     if slot_date not in available_dates:
         raise BadRequest("فقط می‌توانید روزهای بازهٔ نوبت‌دهی را قفل کنید.")
-    if repo.count(
-        actor, "appointments",
-        where="slot_date = ? AND status = 'booked'", params=[slot_date],
-    ):
-        raise Conflict(
-            "برای این روز نوبت ثبت شده است؛ ابتدا نوبت‌های بیماران را تعیین تکلیف کنید.",
-            code="day_has_bookings",
+    with repo.tx():
+        if repo.count(
+            actor, "appointments",
+            where="slot_date = ? AND status = 'booked'", params=[slot_date],
+        ):
+            raise Conflict(
+                "برای این روز نوبت ثبت شده است؛ ابتدا نوبت‌های بیماران را تعیین تکلیف کنید.",
+                code="day_has_bookings",
+            )
+        if repo.select(
+            actor, "clinic_closed_days", where="slot_date = ?", params=[slot_date], limit=1,
+        ):
+            raise Conflict("این روز از قبل قفل شده است.", code="day_already_closed")
+        repo.insert(
+            actor, "clinic_closed_days",
+            {"slot_date": slot_date, "reason": reason, "created_by": actor.user_id},
         )
-    if repo.select(
-        actor, "clinic_closed_days", where="slot_date = ?", params=[slot_date], limit=1,
-    ):
-        raise Conflict("این روز از قبل قفل شده است.", code="day_already_closed")
-    repo.insert(
-        actor, "clinic_closed_days",
-        {"slot_date": slot_date, "reason": reason, "created_by": actor.user_id},
-    )
     audit.record(
         actor, "clinic.day_closed", "clinic_closed_day", slot_date,
         after={"date": slot_date, "reason": reason},
