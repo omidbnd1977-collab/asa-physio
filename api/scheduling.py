@@ -12,6 +12,7 @@ the same cabin.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import secrets
 
 from . import repo
@@ -48,14 +49,37 @@ def slot_datetime(slot_date: str, slot_time: str) -> dt.datetime:
     return dt.datetime(d.year, d.month, d.day, h, m, tzinfo=TEHRAN)
 
 
+def closed_days_map() -> dict[str, str]:
+    """Current closure state derived from immutable audit events (no schema change)."""
+    rows = repo.select(
+        SYSTEM,
+        "audit_logs",
+        columns=["action", "entity_id", "after_json"],
+        where="entity = ? AND action IN (?, ?)",
+        params=["clinic_closed_day", "clinic.day_closed", "clinic.day_reopened"],
+        order_by="id desc",
+        limit=5000,
+    )
+    closed: dict[str, str] = {}
+    seen: set[str] = set()
+    for row in rows:
+        day = row["entity_id"]
+        if day in seen:
+            continue
+        seen.add(day)
+        if row["action"] == "clinic.day_closed":
+            try:
+                reason = json.loads(row["after_json"]).get("reason", "")
+            except (TypeError, ValueError):
+                reason = ""
+            closed[day] = reason if isinstance(reason, str) else ""
+    return closed
+
+
 def open_days() -> list[dict[str, str | bool]]:
     """The dates a patient may pick, starting today (Tehran)."""
     today = now_tehran().date()
-    closed_rows = repo.select(
-        SYSTEM, "clinic_closed_days", columns=["slot_date", "reason"],
-        where="slot_date >= ?", params=[today.isoformat()],
-    )
-    closed = {r["slot_date"]: r["reason"] for r in closed_rows}
+    closed = closed_days_map()
     out = []
     for i in range(BOOKING_HORIZON_DAYS):
         d = today + dt.timedelta(days=i)
@@ -107,10 +131,7 @@ def validate_slot(slot_date: str, slot_time: str) -> dt.datetime:
 
 def is_closed_day(slot_date: str) -> bool:
     """Return whether staff have explicitly closed the clinic for this date."""
-    return bool(repo.select(
-        SYSTEM, "clinic_closed_days", columns=["slot_date"],
-        where="slot_date = ?", params=[slot_date], limit=1,
-    ))
+    return slot_date in closed_days_map()
 
 
 def taken_map(slot_date: str) -> dict[str, int]:
@@ -132,12 +153,9 @@ def day_grid(slot_date: str, *, for_patient: bool = True) -> dict[str, object]:
     taken = taken_map(slot_date)
     now = now_tehran()
     d = dt.date.fromisoformat(slot_date)
-    closure = repo.select(
-        SYSTEM, "clinic_closed_days", columns=["reason"],
-        where="slot_date = ?", params=[slot_date], limit=1,
-    )
-    closed = bool(closure)
-    closed_reason = closure[0]["reason"] if closure else ""
+    closures = closed_days_map()
+    closed = slot_date in closures
+    closed_reason = closures.get(slot_date, "")
     rows = []
     for t in SLOTS:
         used = taken.get(t, 0)
@@ -180,9 +198,7 @@ def allocate(
     validate_slot(slot_date, slot_time)
     public_id = secrets.token_hex(5)
     with repo.tx() as conn:
-        if conn.execute(
-            "SELECT 1 FROM clinic_closed_days WHERE slot_date = ?", (slot_date,)
-        ).fetchone():
+        if is_closed_day(slot_date):
             raise Conflict(
                 "کلینیک در این روز تعطیل است و امکان ثبت نوبت وجود ندارد.",
                 code="day_closed",
