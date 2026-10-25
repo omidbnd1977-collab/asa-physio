@@ -51,6 +51,11 @@ def slot_datetime(slot_date: str, slot_time: str) -> dt.datetime:
 def open_days() -> list[dict[str, str | bool]]:
     """The dates a patient may pick, starting today (Tehran)."""
     today = now_tehran().date()
+    closed_rows = repo.select(
+        SYSTEM, "clinic_closed_days", columns=["slot_date", "reason"],
+        where="slot_date >= ?", params=[today.isoformat()],
+    )
+    closed = {r["slot_date"]: r["reason"] for r in closed_rows}
     out = []
     for i in range(BOOKING_HORIZON_DAYS):
         d = today + dt.timedelta(days=i)
@@ -61,6 +66,8 @@ def open_days() -> list[dict[str, str | bool]]:
                 "jalali": to_jalali_str(d),
                 "label": to_jalali_long(d),
                 "is_today": i == 0,
+                "closed": iso in closed,
+                "closed_reason": closed.get(iso, ""),
             }
         )
     return out
@@ -84,6 +91,11 @@ def validate_slot(slot_date: str, slot_time: str) -> dt.datetime:
             f"فعلاً فقط تا {BOOKING_HORIZON_DAYS} روز آینده می‌توانید نوبت بگیرید.",
             fields={"slot_date": "خارج از بازه"},
         )
+    if is_closed_day(slot_date):
+        raise Conflict(
+            "کلینیک در این روز تعطیل است و امکان ثبت نوبت وجود ندارد.",
+            code="day_closed",
+        )
     when = slot_datetime(slot_date, slot_time)
     if when - now_tehran() < dt.timedelta(minutes=MIN_LEAD_MIN):
         raise BadRequest(
@@ -91,6 +103,14 @@ def validate_slot(slot_date: str, slot_time: str) -> dt.datetime:
             fields={"slot_time": "دیر است"},
         )
     return when
+
+
+def is_closed_day(slot_date: str) -> bool:
+    """Return whether staff have explicitly closed the clinic for this date."""
+    return bool(repo.select(
+        SYSTEM, "clinic_closed_days", columns=["slot_date"],
+        where="slot_date = ?", params=[slot_date], limit=1,
+    ))
 
 
 def taken_map(slot_date: str) -> dict[str, int]:
@@ -112,6 +132,12 @@ def day_grid(slot_date: str, *, for_patient: bool = True) -> dict[str, object]:
     taken = taken_map(slot_date)
     now = now_tehran()
     d = dt.date.fromisoformat(slot_date)
+    closure = repo.select(
+        SYSTEM, "clinic_closed_days", columns=["reason"],
+        where="slot_date = ?", params=[slot_date], limit=1,
+    )
+    closed = bool(closure)
+    closed_reason = closure[0]["reason"] if closure else ""
     rows = []
     for t in SLOTS:
         used = taken.get(t, 0)
@@ -125,7 +151,7 @@ def day_grid(slot_date: str, *, for_patient: bool = True) -> dict[str, object]:
                 "capacity": CABINS,
                 "full": free <= 0,
                 "past": too_soon,
-                "disabled": free <= 0 or too_soon,
+                "disabled": closed or free <= 0 or too_soon,
             }
         )
     return {
@@ -134,6 +160,8 @@ def day_grid(slot_date: str, *, for_patient: bool = True) -> dict[str, object]:
         "label": to_jalali_long(d),
         "capacity": DAY_CAPACITY,
         "booked": sum(taken.values()),
+        "closed": closed,
+        "closed_reason": closed_reason,
         "slots": rows,
     }
 
