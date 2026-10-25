@@ -39,6 +39,9 @@ jobs:
       - name: Lint
         run: ruff check api tests build_static.py
 
+      - name: Format diagnostic
+        run: ruff format --diff api tests build_static.py || true
+
       - name: Format check
         run: ruff format --check api tests build_static.py
 
