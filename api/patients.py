@@ -78,8 +78,12 @@ def save_upload(file: UploadFile | None, prefix: str) -> str:
         )
 
     ext = {
-        "jpeg": ".jpg", "png": ".png", "webp": ".webp", "pdf": ".pdf",
-        "dicom": ".dcm", "zip": ".zip",
+        "jpeg": ".jpg",
+        "png": ".png",
+        "webp": ".webp",
+        "pdf": ".pdf",
+        "dicom": ".dcm",
+        "zip": ".zip",
     }[kind]
     name = f"{prefix}-{hashlib.sha256(raw).hexdigest()[:16]}{ext}"
     settings.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
