@@ -808,7 +808,7 @@ class TestPortalPolicies:
         with pytest.raises(sqlite3.IntegrityError):
             db.get_conn().execute(
                 "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin)"
-                " VALUES ('dupdupdup1', ?, ?, '18:00', ?)",
+                " VALUES ('dupdupdup1', ?, ?, '16:00', ?)",
                 (pid, tomorrow(), a["cabin"]),
             )
 
@@ -820,7 +820,7 @@ class TestPortalPolicies:
         with pytest.raises(sqlite3.IntegrityError):
             db.get_conn().execute(
                 "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin)"
-                " VALUES ('dupdupdup2', 1, '2026-10-05', '18:00', 11)"
+                " VALUES ('dupdupdup2', 1, '2026-10-05', '16:00', 11)"
             )
 
 
