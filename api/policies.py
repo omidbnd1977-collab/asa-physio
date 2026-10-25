@@ -113,6 +113,13 @@ POLICIES: dict[str, TablePolicy] = {
         note="Staff may reschedule; only the owner may delete. Patients reach their own "
         "rows through the service layer, scoped by patient_id.",
     ),
+    "clinic_closed_days": TablePolicy(
+        select="staff",
+        insert="staff",
+        update="staff",
+        delete="staff",
+        note="Clinic closure dates are managed by authenticated staff; the booking service reads them through SYSTEM.",
+    ),
     "sms_messages": TablePolicy(
         select="staff",
         insert="system",
