@@ -68,6 +68,9 @@ def save_upload(file: UploadFile | None, prefix: str) -> str:
                 break
     if kind == "webp" and raw[8:12] != b"WEBP":
         kind = None
+    # DICOM/ZIP are accepted only for the MRI field, never for medication photos.
+    if kind in {"dicom", "zip"} and not prefix.startswith("mri-"):
+        kind = None
     if kind not in ALLOWED_IMAGE and kind not in {"pdf", "dicom", "zip"}:
         raise BadRequest(
             "فقط عکس (JPG، PNG، WEBP)، PDF، فایل DICOM یا ZIP حاوی تصاویر MRI قابل ارسال است.",
