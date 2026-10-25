@@ -1263,4 +1263,3 @@ def test_closed_day_controls_require_staff_authentication(client):
         json={"date": date},
     )
     assert response.status_code == 401
-
