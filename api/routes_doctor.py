@@ -176,7 +176,7 @@ async def grid(request: Request, date: str = "") -> dict[str, Any]:
 # --------------------------------------------------------------------------
 @router.get("/closed-days")
 async def list_closed_days(request: Request) -> dict[str, Any]:
-    actor = staff(request)
+    staff(request)
     days = scheduling.open_days()
     labels = {day["date"]: day["label"] for day in days}
     today = now_tehran().date().isoformat()
