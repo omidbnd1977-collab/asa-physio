@@ -70,6 +70,7 @@ def _clean():
         "sms_inbound",
         "sms_messages",
         "appointments",
+        "clinic_closed_days",
         "patient_sessions",
         "patients",
     ):
