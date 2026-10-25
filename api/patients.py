@@ -55,22 +55,29 @@ def save_upload(file: UploadFile | None, prefix: str) -> str:
     if not raw:
         return ""
 
-    # Sniff the real content. `imghdr` was removed in Python 3.13 and the client's
-    # filename is attacker-controlled, so magic bytes are the only thing we trust.
+    # Detect supported formats from their actual signatures; never trust filenames.
     kind = None
-    for magic, name in MAGIC.items():
-        if raw.startswith(magic):
-            kind = name
-            break
+    if raw.startswith(b"PK\x03\x04"):
+        kind = "zip"
+    elif len(raw) >= 132 and raw[128:132] == b"DICM":
+        kind = "dicom"
+    else:
+        for magic, name in MAGIC.items():
+            if raw.startswith(magic):
+                kind = name
+                break
     if kind == "webp" and raw[8:12] != b"WEBP":
         kind = None
-    if kind not in ALLOWED_IMAGE and kind != "pdf":
+    if kind not in ALLOWED_IMAGE and kind not in {"pdf", "dicom", "zip"}:
         raise BadRequest(
-            "فقط عکس (JPG، PNG، WEBP) یا فایل PDF قابل ارسال است.",
-            fields={"med_photo": "نوع فایل مجاز نیست"},
+            "فقط عکس (JPG، PNG، WEBP)، PDF، فایل DICOM یا ZIP حاوی تصاویر MRI قابل ارسال است.",
+            fields={"mri_file": "نوع فایل مجاز نیست"},
         )
 
-    ext = {"jpeg": ".jpg", "png": ".png", "webp": ".webp", "pdf": ".pdf"}[kind]
+    ext = {
+        "jpeg": ".jpg", "png": ".png", "webp": ".webp", "pdf": ".pdf",
+        "dicom": ".dcm", "zip": ".zip",
+    }[kind]
     name = f"{prefix}-{hashlib.sha256(raw).hexdigest()[:16]}{ext}"
     settings.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     (settings.UPLOAD_DIR / name).write_bytes(raw)
