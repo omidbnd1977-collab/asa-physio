@@ -369,7 +369,11 @@ async def mri_viewer(request: Request) -> Response:
 <body style="margin:0;background:#080b10;color:#f4f6f8;font:16px sans-serif;padding:32px;line-height:2">
 <h1>هنوز فایل MRI در پرونده ثبت نشده است</h1><p>هنگام ثبت‌نام می‌توانید فایل DICOM یا ZIP حاوی تصاویر MRI را ارسال کنید.</p>
 <a style="color:#8ee7df" href="/booking/reserve">بازگشت به پنل بیمار</a></body></html>"""
-        return Response(content=html, media_type="text/html; charset=utf-8", headers={"Cache-Control":"no-store"})
+        return Response(
+            content=html,
+            media_type="text/html; charset=utf-8",
+            headers={"Cache-Control": "no-store"},
+        )
     html = r"""<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
 <title>نمایش MRI | آسا فیزیو</title>
@@ -431,8 +435,14 @@ $('slice').max=slices.length-1;$('slice').disabled=false;setIdx(0);
 }catch(e){say(e.message||'خواندن فایل MRI ممکن نشد.')}
 })();
 </script></body></html>"""
-    return Response(content=html, media_type="text/html; charset=utf-8",
-                    headers={"Cache-Control":"no-store","X-Content-Type-Options":"nosniff"})
+    return Response(
+        content=html,
+        media_type="text/html; charset=utf-8",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.get("/mri/file")
@@ -441,6 +451,12 @@ async def mri_file(request: Request) -> Response:
     path = patients.upload_path(p.get("mri_file", ""))
     if not path:
         raise NotFound("فایل MRI در پرونده پیدا نشد.")
-    return Response(content=path.read_bytes(), media_type="application/octet-stream",
-                    headers={"Cache-Control":"private, no-store","X-Content-Type-Options":"nosniff",
-                             "Content-Disposition":'attachment; filename="mri-upload"'})
+    return Response(
+        content=path.read_bytes(),
+        media_type="application/octet-stream",
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": 'attachment; filename="mri-upload"',
+        },
+    )
