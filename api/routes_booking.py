@@ -411,7 +411,7 @@ if(!pe||!rows||!cols||![8,16].includes(bits)||rows*cols>16000000)return null;
 var ts=val(ds,'x00020010','1.2.840.10008.1.2');if(!['1.2.840.10008.1.2','1.2.840.10008.1.2.1'].includes(ts))return {unsupported:true,name:name};
 var count=rows*cols,bpc=bits/8;if(pe.length<count*bpc)return null;var dv=new DataView(arr.buffer,arr.byteOffset,arr.byteLength),vals=new Float64Array(count),mn=Infinity,mx=-Infinity;
 for(var i=0;i<count;i++){var v=bits===8?dv.getUint8(pe.dataOffset+i):dv.getUint16(pe.dataOffset+i*2,true);if(bits===16&&signed&&v>32767)v-=65536;vals[i]=v;mn=Math.min(mn,v);mx=Math.max(mx,v)}
-var ipp=val(ds,'x00200032','').split('\\\\').map(Number);
+var ipp=val(ds,'x00200032','').split('\\').map(Number);
 return {name:name,ds:ds,rows:rows,cols:cols,vals:vals,min:mn,max:mx,ipp:ipp,inst:num(ds,'x00200013',0),photo:val(ds,'x00280004','MONOCHROME2'),slope:Number(val(ds,'x00281053','1'))||1,intercept:Number(val(ds,'x00281052','0'))||0};}
 function draw(){var s=slices[idx];if(!s||s.unsupported){say('این فایل فشرده یا ناسازگار است و در این نسخه قابل نمایش نیست. فایل اصلی محفوظ مانده است.');return}
 canvas.style.display='block';$('status').style.display='none';canvas.width=s.cols;canvas.height=s.rows;var out=ctx.createImageData(s.cols,s.rows),lo=center-width/2,hi=center+width/2;
@@ -430,7 +430,7 @@ if(new Uint8Array(buf,0,Math.min(4,buf.byteLength))[0]===0x50){var zip=await JSZ
 for(var k=0;k<entries.length;k++){var f=entries[k];if(/\.(pdf|jpg|jpeg|png|webp)$/i.test(f.name))continue;var b=await f.async('arraybuffer');total+=b.byteLength;if(total>500*1024*1024)throw Error('حجم بازشده ZIP بیش از حد مجاز است.');var item=parse(b,f.name);if(item)list.push(item)}
 }else{var one=parse(buf,'MRI DICOM');if(one)list.push(one)}
 if(!list.length)throw Error('فایل DICOM قابل‌خواندن پیدا نشد.');list.sort(function(a,b){if(a.unsupported||b.unsupported)return 0;var az=a.ipp[2],bz=b.ipp[2];return Number.isFinite(az)&&Number.isFinite(bz)?az-bz:(a.inst||0)-(b.inst||0)});
-slices=list;var first=list.find(function(x){return !x.unsupported});if(first){center=Number(val(first.ds,'x00281050','40').split('\\\\')[0])||Math.round((first.min+first.max)/2);width=Number(val(first.ds,'x00281051','400').split('\\\\')[0])||Math.max(1,first.max-first.min);$('center').value=Math.max(-1000,Math.min(3000,center));$('width').value=Math.max(1,Math.min(4000,width))}
+slices=list;var first=list.find(function(x){return !x.unsupported});if(first){center=Number(val(first.ds,'x00281050','40').split('\\')[0])||Math.round((first.min+first.max)/2);width=Number(val(first.ds,'x00281051','400').split('\\')[0])||Math.max(1,first.max-first.min);$('center').value=Math.max(-1000,Math.min(3000,center));$('width').value=Math.max(1,Math.min(4000,width))}
 $('slice').max=slices.length-1;$('slice').disabled=false;setIdx(0);
 }catch(e){say(e.message||'خواندن فایل MRI ممکن نشد.')}
 })();
