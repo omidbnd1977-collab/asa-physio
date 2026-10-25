@@ -579,7 +579,17 @@ async function loadDays(){
     b.disabled=!!d.closed;
     if(d.closed) b.title=d.closed_reason||'کلینیک در این روز تعطیل است';
     const parts=d.label.split(' ');
-    b.innerHTML='<span>'+parts[0]+'</span><b>'+faDigits(parts[1])+'</b><span>'+(d.closed?'تعطیل':parts[2])+'</span>';
+    const weekday=document.createElement('span'); weekday.textContent=parts[0];
+    const dayNumber=document.createElement('b'); dayNumber.textContent=faDigits(parts[1]);
+    const month=document.createElement('span'); month.textContent=d.closed?'تعطیل':parts[2];
+    b.append(weekday,dayNumber,month);
+    if(d.closed && d.closed_reason){
+      const reason=document.createElement('span');
+      reason.className='closed-reason';
+      reason.textContent=d.closed_reason;
+      reason.style.cssText='display:block;font-size:.62rem;line-height:1.4;color:#fbbf24;white-space:normal;overflow-wrap:anywhere;margin-top:3px';
+      b.appendChild(reason);
+    }
     if(!d.closed) b.onclick=()=>pickDay(d.date);
     row.appendChild(b);
   });
