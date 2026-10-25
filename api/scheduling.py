@@ -180,6 +180,13 @@ def allocate(
     validate_slot(slot_date, slot_time)
     public_id = secrets.token_hex(5)
     with repo.tx() as conn:
+        if conn.execute(
+            "SELECT 1 FROM clinic_closed_days WHERE slot_date = ?", (slot_date,)
+        ).fetchone():
+            raise Conflict(
+                "کلینیک در این روز تعطیل است و امکان ثبت نوبت وجود ندارد.",
+                code="day_closed",
+            )
         rows = conn.execute(
             "SELECT cabin FROM appointments "
             "WHERE slot_date = ? AND slot_time = ? AND status != 'cancelled'",
