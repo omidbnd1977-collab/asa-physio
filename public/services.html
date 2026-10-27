@@ -29,6 +29,27 @@
 .svc.manual-featured:hover .manual-consult{transform:translateY(-2px);box-shadow:0 12px 30px rgba(45,212,191,.3)}
 @media(max-width:760px){.grid-3>.svc.manual-featured{grid-template-columns:1fr;min-height:0}.svc.manual-featured .manual-feature-image img{min-height:230px;max-height:300px}.svc.manual-featured .manual-feature-image:after{background:linear-gradient(0deg,rgba(4,16,31,.48),transparent 70%)}.svc.manual-featured .manual-feature-copy{padding:23px}.svc.manual-featured:hover{transform:none}}
 @media(prefers-reduced-motion:reduce){.svc.manual-featured,.svc.manual-featured img,.svc.manual-featured .manual-consult{transition:none}}
+
+/* Matching wide feature for acupuncture */
+.grid-3>.svc.acupuncture-featured{grid-column:1/-1;display:grid!important;direction:ltr;grid-template-columns:minmax(260px,.92fr) minmax(0,1.08fr);align-items:stretch;gap:0;padding:0!important;overflow:hidden;position:relative;min-height:310px;border:1px solid rgba(56,189,248,.72);border-radius:26px;background:linear-gradient(120deg,rgba(12,45,68,.96),rgba(4,16,31,.98) 72%);box-shadow:0 0 0 1px rgba(56,189,248,.12),0 24px 70px -34px rgba(56,189,248,.65);transition:transform .35s ease,box-shadow .35s ease,border-color .35s ease}
+.svc.acupuncture-featured .manual-feature-image{position:relative;min-height:100%;overflow:hidden;isolation:isolate}
+.svc.acupuncture-featured .manual-feature-image img{display:block;width:100%;height:100%;min-height:310px;object-fit:cover;object-position:center;transition:transform .7s ease}
+.svc.acupuncture-featured .manual-feature-image:after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,rgba(4,16,31,.08),rgba(4,16,31,.72)),linear-gradient(0deg,rgba(4,16,31,.55),transparent 55%);z-index:1}
+.svc.acupuncture-featured .manual-feature-copy{position:relative;padding:clamp(24px,4vw,46px);align-self:center;direction:rtl;text-align:right}
+.svc.acupuncture-featured .manual-feature-badge{display:inline-flex;align-items:center;gap:8px;padding:7px 13px;border:1px solid rgba(125,211,252,.48);border-radius:999px;background:rgba(8,47,58,.78);color:#7dd3fc;font-size:.8rem;font-weight:900;margin-bottom:15px}
+.svc.acupuncture-featured .manual-feature-badge:before{content:"";width:7px;height:7px;border-radius:50%;background:#7dd3fc;box-shadow:0 0 12px #38bdf8}
+.svc.acupuncture-featured h3{font-size:clamp(1.5rem,2.5vw,2.2rem);line-height:1.5;color:#bae6fd;font-weight:950;margin:0 0 12px;text-shadow:0 0 22px rgba(56,189,248,.16)}
+.svc.acupuncture-featured p{font-size:1rem;line-height:2;color:rgba(235,248,255,.86);max-width:680px;margin:0 0 20px}
+.svc.acupuncture-featured .manual-points{display:flex;flex-wrap:wrap;gap:9px;margin:0 0 23px}
+.svc.acupuncture-featured .manual-points span{font-size:.82rem;color:#e0f2fe;border:1px solid rgba(125,211,252,.2);background:rgba(56,189,248,.07);border-radius:999px;padding:6px 11px}
+.svc.acupuncture-featured .manual-consult{display:inline-flex;align-items:center;justify-content:center;gap:10px;padding:12px 20px;border-radius:14px;background:linear-gradient(110deg,#bae6fd,#38bdf8);color:#04202b;font-weight:950;box-shadow:0 8px 28px rgba(56,189,248,.22);transition:transform .2s ease,box-shadow .2s ease}
+.svc.acupuncture-featured .manual-consult svg{width:19px;height:19px;flex-shrink:0}
+.svc.acupuncture-featured:hover{transform:translateY(-5px);border-color:#bae6fd;box-shadow:0 0 0 4px rgba(56,189,248,.12),0 30px 76px -34px rgba(56,189,248,.85)}
+.svc.acupuncture-featured:hover .manual-feature-image img{transform:scale(1.055)}
+.svc.acupuncture-featured:hover .manual-consult{transform:translateY(-2px);box-shadow:0 12px 30px rgba(56,189,248,.3)}
+@media(max-width:760px){.grid-3>.svc.acupuncture-featured{grid-template-columns:1fr;min-height:0}.svc.acupuncture-featured .manual-feature-image img{min-height:230px;max-height:300px}.svc.acupuncture-featured .manual-feature-image:after{background:linear-gradient(0deg,rgba(4,16,31,.48),transparent 70%)}.svc.acupuncture-featured .manual-feature-copy{padding:23px}.svc.acupuncture-featured:hover{transform:none}}
+@media(prefers-reduced-motion:reduce){.svc.acupuncture-featured,.svc.acupuncture-featured img,.svc.acupuncture-featured .manual-consult{transition:none}}
+
 </style>
 
 </head>
@@ -132,6 +153,24 @@
         </div>
       </article>
 
+      <article class="svc acupuncture-featured rv" aria-label="خدمت ویژه طب سوزنی">
+        <div class="manual-feature-image">
+          <img src="assets/hands.d60e97b3ae.jpg" alt="درمان مکمل و مراقبت تخصصی در فیزیوتراپی" loading="lazy">
+        </div>
+        <div class="manual-feature-copy">
+          <span class="manual-feature-badge">درمان مکمل آسا فیزیو</span>
+          <h3>طب سوزنی | مدیریت هدفمند درد</h3>
+          <p>طب سوزنی با استفاده از سوزن‌های بسیار ظریف و یک‌بارمصرف، در موارد منتخب می‌تواند به‌عنوان درمان مکمل برای مدیریت برخی دردهای عضلانی‌اسکلتی و کمک به برنامه توانبخشی استفاده شود. مناسب‌بودن این روش پس از بررسی شرایط هر فرد مشخص می‌شود.</p>
+          <div class="manual-points" aria-label="موارد استفاده طب سوزنی">
+            <span>مدیریت برخی دردهای مزمن</span><span>کمک به کاهش تنش عضلانی</span><span>درمان مکمل و اختصاصی</span>
+          </div>
+          <a class="manual-consult" href="service-detail.html?service=acupuncture" aria-label="مشاهده جزئیات طب سوزنی">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8A8.5 8.5 0 0 1 8.7 3.9a8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8z"/></svg>
+            مشاهده جزئیات
+          </a>
+        </div>
+      </article>
+
       <a class="svc tilt rv" href="service-detail.html?service=laser" style="display:block;color:inherit;text-decoration:none" aria-label="مشاهده جزئیات لیزر پرتوان">
         <span class="num">01</span>
         <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 1.6v3.4M12 19v3.4M1.6 12H5M19 12h3.4M4.6 4.6L7 7M17 17l2.4 2.4M19.4 4.6L17 7M7 17l-2.4 2.4"/></svg></div>
@@ -155,12 +194,7 @@
 
 
 
-      <a class="svc tilt rv d1" href="service-detail.html?service=acupuncture" style="display:block;color:inherit;text-decoration:none" aria-label="مشاهده جزئیات طب سوزنی">
-        <span class="num">05</span>
-        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 3L9.5 14.5"/><path d="M14.5 3H21v6.5"/><circle cx="6.5" cy="17.5" r="3.5"/></svg></div>
-        <h3>طب سوزنی</h3>
-        <p>سوزن‌درمانی هدفمند برای کنترل درد مزمن، کاهش اسپاسم عضلانی و تنظیم عملکرد سیستم عصبی به‌صورت مکمل درمان.</p>
-      </a>
+      
 
       <a class="svc tilt rv d2" href="contact.html" style="display:block;color:inherit;text-decoration:none" aria-label="مشاهده جزئیات مشاوره رایگان">
         <span class="num">06</span>
