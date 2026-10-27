@@ -9,39 +9,26 @@
 <link rel="stylesheet" href="style.113cd69c52.css">
 
 <style>
-/* Highlight manual therapy as a featured service without changing the site's theme. */
-.svc.manual-featured{
-  position:relative;
-  border:2px solid rgba(45,212,191,.9);
-  background:linear-gradient(145deg,rgba(20,83,94,.48),rgba(5,20,36,.88));
-  box-shadow:0 0 0 3px rgba(45,212,191,.12),0 18px 48px -24px rgba(45,212,191,.72);
-  transform:translateY(-5px);
-}
-.svc.manual-featured::before{
-  content:"خدمت ویژه";
-  position:absolute;
-  top:14px;
-  left:14px;
-  padding:5px 10px;
-  border:1px solid rgba(127,243,224,.55);
-  border-radius:999px;
-  background:rgba(8,47,58,.92);
-  color:#7ff3e0;
-  font-size:.76rem;
-  font-weight:900;
-  letter-spacing:0;
-}
-.svc.manual-featured h3{
-  color:#7ff3e0;
-  font-weight:900;
-  text-shadow:0 0 18px rgba(45,212,191,.18);
-}
-.svc.manual-featured .num{color:#7ff3e0;font-weight:900}
-.svc.manual-featured:hover{
-  border-color:#7ff3e0;
-  box-shadow:0 0 0 4px rgba(45,212,191,.16),0 24px 60px -24px rgba(45,212,191,.85);
-}
-@media(max-width:760px){.svc.manual-featured{transform:none}}
+/* Wide editorial feature for manual therapy */
+.grid-3>.svc.manual-featured{grid-column:1/-1;display:grid!important;grid-template-columns:minmax(260px,.92fr) minmax(0,1.08fr);align-items:stretch;gap:0;padding:0!important;overflow:hidden;position:relative;min-height:310px;border:1px solid rgba(45,212,191,.8);border-radius:26px;background:linear-gradient(120deg,rgba(12,52,68,.96),rgba(4,16,31,.98) 72%);box-shadow:0 0 0 1px rgba(45,212,191,.12),0 24px 70px -34px rgba(45,212,191,.72);transition:transform .35s ease,box-shadow .35s ease,border-color .35s ease}
+.svc.manual-featured .manual-feature-image{position:relative;min-height:100%;overflow:hidden;isolation:isolate}
+.svc.manual-featured .manual-feature-image img{display:block;width:100%;height:100%;min-height:310px;object-fit:cover;object-position:center;transition:transform .7s ease}
+.svc.manual-featured .manual-feature-image:after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,rgba(4,16,31,.08),rgba(4,16,31,.72)),linear-gradient(0deg,rgba(4,16,31,.55),transparent 55%);z-index:1}
+.svc.manual-featured .manual-feature-copy{position:relative;padding:clamp(24px,4vw,46px);align-self:center}
+.svc.manual-featured .manual-feature-badge{display:inline-flex;align-items:center;gap:8px;padding:7px 13px;border:1px solid rgba(127,243,224,.48);border-radius:999px;background:rgba(8,47,58,.78);color:#7ff3e0;font-size:.8rem;font-weight:900;margin-bottom:15px}
+.svc.manual-featured .manual-feature-badge:before{content:"";width:7px;height:7px;border-radius:50%;background:#7ff3e0;box-shadow:0 0 12px #2dd4bf}
+.svc.manual-featured .num{display:block;color:#7ff3e0;font-weight:900;font-size:.9rem;margin-bottom:7px}
+.svc.manual-featured h3{font-size:clamp(1.5rem,2.5vw,2.2rem);line-height:1.5;color:#9ff9eb;font-weight:950;margin:0 0 12px;text-shadow:0 0 22px rgba(45,212,191,.16)}
+.svc.manual-featured p{font-size:1rem;line-height:2;color:rgba(235,248,255,.86);max-width:680px;margin:0 0 20px}
+.svc.manual-featured .manual-points{display:flex;flex-wrap:wrap;gap:9px;margin:0 0 23px}
+.svc.manual-featured .manual-points span{font-size:.82rem;color:#d8fff7;border:1px solid rgba(127,243,224,.2);background:rgba(45,212,191,.07);border-radius:999px;padding:6px 11px}
+.svc.manual-featured .manual-consult{display:inline-flex;align-items:center;justify-content:center;gap:10px;padding:12px 20px;border-radius:14px;background:linear-gradient(110deg,#7ff3e0,#2dd4bf);color:#04202b;font-weight:950;box-shadow:0 8px 28px rgba(45,212,191,.22);transition:transform .2s ease,box-shadow .2s ease}
+.svc.manual-featured .manual-consult svg{width:19px;height:19px;flex-shrink:0}
+.svc.manual-featured:hover{transform:translateY(-5px);border-color:#9ff9eb;box-shadow:0 0 0 4px rgba(45,212,191,.12),0 30px 76px -34px rgba(45,212,191,.9)}
+.svc.manual-featured:hover .manual-feature-image img{transform:scale(1.055)}
+.svc.manual-featured:hover .manual-consult{transform:translateY(-2px);box-shadow:0 12px 30px rgba(45,212,191,.3)}
+@media(max-width:760px){.grid-3>.svc.manual-featured{grid-template-columns:1fr;min-height:0}.svc.manual-featured .manual-feature-image img{min-height:230px;max-height:300px}.svc.manual-featured .manual-feature-image:after{background:linear-gradient(0deg,rgba(4,16,31,.48),transparent 70%)}.svc.manual-featured .manual-feature-copy{padding:23px}.svc.manual-featured:hover{transform:none}}
+@media(prefers-reduced-motion:reduce){.svc.manual-featured,.svc.manual-featured img,.svc.manual-featured .manual-consult{transition:none}}
 </style>
 
 </head>
@@ -148,12 +135,24 @@
         <p>انتقال انرژی مقاومتی (TECAR) برای گرمایش عمقی، افزایش خون‌رسانی و شتاب‌بخشی به روند ترمیم و بازتوانی.</p>
       </a>
 
-      <a class="svc tilt rv manual-featured" href="service-detail.html?service=manual" style="display:block;color:inherit;text-decoration:none" aria-label="مشاهده جزئیات درمان‌های دستی">
-        <span class="num">04</span>
-        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8.5 13V4.8a1.6 1.6 0 1 1 3.2 0V11m0-1.2a1.6 1.6 0 1 1 3.2 0V12m0-1a1.6 1.6 0 1 1 3.2 0v5.2A5.8 5.8 0 0 1 12.3 22h-.6a5.6 5.6 0 0 1-4.3-2l-3.1-4a1.7 1.7 0 0 1 2.6-2.1L8.5 16"/></svg></div>
-        <h3>درمان‌های دستی</h3>
-        <p>منوال‌تراپی، موبیلیزاسیون و منیپولیشن مفاصل، تکنیک‌های بافت نرم و درای‌نیدلینگ برای آزادسازی محدودیت‌های حرکتی.</p>
-      </a>
+      <article class="svc manual-featured rv" aria-label="خدمت ویژه منوال‌تراپی">
+        <div class="manual-feature-image">
+          <img src="assets/hands.d60e97b3ae.jpg" alt="درمان دستی تخصصی توسط فیزیوتراپیست برای بهبود حرکت و کاهش خشکی مفاصل" loading="lazy">
+        </div>
+        <div class="manual-feature-copy">
+          <span class="manual-feature-badge">خدمت ویژه آسا فیزیو</span>
+          <span class="num">04 — درمان تخصصی</span>
+          <h3>منوال‌تراپی | درمان دستی تخصصی</h3>
+          <p>با تکنیک‌های هدفمند درمان دستی، به کاهش خشکی، بهبود دامنه حرکتی و حرکت راحت‌تر در فعالیت‌های روزمره کمک می‌کنیم. برنامه درمان پس از ارزیابی شرایط شما تنظیم می‌شود.</p>
+          <div class="manual-points" aria-label="مزایای درمان دستی">
+            <span>بهبود حرکت مفاصل</span><span>کاهش گرفتگی عضلات</span><span>برنامه درمان اختصاصی</span>
+          </div>
+          <a class="manual-consult" href="contact.html" aria-label="دریافت مشاوره رایگان درباره منوال‌تراپی">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8A8.5 8.5 0 0 1 8.7 3.9a8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8z"/></svg>
+            مشاوره رایگان
+          </a>
+        </div>
+      </article>
 
       <a class="svc tilt rv d1" href="service-detail.html?service=acupuncture" style="display:block;color:inherit;text-decoration:none" aria-label="مشاهده جزئیات طب سوزنی">
         <span class="num">05</span>
