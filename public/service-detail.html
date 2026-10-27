@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#04101f">
+<title>جزئیات خدمات | آسا فیزیو کلینیک قشم</title>
+<meta name="description" content="آشنایی با روش‌های درمانی فیزیوتراپی در آسا فیزیو قشم، مزایا و مشکلات قابل کمک با هر روش.">
+<link rel="stylesheet" href="style.113cd69c52.css">
+<style>
+.service-detail-wrap{max-width:1050px;margin:0 auto;padding:34px 0 80px}
+.detail-hero{display:grid;grid-template-columns:1fr 1fr;gap:32px;align-items:center}
+.detail-image{border:1px solid var(--line);border-radius:26px;overflow:hidden;background:linear-gradient(155deg,rgba(14,52,84,.62),rgba(5,20,36,.5));box-shadow:0 28px 70px -35px #000}
+.detail-image img{display:block;width:100%;aspect-ratio:4/3;object-fit:cover}
+.detail-copy .tagline{display:inline-block;margin-bottom:12px}
+.detail-copy h1{font-size:clamp(1.8rem,4vw,3rem);line-height:1.4;margin:0 0 16px}
+.detail-copy p{color:var(--muted);line-height:2}
+.detail-panel{margin-top:30px;padding:26px;border:1px solid var(--line);border-radius:24px;background:linear-gradient(155deg,rgba(14,52,84,.55),rgba(5,20,36,.55))}
+.detail-panel h2{font-size:1.35rem;margin:0 0 14px;color:#dff1fa}
+.detail-panel ul{margin:0;padding-right:22px;color:var(--muted);line-height:2.2}
+.detail-panel li::marker{color:var(--glow)}
+.detail-actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:22px}
+.detail-actions .btn{display:inline-flex;align-items:center;justify-content:center}
+.detail-notice{font-size:.88rem;color:var(--muted);line-height:2;margin-top:18px}
+@media(max-width:760px){.service-detail-wrap{width:92%;padding-top:22px}.detail-hero{grid-template-columns:1fr;gap:22px}.detail-image{order:-1}.detail-panel{padding:20px}}
+</style>
+</head>
+<body>
+<div class="ocean"></div><div class="caustics"></div><div class="beams"><i></i><i></i><i></i><i></i></div><div class="grid-lines"></div><div class="bubbles" id="bubbles"></div><div class="progress" id="progress"></div>
+<div class="topbar"><div class="wrap"><div class="t-l"><span class="pill-live"><i class="dot"></i> <b>مشاوره رایگان</b> — همین امروز وقت بگیرید</span><span>جزیره قشم، ساختمان محسنین، طبقه دوم</span></div><div class="t-l"><a href="tel:+989024648159" dir="ltr">۰۹۰۲ ۴۶ ۴۸ ۱۵۹</a><a href="https://instagram.com/asa_physio_clinic" target="_blank" rel="noopener" dir="ltr">@asa_physio_clinic</a></div></div></div>
+<header class="nav" id="nav"><div class="wrap nav-in">
+<a href="index.html" class="brand"><span class="brand-tx"><b>آسا فیزیو کلینیک</b><span>ASA PHYSIO</span></span></a>
+<nav class="menu" id="menu"><a href="index.html">خانه</a><a href="services.html" class="active">خدمات</a><a href="treatments.html">حوزه‌های درمان</a><a href="about.html">درباره ما</a><a href="gallery.html">گالری</a><a href="faq.html">سوالات</a><a href="contact.html">تماس</a></nav>
+<div class="nav-cta"><a class="btn btn-primary" href="/booking">رزرو نوبت</a><button class="burger" id="burger" aria-label="منو"><i></i><i></i><i></i></button></div>
+</div></header>
+<main class="page on">
+<div class="crumbbar"><div class="wrap"><a href="index.html">خانه</a><i>/</i><a href="services.html">خدمات</a><i>/</i><b id="crumbTitle">جزئیات خدمت</b></div></div>
+<section class="sec"><div class="service-detail-wrap">
+<div class="detail-hero"><div class="detail-copy"><span class="tagline">ASA PHYSIO — خدمات تخصصی</span><h1 id="serviceTitle">خدمات تخصصی فیزیوتراپی</h1><p id="serviceIntro"></p><div class="detail-actions"><a class="btn btn-primary" href="/booking">رزرو نوبت</a><a class="btn btn-ghost" href="services.html">بازگشت به خدمات</a></div></div><div class="detail-image"><img id="serviceImage" src="assets/hands.d60e97b3ae.jpg" alt="خدمات فیزیوتراپی آسا فیزیو"></div></div>
+<div class="detail-panel"><h2>مزایای احتمالی این روش</h2><ul id="benefits"></ul></div>
+<div class="detail-panel"><h2>دردها و مشکلاتی که ممکن است کمک‌کننده باشد</h2><ul id="conditions"></ul></div>
+<p class="detail-notice">انتخاب روش درمان به ارزیابی فیزیوتراپیست، علت و شدت علائم و شرایط پزشکی شما بستگی دارد. این روش‌ها برای همه افراد مناسب نیستند و جایگزین ارزیابی تخصصی نمی‌شوند.</p>
+</div></section>
+</main>
+<script>
+const services={
+manual:{title:"منوال‌تراپی (درمان دستی)",image:"assets/hands.d60e97b3ae.jpg",alt:"درمان دستی مفاصل و بافت نرم",intro:"منوال‌تراپی مجموعه‌ای از تکنیک‌های دستی تخصصی برای بهبود حرکت مفاصل و بافت‌های نرم است و معمولاً در کنار تمرین‌درمانی به‌کار می‌رود.",benefits:["کمک به کاهش درد و خشکی مفاصل","بهبود دامنه حرکتی و انعطاف‌پذیری","کاهش گرفتگی و حساسیت بافت‌های نرم","کمک به انجام راحت‌تر تمرین‌ها و فعالیت‌های روزمره"],conditions:["گردن‌درد و کمردرد مکانیکی","خشکی شانه و محدودیت حرکتی","درد و خشکی مفاصل پس از بی‌حرکتی","برخی دردهای عضلانی و اختلالات حرکتی"]},
+acupuncture:{title:"طب سوزنی",image:"assets/hands.d60e97b3ae.jpg",alt:"درمان مکمل در فیزیوتراپی",intro:"طب سوزنی با استفاده از سوزن‌های بسیار ظریف و یک‌بارمصرف، در موارد منتخب به‌عنوان درمان مکمل برای مدیریت درد استفاده می‌شود.",benefits:["ممکن است به کاهش برخی دردهای عضلانی‌اسکلتی کمک کند","کمک به مدیریت درد مزمن در برخی افراد","ممکن است به کاهش تنش عضلانی کمک کند","قابل ترکیب با برنامه توانبخشی در صورت مناسب بودن"],conditions:["برخی انواع کمردرد و گردن‌درد","دردهای عضلانی و نقاط حساس","برخی دردهای مزمن مفصلی","سردردهای منتخب پس از بررسی علت و شرایط فرد"]},
+shockwave:{title:"شاک‌ویو تراپی",image:"assets/heel.786b3b3268.jpg",alt:"درمان شاک‌ویو برای دردهای تاندونی و پاشنه",intro:"شاک‌ویو از امواج مکانیکی برای تحریک بافت در ناحیه هدف استفاده می‌کند و در برخی مشکلات تاندونی مزمن، به‌عنوان بخشی از برنامه درمان به‌کار می‌رود.",benefits:["کمک به کاهش درد در برخی مشکلات تاندونی مزمن","پشتیبانی از روند بازتوانی همراه با تمرین‌درمانی","روش غیرجراحی برای برخی مشکلات بافت نرم","جلسات معمولاً کوتاه هستند؛ میزان پاسخ در افراد متفاوت است"],conditions:["درد کف پا و فاشیای پلانتار (که گاهی خار پاشنه نامیده می‌شود)","برخی تاندینوپاتی‌های آشیل","برخی دردهای مزمن اطراف آرنج","برخی مشکلات تاندونی شانه پس از ارزیابی"]},
+tecar:{title:"تکار تراپی",image:"assets/clinic.9c931175d3.jpg",alt:"محیط درمان فیزیوتراپی و تجهیزات کلینیک",intro:"تکار تراپی از انرژی فرکانس رادیویی برای ایجاد اثرات حرارتی کنترل‌شده در بافت استفاده می‌کند و می‌تواند در موارد منتخب در کنار درمان فعال به‌کار رود.",benefits:["کمک به کاهش موقت درد و احساس خشکی در برخی افراد","افزایش راحتی حرکتی پیش از تمرین در موارد مناسب","قابل استفاده در برنامه بازتوانی با توجه به هدف درمان","انتخاب شدت و روش بر اساس ارزیابی و شرایط فرد"],conditions:["برخی دردهای عضلانی","خشکی و محدودیت حرکتی منتخب","برخی آسیب‌های ورزشی بافت نرم","دردهای اسکلتی‌عضلانی که درمانگر پس از ارزیابی مناسب بداند"]},
+laser:{title:"لیزر پرتوان",image:"assets/laser.f37ba9c58e.jpg",alt:"تجهیزات لیزر در فیزیوتراپی",intro:"لیزر پرتوان در فیزیوتراپی برای اثرگذاری بر بافت‌های هدف و مدیریت برخی دردها استفاده می‌شود؛ نتیجه و مناسب‌بودن آن به نوع مشکل و شرایط فرد بستگی دارد.",benefits:["ممکن است به کاهش درد در برخی شرایط کمک کند","روش غیرتهاجمی و بدون نیاز به جراحی","می‌تواند به‌عنوان مکمل تمرین‌درمانی استفاده شود","برنامه و دوز درمان بر اساس ارزیابی تنظیم می‌شود"],conditions:["برخی دردهای عضلانی‌اسکلتی","برخی مشکلات تاندونی و بافت نرم","برخی دردهای اطراف مفاصل","آسیب‌های منتخب ورزشی پس از ارزیابی"]}
+};
+const key=new URLSearchParams(location.search).get("service");
+const s=services[key]||services.manual;
+document.title=s.title+" | آسا فیزیو کلینیک قشم";
+document.getElementById("serviceTitle").textContent=s.title;
+document.getElementById("crumbTitle").textContent=s.title;
+document.getElementById("serviceIntro").textContent=s.intro;
+document.getElementById("serviceImage").src=s.image;
+document.getElementById("serviceImage").alt=s.alt;
+for(const [id,items] of [["benefits",s.benefits],["conditions",s.conditions]]){const ul=document.getElementById(id);items.forEach(item=>{const li=document.createElement("li");li.textContent=item;ul.appendChild(li);});}
+const burger=document.getElementById("burger"),menu=document.getElementById("menu");
+if(burger&&menu)burger.addEventListener("click",()=>menu.classList.toggle("open"));
+window.addEventListener("scroll",()=>document.getElementById("nav").classList.toggle("scrolled",window.scrollY>24),{passive:true});
+</script>
+</body></html>
