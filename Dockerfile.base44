@@ -1,0 +1,12 @@
+# Base44 preview — dependencies only. The repository is bind-mounted at /srv by
+# docker-compose.base44.yml, so every edit is live and nothing is baked into the image.
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /srv
+
+COPY requirements.txt ./
+RUN pip install -r requirements.txt

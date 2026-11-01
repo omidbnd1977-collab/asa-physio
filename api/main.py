@@ -10,6 +10,7 @@ import datetime as dt
 import hashlib
 import json
 import mimetypes
+import os
 import pathlib
 import secrets
 import time
@@ -702,6 +703,11 @@ def _serve_static(rel: str) -> Response:
     cc = cache.policy_for_path(
         rel, fingerprinted, settings.STATIC_IMMUTABLE_MAX_AGE, settings.HTML_MAX_AGE
     )
+    # Sandbox preview only (BASE44_PREVIEW_MODE=1): assets are served straight from
+    # site/ without fingerprints, so an hour-long max-age would hide every CSS/JS edit.
+    # Unset or any other value keeps the production cache policy exactly as it was.
+    if os.getenv("BASE44_PREVIEW_MODE") == "1" and not fingerprinted:
+        cc = "no-store"
     ctype = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
     return FileResponse(target, media_type=ctype, headers={"ETag": etag, "Cache-Control": cc})
 
@@ -711,7 +717,11 @@ async def static_site(full_path: str, request: Request) -> Response:
     if full_path.startswith("api/"):
         raise NotFound()
     if full_path in ("", "/"):
-        full_path = "index.html"
+        # The dental landing template is the public home page. Bundles that do not
+        # ship it (public/ built from an earlier site) keep serving the original index.
+        full_path = (
+            "dental.html" if (settings.STATIC_DIR / "dental.html").is_file() else "index.html"
+        )
     if not settings.STATIC_DIR.exists():
         return HTMLResponse(
             "<h1>static build missing — run: python3 build_static.py</h1>", status_code=503

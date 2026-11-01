@@ -1,0 +1,42 @@
+# Base44 development stack for the public site + booking API.
+#
+# Development only: no prebuilt app image, the repository is bind-mounted, and the
+# server runs with --reload. The public entry point must stay on host port 3000.
+#
+#   docker compose -f docker-compose.base44.yml up -d --build
+name: base44-preview
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.base44
+    restart: on-failure
+    working_dir: /srv
+    command:
+      - sh
+      - -ec
+      - exec python -m uvicorn api.main:app --host 0.0.0.0 --port 3000 --reload --reload-dir /srv/api
+    ports:
+      - "3000:3000"
+    environment:
+      # Passed through bare by the platform; the app only reads it to gate
+      # sandbox-only behaviour, so a missing value keeps the original behaviour.
+      BASE44_PREVIEW_MODE:
+      STATIC_DIR: /srv/site
+    env_file:
+      # Placeholders first, platform-delivered secrets last (last one wins).
+      - ./.env.base44-defaults
+      - /run/base44/app.env
+    volumes:
+      - .:/srv
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request;urllib.request.urlopen('http://127.0.0.1:3000/api/readyz',timeout=3)
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
