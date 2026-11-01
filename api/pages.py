@@ -263,9 +263,9 @@ REGISTER_BODY = """
     <div class="grid2" style="margin-top:16px">
       <label class="filebox" id="mriBox" for="mri_file">
         <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 15l5-5 4 4 3-3 6 6"/><circle cx="9" cy="8" r="1.4"/></svg>
-        <b id="mriLabel">ارسال عکس MRI</b>
-        <span id="mriHint">عکس یا PDF — حداکثر ۵ مگابایت (اختیاری)</span>
-        <input type="file" id="mri_file" accept="image/jpeg,image/png,image/webp,application/pdf">
+        <b id="mriLabel">ارسال تصاویر MRI</b>
+        <span id="mriHint">عکس، PDF، DICOM یا ZIP — حداکثر ۵۰ مگابایت (اختیاری)</span>
+        <input type="file" id="mri_file" accept=".dcm,.dicom,.ima,.zip,application/dicom,application/zip,image/jpeg,image/png,image/webp,application/pdf">
       </label>
       <label class="filebox" id="fileBox" for="med_photo">
         <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5M12 3v12"/></svg>
@@ -302,16 +302,16 @@ attachDateMask($('#birth_date'));
     .replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
     .replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/[^\d+]/g,'');});
 });
-function wireFile(inputId,boxId,labelId,hintId,idleLabel){
+function wireFile(inputId,boxId,labelId,hintId,idleLabel,maxBytes=5*1024*1024,helpText='عکس یا PDF — حداکثر ۵ مگابایت (اختیاری)'){
   const inp=document.getElementById(inputId), box=document.getElementById(boxId);
   if(!inp) return inp;
   inp.addEventListener('change',()=>{
     const f=inp.files[0];
     if(!f){box.classList.remove('has');
       document.getElementById(labelId).textContent=idleLabel;
-      document.getElementById(hintId).textContent='عکس یا PDF — حداکثر ۵ مگابایت (اختیاری)';
+      document.getElementById(hintId).textContent=helpText;
       return;}
-    if(f.size>5*1024*1024){inp.value='';flash('حجم فایل بیشتر از ۵ مگابایت است.',true);return;}
+    if(f.size>maxBytes){inp.value='';flash('حجم فایل بیشتر از حد مجاز است.',true);return;}
     box.classList.add('has');
     document.getElementById(labelId).textContent='✓ '+f.name;
     document.getElementById(hintId).textContent=
@@ -320,7 +320,7 @@ function wireFile(inputId,boxId,labelId,hintId,idleLabel){
   return inp;
 }
 const fileInput=wireFile('med_photo','fileBox','fileLabel','fileHint','ارسال عکس داروهای مصرفی');
-const mriInput =wireFile('mri_file','mriBox','mriLabel','mriHint','ارسال عکس MRI');
+const mriInput =wireFile('mri_file','mriBox','mriLabel','mriHint','ارسال تصاویر MRI',50*1024*1024,'عکس، PDF، DICOM یا ZIP — حداکثر ۵۰ مگابایت (اختیاری)');
 
 function nidValid(v){
   if(!/^\d{10}$/.test(v)||/^(\d)\1{9}$/.test(v))return false;
@@ -460,6 +460,7 @@ RESERVE_BODY = """
     ساعت‌هایی که کم‌رنگ هستند پر شده‌اند و قابل انتخاب نیستند.
   </p>
 
+  <p class="hint" style="margin:0 0 16px"><a href="/api/portal/mri/viewer" style="color:var(--glow)">باز کردن نمایشگر MRI پرونده ←</a></p>
   <div id="dayLoading"><div class="skel" style="height:72px"></div></div>
   <div id="dayError" class="state error hidden"></div>
   <div class="dayrow hidden" id="dayRow"></div>
