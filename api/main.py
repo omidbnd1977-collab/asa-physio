@@ -6,6 +6,7 @@ Middleware order (outermost first):
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import hashlib
 import json
@@ -88,7 +89,16 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         migrations_applied=applied,
         triggers=triggers,
     )
+    reminder_task: asyncio.Task[None] | None = None
+    if settings.REMINDER_BACKGROUND:
+        reminder_task = asyncio.create_task(reminders.loop(), name="reminders.loop")
     yield
+    if reminder_task is not None:
+        reminder_task.cancel()
+        try:
+            await reminder_task
+        except asyncio.CancelledError:
+            pass
     db.close_conn()
     info("app.stop")
 

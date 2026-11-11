@@ -52,14 +52,16 @@ def run_once(lead_min: int | None = None) -> dict[str, int]:
         if not p:
             continue
         patient = p[0]
-        # mark first: a crash must never produce a second text to the same patient
-        repo.update(
+        # claim first: only the winner of the UPDATE may send (crash- and race-safe)
+        claimed = repo.update(
             SYSTEM,
             "appointments",
             {"confirm_sent_at": _now_utc()},
             where="id = ? AND confirm_sent_at IS NULL",
             params=[a["id"]],
         )
+        if claimed == 0:
+            continue
         _, ok = sms.send_now(
             patient["phone"],
             sms.body_confirm(patient["full_name"], scheduling.describe(a)),

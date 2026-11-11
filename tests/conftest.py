@@ -33,6 +33,7 @@ os.environ.update(
         "SMS_WEBHOOK": "",
         "SMS_API_KEY": "",
         "SMS_INBOUND_SECRET": "",
+        "REMINDER_BACKGROUND": "0",
         "UPLOAD_DIR": str(TMP / "uploads"),
         "RL_REGISTER_IP_PER_DAY": "1000",
         "RL_PATIENT_LOGIN_IP_PER_15MIN": "1000",

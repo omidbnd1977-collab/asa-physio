@@ -113,6 +113,7 @@ class Settings:
     MRI_REMOTE_MAX_BYTES: int = _i("MRI_REMOTE_MAX_BYTES", 200 * 1024 * 1024)
     REMINDER_LEAD_MIN: int = _i("REMINDER_LEAD_MIN", 120)  # confirm SMS 2 h before
     REMINDER_TICK_S: int = _i("REMINDER_TICK_S", 60)
+    REMINDER_BACKGROUND: bool = _b("REMINDER_BACKGROUND", "1")  # lifespan ticker; off in tests
     # patients often share one IP (clinic wifi, a family, carrier NAT), so the
     # per-IP ceiling is loose and the real protection is the per-national-id limit
     RL_REGISTER_IP_PER_DAY: int = _i("RL_REGISTER_IP_PER_DAY", 25)

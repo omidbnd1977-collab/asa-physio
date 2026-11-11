@@ -847,7 +847,8 @@ class TestReminders:
         out = reminders.run_once(lead_min=60 * 24 * 7)
         assert out["due"] == 1 and out["sent"] == 1
         sms = repo.select(SYSTEM, "sms_messages", where="kind = 'confirm_request'")[0]
-        assert "عدد 1 را ارسال کنید" in sms["body"]
+        assert "عدد ۱" in sms["body"] and "عدد ۲" in sms["body"]
+        assert "تأیید حضور" in sms["body"] and "عدم حضور" in sms["body"]
         assert repo.select(SYSTEM, "appointments")[0]["confirm_sent_at"]
 
     def test_the_reminder_is_never_sent_twice(self, client, patient):
@@ -859,6 +860,27 @@ class TestReminders:
         reminders.run_once(lead_min=60 * 24 * 7)
         assert reminders.run_once(lead_min=60 * 24 * 7)["sent"] == 0
 
+    def test_run_once_skips_sms_when_claim_update_changes_no_rows(self, client, patient, monkeypatch):
+        from api import reminders, sms
+
+        client.post(
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
+        )
+        sends: list[str] = []
+
+        def _no_claim(*_a, **_k):
+            return 0
+
+        def _track_send(phone, body, kind, **kwargs):
+            sends.append(kind)
+            return ("", True)
+
+        monkeypatch.setattr(reminders.repo, "update", _no_claim)
+        monkeypatch.setattr(sms, "send_now", _track_send)
+        out = reminders.run_once(lead_min=60 * 24 * 7)
+        assert out["due"] == 1 and out["sent"] == 0 and out["failed"] == 0
+        assert sends == []
+
     def test_nothing_is_sent_outside_the_window(self, client, patient):
         from api import reminders
 
@@ -866,6 +888,36 @@ class TestReminders:
             "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "20:30"}
         )
         assert reminders.run_once(lead_min=5)["due"] == 0
+
+    def test_lifespan_starts_and_cancels_reminder_loop(self, monkeypatch):
+        import asyncio
+        import time
+
+        from fastapi.testclient import TestClient
+
+        from api import reminders
+        from api.config import settings
+        from api.main import app
+
+        events: list[str] = []
+
+        async def fake_loop():
+            events.append("start")
+            try:
+                while True:
+                    await asyncio.sleep(0.05)
+            except asyncio.CancelledError:
+                events.append("cancel")
+                raise
+
+        monkeypatch.setattr(settings, "REMINDER_BACKGROUND", True)
+        monkeypatch.setattr(reminders, "loop", fake_loop)
+        with TestClient(app):
+            deadline = time.time() + 2
+            while "start" not in events and time.time() < deadline:
+                time.sleep(0.02)
+            assert "start" in events
+        assert "cancel" in events
 
     @pytest.mark.parametrize("reply", ["1", "۱", "بله", "تایید", "OK"])
     def test_replying_one_marks_the_patient_as_coming(self, client, patient, reply):
