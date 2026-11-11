@@ -654,6 +654,114 @@ class TestSlots:
 
 
 # ======================================================================
+# Patient cancel (portal)
+# ======================================================================
+class TestPatientCancel:
+    def _book(self, client, slot_time: str = "19:00") -> dict:
+        r = client.post(
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": slot_time}
+        )
+        assert r.status_code == 201, r.text
+        return r.json()
+
+    def test_cancel_sets_status_and_updated_at(self, client, patient):
+        from api import repo
+        from api.policies import SYSTEM
+
+        booked = self._book(client)
+        code = booked["code"]
+        before = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[code])[0]
+        repo.update(
+            SYSTEM,
+            "appointments",
+            {"updated_at": "2020-01-01T00:00:00Z"},
+            where="id = ?",
+            params=[before["id"]],
+        )
+
+        r = client.post(f"/api/portal/appointments/{code}/cancel")
+        assert r.status_code == 200, r.text
+        after = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[code])[0]
+        assert after["status"] == "cancelled"
+        assert after["updated_at"] > "2020-01-01T00:00:00Z"
+        assert after["updated_at"].endswith("Z")
+
+    def test_duplicate_cancel_is_conflict(self, client, patient):
+        code = self._book(client)["code"]
+        assert client.post(f"/api/portal/appointments/{code}/cancel").status_code == 200
+        r = client.post(f"/api/portal/appointments/{code}/cancel")
+        assert r.status_code == 409
+        assert r.json()["error"]["code"] == "conflict"
+
+    @pytest.mark.parametrize("status", ["attended", "no_show"])
+    def test_non_booked_status_cannot_be_cancelled(self, client, patient, status):
+        from api import repo
+        from api.policies import SYSTEM
+
+        code = self._book(client)["code"]
+        repo.update(
+            SYSTEM, "appointments", {"status": status}, where="public_id = ?", params=[code]
+        )
+        r = client.post(f"/api/portal/appointments/{code}/cancel")
+        assert r.status_code == 409
+        assert r.json()["error"]["code"] == "conflict"
+        assert (
+            repo.select(SYSTEM, "appointments", where="public_id = ?", params=[code])[0]["status"]
+            == status
+        )
+
+    def test_cancel_without_auth_is_unauthorized(self, client, patient):
+        code = self._book(client)["code"]
+        client.cookies.clear()
+        assert client.post(f"/api/portal/appointments/{code}/cancel").status_code == 401
+
+    def test_cannot_cancel_another_patients_appointment(self, client, patient):
+        code = self._book(client)["code"]
+        client.cookies.clear()
+        other = client.post(
+            "/api/portal/register",
+            data=reg_form(national_id=NID_B, phone="۰۹۱۲۳۳۳۴۴۵۵", full_name="بیمار دیگر"),
+            files={"med_photo": ("m.png", io.BytesIO(PNG), "image/png")},
+        )
+        assert other.status_code == 201, other.text
+        assert client.post(f"/api/portal/appointments/{code}/cancel").status_code == 404
+
+    def test_cancel_inside_three_hours_is_forbidden(self, client, patient):
+        from api import repo
+        from api.jalali import now_tehran
+        from api.policies import SYSTEM
+
+        code = self._book(client)["code"]
+        soon = now_tehran() + dt.timedelta(hours=2)
+        repo.update(
+            SYSTEM,
+            "appointments",
+            {
+                "slot_date": soon.date().isoformat(),
+                "slot_time": soon.strftime("%H:%M"),
+            },
+            where="public_id = ?",
+            params=[code],
+        )
+        r = client.post(f"/api/portal/appointments/{code}/cancel")
+        assert r.status_code == 403
+        assert (
+            repo.select(SYSTEM, "appointments", where="public_id = ?", params=[code])[0]["status"]
+            == "booked"
+        )
+
+    def test_cancel_does_not_send_sms(self, client, patient):
+        from api import repo
+        from api.policies import SYSTEM
+
+        code = self._book(client)["code"]
+        before = repo.count(SYSTEM, "sms_messages")
+        assert client.post(f"/api/portal/appointments/{code}/cancel").status_code == 200
+        assert repo.count(SYSTEM, "sms_messages") == before
+        assert repo.count(SYSTEM, "sms_messages", where="kind = 'cancelled'") == 0
+
+
+# ======================================================================
 # Booking
 # ======================================================================
 class TestBooking:

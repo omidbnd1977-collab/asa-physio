@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 
 from . import clinical, messages, metrics, patients, ratelimit, repo, scheduling, schemas, sms
 from .config import settings
-from .errors import AppError, BadRequest, Forbidden, NotFound, PayloadTooLarge
+from .errors import AppError, BadRequest, Conflict, Forbidden, NotFound, PayloadTooLarge
 from .jalali import to_jalali_long, to_jalali_str
 from .logging_ import info
 from .policies import SYSTEM
@@ -455,13 +455,22 @@ async def cancel(public_id: str, request: Request) -> dict[str, Any]:
     if not rows:
         raise NotFound("این نوبت پیدا نشد.")
     appt = rows[0]
+    if appt["status"] != "booked":
+        raise Conflict("این نوبت قابل لغو نیست.")
     when = scheduling.slot_datetime(appt["slot_date"], appt["slot_time"])
     from .jalali import now_tehran
 
     if when - now_tehran() < dt.timedelta(hours=3):
         raise Forbidden("لغو نوبت تا ۳ ساعت مانده به زمان مراجعه ممکن نیست. تماس بگیرید.")
     repo.update(
-        SYSTEM, "appointments", {"status": "cancelled"}, where="id = ?", params=[appt["id"]]
+        SYSTEM,
+        "appointments",
+        {
+            "status": "cancelled",
+            "updated_at": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        },
+        where="id = ?",
+        params=[appt["id"]],
     )
     # attributed to the patient, so the doctor-panel inbox badge lights up
     messages.system_note(
