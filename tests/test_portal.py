@@ -200,6 +200,158 @@ class TestRegistration:
         with pytest.raises(BadRequest):
             _public_mri_url("http://127.0.0.1/mri.png")
 
+    @pytest.mark.parametrize(
+        "host,ip",
+        [
+            ("loop.example", "127.0.0.1"),
+            ("lan.example", "10.0.0.5"),
+            ("cgnat.example", "100.64.1.2"),
+            ("meta.example", "169.254.169.254"),
+            ("v6loop.example", "::1"),
+            ("v6ula.example", "fc00::1"),
+        ],
+    )
+    def test_mri_pin_rejects_blocked_resolved_ips(self, monkeypatch, host, ip):
+        import socket
+
+        from api.errors import BadRequest
+        from api.routes_booking import _pin_public_mri_url
+
+        def fake_gai(hostname, port, *a, **kw):
+            assert hostname == host
+            family = socket.AF_INET6 if ":" in ip else socket.AF_INET
+            sockaddr = (ip, port, 0, 0) if ":" in ip else (ip, port)
+            return [(family, socket.SOCK_STREAM, 0, "", sockaddr)]
+
+        monkeypatch.setattr("api.routes_booking.socket.getaddrinfo", fake_gai)
+        with pytest.raises(BadRequest) as ei:
+            _pin_public_mri_url(f"https://{host}/mri.png")
+        assert ei.value.code == "blocked_mri_url"
+
+    def test_mri_pin_accepts_public_ipv4_and_ipv6(self, monkeypatch):
+        import socket
+
+        from api.routes_booking import _pin_public_mri_url
+
+        def fake_gai(hostname, port, *a, **kw):
+            return [
+                (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("2606:4700::1", port, 0, 0)),
+                (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("1.1.1.1", port)),
+            ]
+
+        monkeypatch.setattr("api.routes_booking.socket.getaddrinfo", fake_gai)
+        url, host, pinned = _pin_public_mri_url("https://cdn.example/mri.png")
+        assert url.endswith("/mri.png") and host == "cdn.example"
+        assert pinned == "1.1.1.1"  # IPv4 preferred when both are public
+
+    def test_mri_dns_rebinding_cannot_bypass_ip_pin(self, monkeypatch):
+        """Resolve once to a public IP and dial that IP even if DNS later flips to loopback."""
+        import asyncio
+        import socket
+
+        import httpcore
+
+        from api.errors import BadRequest
+        from api.routes_booking import _pin_public_mri_url, _PinnedIPBackend
+
+        answers = iter([["8.8.8.8"], ["127.0.0.1"]])
+
+        def fake_gai(hostname, port, *a, **kw):
+            ip = next(answers)[0]
+            return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", (ip, port))]
+
+        monkeypatch.setattr("api.routes_booking.socket.getaddrinfo", fake_gai)
+        _url, _host, pinned = _pin_public_mri_url("https://rebind.example/a.png")
+        assert pinned == "8.8.8.8"
+        dialed: list[str] = []
+
+        class RecordingInner(httpcore.AsyncNetworkBackend):
+            async def connect_tcp(
+                self, host, port, timeout=None, local_address=None, socket_options=None
+            ):
+                dialed.append(host)
+                raise OSError("stop-after-dial")
+
+            async def connect_unix_socket(self, path, timeout=None, socket_options=None):
+                raise OSError("no uds")
+
+            async def sleep(self, seconds):
+                return None
+
+        backend = _PinnedIPBackend(pinned)
+        backend._inner = RecordingInner()  # noqa: SLF001
+
+        with pytest.raises(OSError, match="stop-after-dial"):
+            asyncio.run(backend.connect_tcp("rebind.example", 443))
+        assert dialed == ["8.8.8.8"]
+        # Second DNS answer is loopback — validation must fail closed.
+        with pytest.raises(BadRequest) as ei:
+            _pin_public_mri_url("https://rebind.example/a.png")
+        assert ei.value.code == "blocked_mri_url"
+
+    def test_mri_redirect_to_private_ip_is_rejected(self, monkeypatch):
+        import asyncio
+        import socket
+
+        from api.errors import BadRequest
+        from api.routes_booking import _download_remote_mri
+
+        def fake_gai(hostname, port, *a, **kw):
+            ip = "1.1.1.1" if hostname == "cdn.example" else "10.1.2.3"
+            return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", (ip, port))]
+        monkeypatch.setattr("api.routes_booking.socket.getaddrinfo", fake_gai)
+
+        class FakeStream:
+            status_code = 302
+            headers = {"location": "https://evil.internal/secret.png"}
+
+            async def aiter_bytes(self, chunk_size=0):
+                if False:  # pragma: no cover
+                    yield b""
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+        class FakeClient:
+            def __init__(self, *a, **k):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            def stream(self, *a, **k):
+                return FakeStream()
+
+        monkeypatch.setattr("api.routes_booking.httpx.AsyncClient", FakeClient)
+        monkeypatch.setattr("api.routes_booking._pinned_transport", lambda ip: object())
+
+        with pytest.raises(BadRequest) as ei:
+            asyncio.run(_download_remote_mri("https://cdn.example/mri.png"))
+        assert ei.value.code == "blocked_mri_url"
+
+    def test_mri_download_failure_still_registers_with_warning(self, client, monkeypatch):
+        from api.errors import BadRequest
+
+        async def boom(_url: str):
+            raise BadRequest(
+                "دریافت از شبکه داخلی یا آدرس خصوصی مجاز نیست.", code="blocked_mri_url"
+            )
+
+        monkeypatch.setattr("api.routes_booking._download_remote_mri", boom)
+        r = client.post(
+            "/api/portal/register",
+            data=reg_form(national_id=NID_B, mri_link="https://cdn.example/x.png"),
+        )
+        assert r.status_code == 201, r.text
+        assert "داخلی" in r.json()["mri_warning"] or "خصوصی" in r.json()["mri_warning"]
+        assert client.get("/api/portal/me").status_code == 200
+
     def test_the_session_cookie_is_set_so_the_patient_goes_straight_to_booking(self, client):
         r = client.post("/api/portal/register", data=reg_form())
         assert r.status_code == 201
