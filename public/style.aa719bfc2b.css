@@ -549,13 +549,14 @@ footer{margin-top:90px;padding:60px 0 26px;border-top:1px solid var(--line);
 }
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition-duration:.01ms!important}}
 
-/* Right-align only the contact information card */
+/* RTL alignment for the contact information panel only */
 .contact-info-panel {
   direction: rtl;
   text-align: right;
 }
 
 .contact-info-panel h3 {
+  direction: rtl;
   text-align: right;
 }
 
@@ -566,9 +567,16 @@ footer{margin-top:90px;padding:60px 0 26px;border-top:1px solid var(--line);
   flex-direction: row;
 }
 
-.contact-info-panel .info a > span,
+.contact-info-panel .info a:hover {
+  transform: translateX(6px);
+}
+
+.contact-info-panel .info > a > span,
 .contact-info-panel .info > div > span {
   flex: 1;
   min-width: 0;
 }
 
+.contact-info-panel .info svg {
+  margin-inline-start: 0;
+}

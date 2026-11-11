@@ -17,49 +17,62 @@ def patient(client):
     return response.json()
 
 
-def test_static_source_booking_links_are_github_pages_safe():
+def test_static_source_booking_ctas_go_to_portal():
+    """Primary deploy is same-origin FastAPI (NetAram VPS / Render preview).
+    Every «رزرو نوبت» CTA must open the real patient portal at /booking."""
     root = Path(__file__).resolve().parent.parent
-    source = "\n".join(p.read_text(encoding="utf-8") for p in (root / "site").glob("*.html"))
-    contact = (root / "site" / "contact.html").read_text(encoding="utf-8")
-    other_source = "\n".join(
-        p.read_text(encoding="utf-8")
-        for p in (root / "site").glob("*.html")
-        if p.name != "contact.html"
-    )
-    assert 'href="/booking"' in contact
-    assert 'href="/booking"' not in other_source
-    assert 'href="#bookForm"' not in contact
-    assert 'href="#bookForm"' not in other_source
+    site = root / "site"
+    for page in sorted(site.glob("*.html")):
+        text = page.read_text(encoding="utf-8")
+        assert 'href="contact.html#bookForm"' not in text, page.name
+        # Nav / hero CTAs labeled رزرو نوبت use the portal path
+        if "رزرو نوبت" in text:
+            assert 'href="/booking"' in text, page.name
+    contact = (site / "contact.html").read_text(encoding="utf-8")
+    assert 'id="consultForm"' in contact
+    assert "درخواست مشاوره و تماس" in contact
+    assert "رزرو نوبت نیست" in contact
+    assert 'id="feedbackForm"' in contact
+    assert 'id="bookForm"' not in contact
+    assert "/api/bookings" in contact  # consult form still posts leads
+    assert "/api/feedback" in contact
+    # Never hardcode the API as a navigation href
+    source = "\n".join(p.read_text(encoding="utf-8") for p in site.glob("*.html"))
     assert 'href="/api/bookings"' not in source
 
 
-def test_built_bundle_has_no_root_absolute_local_links():
-    """The bundle is served from "/" on Render and "/asa-physio/" on GitHub Pages. A
-    root-absolute href only resolves under the first. This shipped broken once: the live
-    Pages site requested /style.<hash>.css, got 404, and rendered unstyled with dead nav."""
+def test_built_bundle_allows_portal_absolute_links_only():
+    """Same-origin deploy: /booking is intentional. Other root-absolute local
+    asset/nav links must stay relative so fingerprinted CSS/JS keep working."""
     public = Path(__file__).resolve().parent.parent / "public"
     if not public.is_dir():
         pytest.skip("public/ is not built")
+    allowed = {"/booking"}
     offenders = []
     for page in sorted(public.glob("**/*.html")):
         text = page.read_text(encoding="utf-8")
         for attr, url in re.findall(r'(href|src)\s*=\s*"([^"]+)"', text):
-            if (
-                url.startswith("/")
-                and not url.startswith("//")
-                and not (page.name == "contact.html" and attr == "href" and url == "/booking")
-            ):
+            if url.startswith("/") and not url.startswith("//") and url not in allowed:
+                # /booking/... deep links from marketing pages are also OK if added later
+                if url.startswith("/booking"):
+                    continue
                 offenders.append(f'{page.name}: {attr}="{url}"')
     assert not offenders, "\n".join(offenders)
 
 
-def test_built_bundle_preserves_url_fragments():
-    """build_static rewrites hrefs to fingerprinted names and must keep the #fragment,
-    or the booking CTA lands at the top of the page instead of on the form."""
-    index = Path(__file__).resolve().parent.parent / "public" / "index.html"
-    if not index.exists():
+def test_built_bundle_booking_cta_and_consult_form_ids():
+    """After build_static, portal CTAs and contact form ids stay intact."""
+    public = Path(__file__).resolve().parent.parent / "public"
+    if not public.is_dir():
         pytest.skip("public/ is not built")
-    assert 'href="contact.html#bookForm"' in index.read_text(encoding="utf-8")
+    index = (public / "index.html").read_text(encoding="utf-8")
+    assert 'href="/booking"' in index
+    assert 'href="contact.html#bookForm"' not in index
+    contact = (public / "contact.html").read_text(encoding="utf-8")
+    assert 'id="consultForm"' in contact
+    assert 'id="feedbackForm"' in contact
+    assert 'id="bookForm"' not in contact
+    assert 'href="/booking"' in contact
 
 
 def test_patient_update_and_audit_are_staff_only(owner_client, patient, client):
