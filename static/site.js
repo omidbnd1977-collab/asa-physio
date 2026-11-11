@@ -27,7 +27,12 @@ function toast(msg, bad = false) {
 function showMsg(sel, text, kind = "err") {
   const box = document.querySelector(sel);
   if (!box) return;
-  box.innerHTML = text ? `<div class="notice ${kind}">${text}</div>` : "";
+  box.textContent = "";
+  if (!text) return;
+  const notice = document.createElement("div");
+  notice.className = "notice " + kind;
+  notice.textContent = text;
+  box.appendChild(notice);
 }
 
 /* ماسک: فقط رقم، و پرش خودکار به کادر بعدی */

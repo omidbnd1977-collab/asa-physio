@@ -906,7 +906,8 @@ function apptRow(a){
   when.innerHTML=a.slot_time+'<small>کابین '+fa(a.cabin)+'</small>';
   const who=document.createElement('div');
   const p=a.patient||{};
-  who.innerHTML='<div class="who">'+(p.full_name||'—')+'</div>';
+  const whoName=document.createElement('div'); whoName.className='who';
+  whoName.textContent=p.full_name||'—'; who.appendChild(whoName);
   const ph=document.createElement('a'); ph.href='tel:'+(p.phone||''); ph.setAttribute('dir','ltr');
   ph.textContent=p.phone||''; ph.style.fontSize='.82rem'; who.appendChild(ph);
 
@@ -1400,7 +1401,12 @@ async function loadSms(){
               ignored:'نامشخص',unknown_phone:'شماره ناشناس'};
     inb.forEach(m=>{
       const d=document.createElement('div'); d.className='smsrow';
-      d.innerHTML='<b dir="ltr">'+m.phone+'</b> — «'+m.body+'» → '+(IH[m.handled]||m.handled);
+      const phone=document.createElement('b'); phone.setAttribute('dir','ltr');
+      phone.textContent=m.phone||'';
+      d.append(phone,
+        document.createTextNode(' — «'),
+        document.createTextNode(m.body||''),
+        document.createTextNode('» → '+(IH[m.handled]||m.handled||'')));
       box.appendChild(d);
     });
     show('#sIn'); hide('#sInEmpty');

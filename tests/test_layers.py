@@ -286,6 +286,51 @@ class TestLayer08Security:
         assert "bookings" in db.tables()
         assert repo.select(SYSTEM, "bookings")[0]["note"] == evil
 
+    def test_c4_admin_and_site_js_do_not_sink_untrusted_strings_into_innerhtml(self):
+        """C4: patient name, inbound SMS, and showMsg must use text sinks — not innerHTML."""
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[1]
+        admin = (root / "api" / "templates" / "admin.html").read_text(encoding="utf-8")
+        site = (root / "static" / "site.js").read_text(encoding="utf-8")
+
+        assert "who.innerHTML=" not in admin
+        assert "whoName.textContent=" in admin.replace(" ", "")
+        assert "d.innerHTML='<b dir=\"ltr\">'+m.phone" not in admin
+        assert "phone.textContent=" in admin.replace(" ", "")
+        assert "createTextNode(m.body" in admin
+        assert "box.innerHTML = text ?" not in site
+        assert "notice.textContent = text" in site
+
+    def test_c4_inbound_xss_payload_is_stored_as_text_not_executable_html(
+        self, client, owner_client
+    ):
+        """A crafted inbound SMS body must round-trip as plain text (textContent semantics)."""
+        from html import escape
+
+        from api import repo
+        from api.policies import SYSTEM
+
+        payload = '<img src=x onerror=alert(1)>'
+        r = client.post(
+            "/api/sms/inbound",
+            json={"phone": "09120001122", "body": payload},
+        )
+        assert r.status_code == 200, r.text
+
+        rows = repo.select(SYSTEM, "sms_inbound", where="phone = ?", params=["09120001122"])
+        assert rows and rows[0]["body"] == payload
+
+        inbound = owner_client.get("/api/admin/sms").json()["inbound"]
+        assert any(m["body"] == payload for m in inbound)
+
+        # textContent / createTextNode serialization escapes markup; innerHTML would not.
+        as_text_node = escape(payload, quote=True)
+        assert "<img" not in as_text_node
+        assert "&lt;img" in as_text_node
+        assert "onerror" in as_text_node  # still visible as characters, not an attribute node
+        assert as_text_node != payload
+
     def test_logs_never_contain_a_phone_or_a_secret(self):
         from api.logging_ import scrub
 
