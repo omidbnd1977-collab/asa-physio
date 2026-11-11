@@ -15,11 +15,16 @@ from __future__ import annotations
 import datetime as dt
 import json
 import secrets
+import sqlite3
 
 from . import repo
 from .errors import BadRequest, Conflict
 from .jalali import TEHRAN, now_tehran, to_jalali_long, to_jalali_str
 from .policies import SYSTEM
+
+
+def _utc_now() -> str:
+    return dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 OPEN_HOUR = 16
 CLOSE_HOUR = 22
@@ -185,6 +190,68 @@ def day_grid(slot_date: str, *, for_patient: bool = True) -> dict[str, object]:
     }
 
 
+def allocate_on_conn(
+    conn: sqlite3.Connection,
+    patient_id: int,
+    slot_date: str,
+    slot_time: str,
+    *,
+    kind: str = "first",
+    booked_by: str = "patient",
+    note: str = "",
+    moved_from: str = "",
+) -> dict[str, object]:
+    """Insert into an already-open transaction. Does not BEGIN/COMMIT.
+
+    Caller must hold `BEGIN IMMEDIATE` (e.g. via `repo.tx`) so cancel+insert
+    in `reschedule` stay atomic. Concurrent UNIQUE violations become Conflict.
+    """
+    if is_closed_day(slot_date):
+        raise Conflict(
+            "کلینیک در این روز تعطیل است و امکان ثبت نوبت وجود ندارد.",
+            code="day_closed",
+        )
+    rows = conn.execute(
+        "SELECT cabin FROM appointments "
+        "WHERE slot_date = ? AND slot_time = ? AND status != 'cancelled'",
+        (slot_date, slot_time),
+    ).fetchall()
+    used = {r["cabin"] for r in rows}
+    free = next((c for c in range(1, CABINS + 1) if c not in used), None)
+    if free is None:
+        raise Conflict(
+            "این ساعت همین الان پر شد. لطفاً ساعت دیگری انتخاب کنید.",
+            code="slot_full",
+        )
+    dup = conn.execute(
+        "SELECT 1 FROM appointments WHERE patient_id = ? AND slot_date = ? "
+        "AND slot_time = ? AND status != 'cancelled'",
+        (patient_id, slot_date, slot_time),
+    ).fetchone()
+    if dup:
+        raise Conflict("برای همین ساعت قبلاً نوبت دارید.", code="duplicate_booking")
+    public_id = secrets.token_hex(5)
+    try:
+        cur = conn.execute(
+            "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin,"
+            " kind, booked_by, note, moved_from) VALUES (?,?,?,?,?,?,?,?,?)",
+            (public_id, patient_id, slot_date, slot_time, free, kind, booked_by, note, moved_from),
+        )
+    except sqlite3.IntegrityError as exc:
+        raise Conflict(
+            "این ساعت همین الان پر شد. لطفاً ساعت دیگری انتخاب کنید.",
+            code="slot_full",
+        ) from exc
+    return {
+        "id": int(cur.lastrowid or 0),
+        "public_id": public_id,
+        "cabin": free,
+        "slot_date": slot_date,
+        "slot_time": slot_time,
+        "kind": kind,
+    }
+
+
 def allocate(
     patient_id: int,
     slot_date: str,
@@ -197,46 +264,61 @@ def allocate(
 ) -> dict[str, object]:
     """Reserve the lowest free cabin. Raises Conflict when the slot just filled up."""
     validate_slot(slot_date, slot_time)
-    public_id = secrets.token_hex(5)
     with repo.tx() as conn:
-        if is_closed_day(slot_date):
-            raise Conflict(
-                "کلینیک در این روز تعطیل است و امکان ثبت نوبت وجود ندارد.",
-                code="day_closed",
+        return allocate_on_conn(
+            conn,
+            patient_id,
+            slot_date,
+            slot_time,
+            kind=kind,
+            booked_by=booked_by,
+            note=note,
+            moved_from=moved_from,
+        )
+
+
+def reschedule(
+    old: dict,
+    slot_date: str,
+    slot_time: str,
+    *,
+    booked_by: str = "staff",
+) -> dict[str, object]:
+    """Cancel `old` and book the new slot inside one IMMEDIATE transaction.
+
+    Order is cancel-then-insert so a move can reuse a cabin that the old row
+    held (same slot edge cases / capacity accounting). On any failure the
+    whole transaction rolls back and `old` stays active.
+    """
+    validate_slot(slot_date, slot_time)
+    with repo.tx() as conn:
+        claimed = repo.update(
+            SYSTEM,
+            "appointments",
+            {"status": "cancelled", "updated_at": _utc_now()},
+            where="id = ? AND status = ?",
+            params=[old["id"], old["status"]],
+        )
+        if claimed != 1:
+            raise Conflict("این نوبت لغو شده است.")
+        try:
+            return allocate_on_conn(
+                conn,
+                int(old["patient_id"]),
+                slot_date,
+                slot_time,
+                kind=old["kind"],
+                booked_by=booked_by,
+                note=old.get("note") or "",
+                moved_from=f"{old['slot_date']} {old['slot_time']}",
             )
-        rows = conn.execute(
-            "SELECT cabin FROM appointments "
-            "WHERE slot_date = ? AND slot_time = ? AND status != 'cancelled'",
-            (slot_date, slot_time),
-        ).fetchall()
-        used = {r["cabin"] for r in rows}
-        free = next((c for c in range(1, CABINS + 1) if c not in used), None)
-        if free is None:
+        except sqlite3.IntegrityError as exc:
+            # allocate_on_conn normally maps this; keep a belt-and-braces path for
+            # callers/tests that replace allocate_on_conn or hit a race on UPDATE.
             raise Conflict(
                 "این ساعت همین الان پر شد. لطفاً ساعت دیگری انتخاب کنید.",
                 code="slot_full",
-            )
-        dup = conn.execute(
-            "SELECT 1 FROM appointments WHERE patient_id = ? AND slot_date = ? "
-            "AND slot_time = ? AND status != 'cancelled'",
-            (patient_id, slot_date, slot_time),
-        ).fetchone()
-        if dup:
-            raise Conflict("برای همین ساعت قبلاً نوبت دارید.", code="duplicate_booking")
-        cur = conn.execute(
-            "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin,"
-            " kind, booked_by, note, moved_from) VALUES (?,?,?,?,?,?,?,?,?)",
-            (public_id, patient_id, slot_date, slot_time, free, kind, booked_by, note, moved_from),
-        )
-        appt_id = int(cur.lastrowid or 0)
-    return {
-        "id": appt_id,
-        "public_id": public_id,
-        "cabin": free,
-        "slot_date": slot_date,
-        "slot_time": slot_time,
-        "kind": kind,
-    }
+            ) from exc
 
 
 def describe(appt: dict) -> str:

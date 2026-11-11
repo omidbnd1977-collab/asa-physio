@@ -899,6 +899,353 @@ class TestDoctorPanel:
         still = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[book["code"]])[0]
         assert still["status"] == "booked" and still["slot_time"] == "16:00"
 
+    def test_failed_allocate_rolls_back_without_manual_restore(
+        self, owner_client, patient, monkeypatch
+    ):
+        """Cancel+insert share one tx: a mid-flight failure must not leave cancelled."""
+        from api import repo, scheduling
+        from api.errors import Conflict
+        from api.policies import SYSTEM
+
+        book = owner_client.post(
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
+        ).json()
+        before = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[book["code"]])[
+            0
+        ]
+
+        def boom(conn, *a, **k):
+            raise Conflict("پر شد", code="slot_full")
+
+        monkeypatch.setattr(scheduling, "allocate_on_conn", boom)
+        r = owner_client.patch(
+            f"/api/admin/appointments/{book['code']}/move",
+            json={"slot_date": tomorrow(), "slot_time": "20:30", "notify": False},
+        )
+        assert r.status_code == 409
+        after = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[book["code"]])[0]
+        assert after["status"] == "booked"
+        assert after["slot_time"] == before["slot_time"]
+        assert after["cabin"] == before["cabin"]
+        assert (
+            repo.count(
+                SYSTEM,
+                "appointments",
+                where="status = 'cancelled' AND patient_id = ?",
+                params=[before["patient_id"]],
+            )
+            == 0
+        )
+
+    def test_dest_cabin_integrity_error_becomes_conflict(
+        self, owner_client, patient, monkeypatch
+    ):
+        import sqlite3
+
+        from api import repo, scheduling
+        from api.policies import SYSTEM
+
+        book = owner_client.post(
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
+        ).json()
+
+        def boom(conn, *a, **k):
+            raise sqlite3.IntegrityError("UNIQUE constraint failed: idx_appt_active_cabin")
+
+        monkeypatch.setattr(scheduling, "allocate_on_conn", boom)
+        r = owner_client.patch(
+            f"/api/admin/appointments/{book['code']}/move",
+            json={"slot_date": tomorrow(), "slot_time": "19:00", "notify": False},
+        )
+        assert r.status_code == 409
+        assert r.json()["error"]["code"] == "slot_full"
+        still = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[book["code"]])[0]
+        assert still["status"] == "booked" and still["slot_time"] == "16:00"
+
+    def test_reschedule_real_unique_index_conflict_returns_409(self, owner_client, patient, monkeypatch):
+        """Real SQLite partial UNIQUE hit inside allocate_on_conn → HTTP 409; source stays booked.
+
+        Under BEGIN IMMEDIATE, two writers cannot interleave SELECT+INSERT, so a true
+        check-then-act race is not reproducible. Instead we keep the real
+        allocate_on_conn body and only wrap the connection so the cabin SELECT
+        returns empty while cabin 1 is already taken — the subsequent INSERT
+        collides with idx_appt_active_cabin on the live database.
+        """
+        from api import repo, scheduling
+        from api.errors import Conflict
+        from api.policies import SYSTEM
+
+        class _StaleActiveCabinConn:
+            def __init__(self, conn):
+                self._conn = conn
+
+            def execute(self, sql, parameters=()):
+                text = sql if isinstance(sql, str) else str(sql)
+                if (
+                    "SELECT cabin FROM appointments" in text
+                    and "status != 'cancelled'" in text
+                ):
+
+                    class _Empty:
+                        def fetchall(self_inner):
+                            return []
+
+                    return _Empty()
+                return self._conn.execute(sql, parameters)
+
+        book = owner_client.post(
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
+        ).json()
+        source = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[book["code"]])[
+            0
+        ]
+
+        other_pid = repo.insert(
+            SYSTEM,
+            "patients",
+            {
+                "public_id": "z" * 12,
+                "national_id": nid(700000099),
+                "full_name": "رقیب کابین",
+                "birth_date": "1980-01-01",
+                "birth_jalali": "1358/10/11",
+                "phone": "09170000099",
+            },
+        )
+        dest = scheduling.allocate(other_pid, tomorrow(), "19:00")
+        assert dest["cabin"] == 1
+
+        real_allocate = scheduling.allocate_on_conn
+
+        def allocate_via_stale_read(conn, *args, **kwargs):
+            return real_allocate(_StaleActiveCabinConn(conn), *args, **kwargs)
+
+        monkeypatch.setattr(scheduling, "allocate_on_conn", allocate_via_stale_read)
+
+        # Direct reschedule path (same TX as HTTP move)
+        with pytest.raises(Conflict) as raised:
+            scheduling.reschedule(source, tomorrow(), "19:00", booked_by="staff")
+        assert raised.value.code == "slot_full"
+        import sqlite3 as _sqlite3
+
+        assert isinstance(raised.value.__cause__, _sqlite3.IntegrityError)
+
+        after_direct = repo.select(
+            SYSTEM, "appointments", where="public_id = ?", params=[book["code"]]
+        )[0]
+        assert after_direct["status"] == "booked" and after_direct["slot_time"] == "16:00"
+        assert after_direct["cabin"] == source["cabin"]
+
+        r = owner_client.patch(
+            f"/api/admin/appointments/{book['code']}/move",
+            json={"slot_date": tomorrow(), "slot_time": "19:00", "notify": False},
+        )
+        assert r.status_code == 409
+        assert r.json()["error"]["code"] == "slot_full"
+        assert "UNIQUE" not in r.text and "idx_appt" not in r.text
+        still = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[book["code"]])[0]
+        assert still["status"] == "booked" and still["slot_time"] == "16:00"
+        assert (
+            repo.count(
+                SYSTEM,
+                "appointments",
+                where="status = 'cancelled' AND public_id = ?",
+                params=[book["code"]],
+            )
+            == 0
+        )
+
+    def test_partial_unique_rejects_duplicate_cabin_on_independent_connections(self, patient):
+        """Two separate sqlite connections: first commits cabin 1; second INSERT hits UNIQUE."""
+        import sqlite3
+
+        from api import repo
+        from api.db import connect
+        from api.policies import SYSTEM
+
+        day, slot = tomorrow(), "20:30"
+        pid = repo.select(SYSTEM, "patients")[0]["id"]
+        other = repo.insert(
+            SYSTEM,
+            "patients",
+            {
+                "public_id": "w" * 12,
+                "national_id": nid(700000088),
+                "full_name": "اتصال دوم",
+                "birth_date": "1980-01-01",
+                "birth_jalali": "1358/10/11",
+                "phone": "09170000088",
+            },
+        )
+
+        c1 = connect()
+        try:
+            c1.execute("BEGIN IMMEDIATE")
+            c1.execute(
+                "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin)"
+                " VALUES ('conn1cabin', ?, ?, ?, 1)",
+                (pid, day, slot),
+            )
+            c1.execute("COMMIT")
+        finally:
+            c1.close()
+
+        c2 = connect()
+        try:
+            c2.execute("BEGIN IMMEDIATE")
+            with pytest.raises(sqlite3.IntegrityError) as hit:
+                c2.execute(
+                    "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin)"
+                    " VALUES ('conn2cabin', ?, ?, ?, 1)",
+                    (other, day, slot),
+                )
+            assert "idx_appt_active_cabin" in str(hit.value) or "UNIQUE" in str(hit.value).upper()
+            c2.execute("ROLLBACK")
+        finally:
+            c2.close()
+
+    def test_begin_immediate_writers_serialize_then_second_hits_unique(self, patient):
+        """Parallel BEGIN IMMEDIATE writers are serialized by SQLite (deterministic barriers).
+
+        Limitation: they cannot interleave allocate's SELECT+INSERT to race inside one
+        check-then-act window; the second blocks at BEGIN until the first commits, then
+        the INSERT collides with the partial UNIQUE index.
+        """
+        import sqlite3
+        import threading
+
+        from api import repo
+        from api.db import connect
+        from api.policies import SYSTEM
+
+        day, slot = tomorrow(), "17:30"
+        pid = repo.select(SYSTEM, "patients")[0]["id"]
+        other = repo.insert(
+            SYSTEM,
+            "patients",
+            {
+                "public_id": "v" * 12,
+                "national_id": nid(700000077),
+                "full_name": "نویسنده دوم",
+                "birth_date": "1980-01-01",
+                "birth_jalali": "1358/10/11",
+                "phone": "09170000077",
+            },
+        )
+
+        holding = threading.Event()
+        release = threading.Event()
+        second_result: list[object] = []
+
+        def first_writer() -> None:
+            c = connect()
+            try:
+                c.execute("BEGIN IMMEDIATE")
+                c.execute(
+                    "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin)"
+                    " VALUES ('immfirst01', ?, ?, ?, 1)",
+                    (pid, day, slot),
+                )
+                holding.set()
+                assert release.wait(timeout=5)
+                c.execute("COMMIT")
+            finally:
+                c.close()
+
+        def second_writer() -> None:
+            assert holding.wait(timeout=5)
+            c = connect()
+            try:
+                # Blocks here until first_writer COMMITs (IMMEDIATE reserved lock).
+                c.execute("BEGIN IMMEDIATE")
+                try:
+                    c.execute(
+                        "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin)"
+                        " VALUES ('immsecond1', ?, ?, ?, 1)",
+                        (other, day, slot),
+                    )
+                    c.execute("COMMIT")
+                    second_result.append("committed")
+                except sqlite3.IntegrityError as exc:
+                    second_result.append(exc)
+                    c.execute("ROLLBACK")
+            finally:
+                c.close()
+
+        t1 = threading.Thread(target=first_writer)
+        t2 = threading.Thread(target=second_writer)
+        t1.start()
+        assert holding.wait(timeout=5)
+        t2.start()
+        release.set()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+        assert len(second_result) == 1
+        assert isinstance(second_result[0], sqlite3.IntegrityError)
+
+    def test_source_cabin_stays_held_until_move_commits(self, owner_client, patient, monkeypatch):
+        """While reschedule's IMMEDIATE tx is open, the source cabin must still look taken
+        to a concurrent allocate — proving cancel is not visible until commit."""
+        import threading
+
+        from api import repo, scheduling
+        from api.db import connect
+        from api.policies import SYSTEM
+
+        book = owner_client.post(
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
+        ).json()
+        old = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[book["code"]])[0]
+        day, slot = old["slot_date"], old["slot_time"]
+        cabin = old["cabin"]
+        seen_active: list[int] = []
+        gate = threading.Event()
+        done = threading.Event()
+
+        real_allocate = scheduling.allocate_on_conn
+
+        def slow_allocate(conn, *a, **k):
+            gate.set()
+            assert done.wait(timeout=5), "concurrent probe did not finish"
+            return real_allocate(conn, *a, **k)
+
+        monkeypatch.setattr(scheduling, "allocate_on_conn", slow_allocate)
+
+        def probe():
+            assert gate.wait(timeout=5)
+            c = connect()
+            try:
+                n = c.execute(
+                    "SELECT COUNT(*) AS n FROM appointments "
+                    "WHERE slot_date = ? AND slot_time = ? AND cabin = ? "
+                    "AND status != 'cancelled'",
+                    (day, slot, cabin),
+                ).fetchone()["n"]
+                seen_active.append(int(n))
+            finally:
+                c.close()
+                done.set()
+
+        t = threading.Thread(target=probe)
+        t.start()
+        r = owner_client.patch(
+            f"/api/admin/appointments/{book['code']}/move",
+            json={"slot_date": tomorrow(), "slot_time": "20:30", "notify": False},
+        )
+        t.join(timeout=10)
+        assert r.status_code == 200, r.text
+        assert seen_active == [1], "source cabin must stay occupied until commit"
+        # after commit the old row is cancelled and the cabin is free for reuse
+        leftover = repo.select(
+            SYSTEM,
+            "appointments",
+            where="slot_date = ? AND slot_time = ? AND cabin = ? AND status != 'cancelled'",
+            params=[day, slot, cabin],
+        )
+        assert leftover == []
+        again = scheduling.allocate(old["patient_id"], day, slot)
+        assert again["cabin"] == cabin
+
     def test_next_session_is_booked_and_texted(self, owner_client, patient):
         from api import repo
         from api.policies import SYSTEM

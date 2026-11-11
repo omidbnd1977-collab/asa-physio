@@ -288,33 +288,13 @@ async def move(
     patient = p[0]
 
     old_when = scheduling.describe(old)
-    # free the old slot first so a move inside the same half hour can reuse the cabin
-    repo.update(
-        SYSTEM,
-        "appointments",
-        {"status": "cancelled", "updated_at": _now()},
-        where="id = ?",
-        params=[old["id"]],
+    # cancel + allocate share one BEGIN IMMEDIATE (scheduling.reschedule)
+    new = scheduling.reschedule(
+        old,
+        data.slot_date,
+        data.slot_time,
+        booked_by="staff",
     )
-    try:
-        new = scheduling.allocate(
-            patient["id"],
-            data.slot_date,
-            data.slot_time,
-            kind=old["kind"],
-            booked_by="staff",
-            note=old["note"],
-            moved_from=f"{old['slot_date']} {old['slot_time']}",
-        )
-    except Exception:
-        repo.update(
-            SYSTEM,
-            "appointments",
-            {"status": old["status"], "updated_at": _now()},
-            where="id = ?",
-            params=[old["id"]],
-        )
-        raise
 
     new_when = scheduling.describe(new)
     messages.system_note(
