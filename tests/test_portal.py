@@ -466,6 +466,40 @@ class TestSlots:
         g = client.get("/api/portal/slots?date=" + tomorrow()).json()
         assert next(s for s in g["slots"] if s["time"] == "19:00")["free"] == 10
 
+    def test_rebook_same_slot_and_cabin_after_cancel(self, client, patient):
+        """C1: cancelled history stays; the same cabin can be booked again."""
+        from api import repo
+        from api.policies import SYSTEM
+
+        day, slot = tomorrow(), "19:00"
+        first = client.post(
+            "/api/portal/appointments", json={"slot_date": day, "slot_time": slot}
+        )
+        assert first.status_code == 201, first.text
+        cabin = first.json()["cabin"]
+        code = first.json()["code"]
+
+        cancelled = client.post(f"/api/portal/appointments/{code}/cancel")
+        assert cancelled.status_code == 200, cancelled.text
+
+        again = client.post(
+            "/api/portal/appointments", json={"slot_date": day, "slot_time": slot}
+        )
+        assert again.status_code == 201, again.text
+        assert again.json()["cabin"] == cabin
+        assert again.json()["code"] != code
+
+        rows = repo.select(
+            SYSTEM,
+            "appointments",
+            where="slot_date = ? AND slot_time = ? AND cabin = ?",
+            params=[day, slot, cabin],
+        )
+        assert len(rows) == 2
+        by_status = {r["status"] for r in rows}
+        assert by_status == {"cancelled", "booked"}
+        assert {r["public_id"] for r in rows} == {code, again.json()["code"]}
+
 
 # ======================================================================
 # Booking
@@ -869,6 +903,113 @@ class TestPortalPolicies:
                 " VALUES ('dupdupdup1', ?, ?, '16:00', ?)",
                 (pid, tomorrow(), a["cabin"]),
             )
+
+    def test_cancelled_row_does_not_block_same_cabin_unique(self):
+        from api import db, repo, scheduling
+        from api.policies import SYSTEM
+
+        pid = repo.insert(
+            SYSTEM,
+            "patients",
+            {
+                "public_id": "y" * 12,
+                "national_id": nid(700000002),
+                "full_name": "تست آزاد",
+                "birth_date": "1980-01-01",
+                "birth_jalali": "1358/10/11",
+                "phone": "09170000002",
+            },
+        )
+        a = scheduling.allocate(pid, tomorrow(), "16:00")
+        repo.update(
+            SYSTEM, "appointments", {"status": "cancelled"}, where="id = ?", params=[a["id"]]
+        )
+        db.get_conn().execute(
+            "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin)"
+            " VALUES ('newnewnew1', ?, ?, '16:00', ?)",
+            (pid, tomorrow(), a["cabin"]),
+        )
+        rows = db.get_conn().execute(
+            "SELECT status FROM appointments WHERE slot_date = ? AND slot_time = '16:00' AND cabin = ?",
+            (tomorrow(), a["cabin"]),
+        ).fetchall()
+        assert sorted(r["status"] for r in rows) == ["booked", "cancelled"]
+
+    def test_migration_0009_preserves_rows_on_existing_database(self, tmp_path):
+        """Apply 0001–0008, seed a cancelled row, then run 0009 and keep every column."""
+        import hashlib
+        import sqlite3
+
+        from api import db
+
+        path = tmp_path / "pre-0009.db"
+        conn = sqlite3.connect(path, timeout=10, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.executescript(db.BOOTSTRAP)
+
+        legacy = [p for p in db._files() if p.name[:4] < "0009"]
+        assert legacy and legacy[-1].name.startswith("0008")
+        for path_sql in legacy:
+            body = path_sql.read_text(encoding="utf-8")
+            checksum = hashlib.sha256(body.encode()).hexdigest()
+            conn.execute("PRAGMA foreign_keys=OFF")
+            conn.execute("BEGIN")
+            try:
+                for stmt in db.split_statements(body):
+                    conn.execute(stmt)
+                conn.execute(
+                    "INSERT INTO schema_migrations(version, checksum) VALUES (?,?)",
+                    (path_sql.name[:4], checksum),
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                conn.execute("PRAGMA foreign_keys=ON")
+                raise
+            conn.execute("PRAGMA foreign_keys=ON")
+
+        conn.execute(
+            "INSERT INTO patients(public_id, national_id, full_name, birth_date, birth_jalali, phone)"
+            " VALUES (?, ?, 'بیمار قدیم', '1990-01-01', '1368/10/11', '09121112233')",
+            ("p" * 12, nid(800000001)),
+        )
+        pid = conn.execute("SELECT id FROM patients").fetchone()["id"]
+        conn.execute(
+            "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin, status, note)"
+            " VALUES ('oldoldold1', ?, '2099-06-01', '16:00', 3, 'cancelled', 'keep-me')",
+            (pid,),
+        )
+        before = dict(
+            conn.execute("SELECT * FROM appointments WHERE public_id = 'oldoldold1'").fetchone()
+        )
+
+        applied = db.migrate(conn)
+        assert any(name.startswith("0009") for name in applied)
+        assert db.migrate(conn) == []
+
+        after = dict(
+            conn.execute("SELECT * FROM appointments WHERE public_id = 'oldoldold1'").fetchone()
+        )
+        assert after["note"] == "keep-me"
+        assert after["status"] == "cancelled"
+        assert after["cabin"] == 3
+        assert after["patient_id"] == before["patient_id"]
+        assert after["public_id"] == before["public_id"]
+        idx = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_appt_active_cabin'"
+        ).fetchone()
+        assert idx and "cancelled" in idx["sql"]
+        conn.execute(
+            "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin)"
+            " VALUES ('newnewnew2', ?, '2099-06-01', '16:00', 3)",
+            (pid,),
+        )
+        n = conn.execute(
+            "SELECT COUNT(*) AS c FROM appointments WHERE slot_date='2099-06-01' AND cabin=3"
+        ).fetchone()["c"]
+        assert n == 2
+        conn.close()
 
     def test_the_database_rejects_an_out_of_range_cabin(self):
         import sqlite3

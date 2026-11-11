@@ -4,9 +4,10 @@ Clinic window: 16:00–22:00 Tehran time. Each appointment lasts 90 minutes,
 with start times at 16:00, 17:30, 19:00, and 20:30 across 10 cabins.
 
 A slot is "full" when all 10 cabins are taken for that start time. Allocation happens
-inside `BEGIN IMMEDIATE`; the `UNIQUE(slot_date, slot_time, cabin)` constraint in
-migration 0003 is the real guarantee, so two simultaneous requests can never land on
-the same cabin.
+inside `BEGIN IMMEDIATE`; the partial unique index `idx_appt_active_cabin`
+(migration 0009: UNIQUE on slot/cabin WHERE status != 'cancelled') is the real
+guarantee, so two active bookings can never share a cabin while cancelled rows keep
+their history and free the cabin for reuse.
 """
 
 from __future__ import annotations

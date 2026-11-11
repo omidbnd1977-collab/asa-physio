@@ -128,6 +128,9 @@ def migrate(conn: sqlite3.Connection | None = None) -> list[str]:
                 )
             continue
         statements = split_statements(body)
+        # Table rebuilds that DROP a parent (e.g. appointments) need FKs off; PRAGMA
+        # foreign_keys cannot change inside a transaction, so flip it around BEGIN/COMMIT.
+        conn.execute("PRAGMA foreign_keys=OFF")
         conn.execute("BEGIN")
         try:
             for stmt in statements:
@@ -139,7 +142,9 @@ def migrate(conn: sqlite3.Connection | None = None) -> list[str]:
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
+            conn.execute("PRAGMA foreign_keys=ON")
             raise
+        conn.execute("PRAGMA foreign_keys=ON")
         done.append(path.name)
         info("migration.applied", migration=path.name)
     if not done:
