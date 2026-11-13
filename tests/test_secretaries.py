@@ -465,6 +465,128 @@ class TestSecretaryUiAndBack:
         assert "clinical.record" in html and "files.manage" in html
         assert "حداقل ۶ نویسه" in html
 
+    def test_create_form_uses_novalidate_and_js_validation(self, owner_client):
+        """Regression: native required/pattern on hidden step-1 blocked Create silently."""
+        html = owner_client.get("/admin").text
+        assert 'id="secForm" novalidate' in html or "id='secForm' novalidate" in html
+        assert "validateSecAccountFields" in html
+        assert "secCreateBusy" in html
+        # Must not rely on HTML5 required/pattern that fail invisibly when step1 is display:none.
+        assert 'id="secUser" required' not in html
+        assert 'id="secPass" type="password" required' not in html
+        assert "pattern=\"[A-Za-z0-9_]+\"" not in html
+
+
+class TestSecretaryCreateApi:
+    def test_create_with_no_permissions(self, owner_client):
+        r = owner_client.post(
+            "/api/admin/secretaries",
+            json={
+                "full_name": "منشی بدون مجوز",
+                "username": "sec_noperms",
+                "password": "abcdef",
+                "permissions": [],
+            },
+        )
+        assert r.status_code == 201, r.text
+        body = r.json()
+        assert body["username"] == "sec_noperms"
+        assert body["permissions"] == []
+        listed = owner_client.get("/api/admin/secretaries").json()["items"]
+        assert any(x["username"] == "sec_noperms" and x["permissions"] == [] for x in listed)
+
+    def test_create_with_several_permissions(self, owner_client):
+        caps = [
+            perms.PATIENTS_VIEW,
+            perms.PATIENTS_CREATE,
+            perms.APPOINTMENTS_VIEW,
+            perms.FILES_MANAGE,
+        ]
+        r = owner_client.post(
+            "/api/admin/secretaries",
+            json={
+                "full_name": "منشی چندمجوز",
+                "username": "sec_multicap",
+                "password": "abcdef",
+                "permissions": caps,
+            },
+        )
+        assert r.status_code == 201, r.text
+        assert r.json()["permissions"] == sorted(caps)
+        sid = r.json()["id"]
+        assert auth.load_permissions(sid) == frozenset(caps)
+
+    def test_duplicate_username_conflict(self, owner_client):
+        payload = {
+            "full_name": "منشی یک",
+            "username": "sec_dup",
+            "password": "abcdef",
+            "permissions": [],
+        }
+        assert owner_client.post("/api/admin/secretaries", json=payload).status_code == 201
+        r = owner_client.post("/api/admin/secretaries", json=payload)
+        assert r.status_code == 409
+
+    def test_invalid_username_rejected(self, owner_client):
+        for bad in ("@moradi", "foo-bar", "محمد", "ab"):
+            r = owner_client.post(
+                "/api/admin/secretaries",
+                json={
+                    "full_name": "منشی نامعتبر",
+                    "username": bad,
+                    "password": "abcdef",
+                    "permissions": [],
+                },
+            )
+            assert r.status_code == 422, bad
+
+    def test_short_password_rejected(self, owner_client):
+        r = owner_client.post(
+            "/api/admin/secretaries",
+            json={
+                "full_name": "منشی رمزکوتاه",
+                "username": "sec_shortpw",
+                "password": "12345",
+                "permissions": [],
+            },
+        )
+        assert r.status_code == 422
+
+    def test_create_requires_csrf(self, owner_client):
+        r = owner_client.post(
+            "/api/admin/secretaries",
+            json={
+                "full_name": "منشی csrf",
+                "username": "sec_csrf_fail",
+                "password": "abcdef",
+                "permissions": [],
+            },
+            headers={"X-CSRF-Token": "not-a-real-token"},
+        )
+        assert r.status_code == 403
+
+    def test_staff_forbidden_from_creating(self, owner_client):
+        owner_client.post(
+            "/api/admin/secretaries",
+            json={
+                "full_name": "منشی عادی",
+                "username": "sec_no_create_others",
+                "password": "abcdef",
+                "permissions": [perms.PATIENTS_VIEW],
+            },
+        )
+        _login_as(owner_client, "sec_no_create_others", "abcdef")
+        r = owner_client.post(
+            "/api/admin/secretaries",
+            json={
+                "full_name": "نفوذی",
+                "username": "hacker2",
+                "password": "abcdef",
+                "permissions": list(perms.ALL),
+            },
+        )
+        assert r.status_code == 403
+
     def test_register_mentions_file_draft_limit(self, client):
         html = client.get("/booking/register").text
         assert "fileDraftHint" in html

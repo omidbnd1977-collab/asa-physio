@@ -482,20 +482,23 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
     <div class="card">
       <h2>مدیریت منشی‌ها</h2>
       <p class="muted">حساب منشی بسازید و مجوزهای هر نفر را جداگانه تنظیم کنید. رمز عبور با Argon2 ذخیره می‌شود و هرگز به‌صورت خام ثبت نمی‌گردد.</p>
-      <form id="secForm" style="display:grid;gap:10px;margin:14px 0 18px;max-width:640px">
+      <form id="secForm" novalidate style="display:grid;gap:10px;margin:14px 0 18px;max-width:640px">
         <p class="muted" id="secStepLabel">مرحله ۱ از ۲ — مشخصات حساب</p>
         <div id="secStep1" style="display:grid;gap:10px">
           <div style="display:grid;gap:10px;grid-template-columns:1fr 1fr">
             <div><label for="secName">نام و نام خانوادگی</label>
-              <input id="secName" required minlength="3" maxlength="80" autocomplete="name"></div>
+              <input id="secName" maxlength="80" autocomplete="name"></div>
             <div><label for="secUser">نام کاربری</label>
-              <input id="secUser" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_]+" autocomplete="off" dir="ltr"></div>
+              <input id="secUser" maxlength="32" autocomplete="off" dir="ltr"
+                     placeholder="مثلاً moradi (بدون @)"></div>
           </div>
           <div><label for="secPass">رمز عبور اولیه (حداقل ۶ نویسه)</label>
-            <input id="secPass" type="password" required minlength="6" maxlength="256" autocomplete="new-password"></div>
+            <input id="secPass" type="password" maxlength="256" autocomplete="new-password"></div>
+          <p class="muted" style="font-size:.75rem">نام کاربری فقط حروف انگلیسی، رقم و _ — بدون @ و فاصله.</p>
         </div>
         <div id="secStep2" class="hidden">
           <div class="sectitle" style="margin:4px 0 8px">سطح دسترسی</div>
+          <p class="muted" style="font-size:.75rem;margin:0 0 8px">انتخاب مجوز اختیاری است؛ می‌توانید بعداً از ویرایش منشی اضافه کنید.</p>
           <div id="secPerms" class="chips" style="flex-wrap:wrap"></div>
         </div>
         <div class="mrow">
@@ -1179,18 +1182,27 @@ if($('#secEditDeleteBtn')){
     });
   };
 }
+function validateSecAccountFields(){
+  const name=($('#secName')?$('#secName').value:'').trim();
+  const user=($('#secUser')?$('#secUser').value:'').trim().toLowerCase();
+  const pass=$('#secPass')?$('#secPass').value:'';
+  if(name.length<3) return {ok:false, message:'نام و نام خانوادگی را کامل وارد کنید (حداقل ۳ نویسه).'};
+  if(user.length<3 || user.length>32) return {ok:false, message:'نام کاربری باید ۳ تا ۳۲ نویسه باشد.'};
+  if(!/^[a-z0-9_]+$/.test(user)){
+    return {ok:false, message:'نام کاربری فقط می‌تواند حروف انگلیسی، رقم و _ باشد (بدون @، فاصله یا حروف فارسی).'};
+  }
+  if(pass.length < STAFF_PWD_MIN){
+    return {ok:false, message:'رمز عبور اولیه باید دست‌کم '+STAFF_PWD_MIN+' نویسه باشد.'};
+  }
+  if(pass.length > 256) return {ok:false, message:'رمز عبور بیش از حد طولانی است.'};
+  return {ok:true, name, user, pass};
+}
 if($('#secNextBtn')){
   $('#secNextBtn').onclick=()=>{
     hide('#secFormErr');
-    const name=$('#secName').value.trim();
-    const user=$('#secUser').value.trim();
-    const pass=$('#secPass').value;
-    if(name.length<3){ errBox('#secFormErr',{message:'نام و نام خانوادگی را کامل وارد کنید.'}); show('#secFormErr'); return; }
-    if(user.length<3){ errBox('#secFormErr',{message:'نام کاربری را کامل وارد کنید.'}); show('#secFormErr'); return; }
-    if(pass.length < STAFF_PWD_MIN){
-      errBox('#secFormErr',{message:'رمز عبور اولیه باید دست‌کم '+STAFF_PWD_MIN+' نویسه باشد.'});
-      show('#secFormErr'); return;
-    }
+    const v=validateSecAccountFields();
+    if(!v.ok){ errBox('#secFormErr',{message:v.message}); show('#secFormErr'); return; }
+    if($('#secUser')) $('#secUser').value = v.user;
     showSecCreateStep(2);
   };
 }
@@ -1266,20 +1278,44 @@ if($('#orphanPatAssignBtn')){
   };
 }
 if($('#secForm')){
+  let secCreateBusy=false;
   $('#secForm').addEventListener('submit', async e=>{
-    e.preventDefault(); hide('#secFormErr');
+    e.preventDefault();
+    e.stopPropagation();
+    hide('#secFormErr');
+    // Always re-check account fields before POST (step 1 may be CSS-hidden).
+    const v=validateSecAccountFields();
+    if(!v.ok){
+      errBox('#secFormErr',{message:v.message}); show('#secFormErr');
+      showSecCreateStep(1);
+      return;
+    }
+    if($('#secUser')) $('#secUser').value = v.user;
     if(SEC_STEP!==2){ showSecCreateStep(2); return; }
+    if(secCreateBusy) return;
+    secCreateBusy=true;
     await withBtn($('#secCreateBtn'),'در حال ایجاد…', async ()=>{
+      const perms=selectedSecPerms($('#secForm'), 'sec-perm');
       const r=await api('/api/admin/secretaries',{method:'POST',body:{
-        full_name:$('#secName').value.trim(),
-        username:$('#secUser').value.trim(),
-        password:$('#secPass').value,
-        permissions:selectedSecPerms(document, 'sec-perm')
+        full_name:v.name,
+        username:v.user,
+        password:v.pass,
+        permissions:perms
       }});
-      if(!r.ok){ errBox('#secFormErr', r.error); show('#secFormErr'); return; }
-      $('#secForm').reset(); showSecCreateStep(1); renderSecPermChecks($('#secPerms'), [], 'sec-perm');
-      toast('منشی ایجاد شد',true); loadSecretaries();
+      if(!r.ok){
+        errBox('#secFormErr', r.error);
+        show('#secFormErr');
+        // Keep user on step 2 so they see the API error next to Create.
+        showSecCreateStep(2);
+        return;
+      }
+      $('#secForm').reset();
+      showSecCreateStep(1);
+      renderSecPermChecks($('#secPerms'), [], 'sec-perm');
+      toast('منشی «'+v.user+'» ایجاد شد',true);
+      loadSecretaries();
     });
+    secCreateBusy=false;
   });
 }
 
