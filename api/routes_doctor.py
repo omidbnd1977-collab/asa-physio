@@ -27,6 +27,7 @@ from . import (
 from . import (
     permissions as perms,
 )
+from .config import settings
 from .errors import BadRequest, Conflict, Forbidden, NotFound
 from .jalali import now_tehran, to_jalali_long, to_jalali_str
 from .logging_ import info
@@ -699,7 +700,9 @@ async def upload_med_photo(
     actor = need(staff(request), perms.FILES_MANAGE)
     csrf(request, actor)
     patient = ownership.get_owned_patient(actor, public_id)
-    name = patients.save_upload(med_photo, prefix=f"med-{public_id[:6]}")
+    name = patients.save_upload(
+        med_photo, prefix=f"med-{public_id[:6]}", max_bytes=settings.MEDS_UPLOAD_MAX_BYTES
+    )
     if not name:
         raise BadRequest("فایلی دریافت نشد.", fields={"med_photo": "فایل خالی است."})
     repo.update(
@@ -1104,7 +1107,11 @@ async def create_patient(request: Request) -> dict[str, Any]:
         )
         if has_file:
             need(actor, perms.FILES_MANAGE)
-            med_name = patients.save_upload(upload, prefix="med-new")  # type: ignore[arg-type]
+            med_name = patients.save_upload(
+                upload,  # type: ignore[arg-type]
+                prefix="med-new",
+                max_bytes=settings.MEDS_UPLOAD_MAX_BYTES,
+            )
             if not med_name:
                 raise BadRequest(
                     "فایل عکس دارو معتبر نیست.",

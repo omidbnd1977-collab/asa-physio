@@ -343,11 +343,15 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
             <div><label for="pcMri">لینک MRI <span class="muted">(اختیاری)</span></label>
               <input id="pcMri" maxlength="500" dir="ltr" placeholder="https://"></div>
           </div>
-          <div id="pcMedWrap" hidden>
+          <div id="pcMedWrap">
             <label for="pcMedPhoto">آپلود عکس داروی مصرفی <span class="muted">(اختیاری)</span></label>
             <input id="pcMedPhoto" type="file" accept="image/jpeg,image/png,image/webp,application/pdf"
                    style="padding:8px">
-            <p class="muted" style="font-size:.75rem;margin-top:4px">JPG، PNG، WEBP یا PDF — حداکثر ۲ مگابایت. فقط با مجوز مدیریت فایل.</p>
+            <p id="pcMedHint" class="muted" style="font-size:.75rem;margin-top:4px">JPG، PNG، WEBP یا PDF — حداکثر ۲ مگابایت.</p>
+            <p id="pcMedName" class="muted" style="font-size:.78rem;margin-top:4px" hidden></p>
+            <p id="pcMedDenied" class="muted" style="font-size:.78rem;margin-top:6px;color:#fbbf24" hidden>
+              برای آپلود عکس دارو به مجوز «مشاهده و مدیریت تصاویر و فایل‌های MRI» نیاز است. ثبت بیمار بدون عکس همچنان ممکن است.
+            </p>
           </div>
           <div class="mrow">
             <button class="btn primary" type="submit" id="patCreateBtn">ثبت بیمار</button>
@@ -575,7 +579,7 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
   <h3 id="secEditTitle">ویرایش منشی</h3>
   <p class="muted" id="secEditSub" style="margin-bottom:12px"></p>
   <form id="secEditForm" style="display:grid;gap:10px">
-    <div id="secEditStep1">
+    <div>
       <label for="secEditName">نام و نام خانوادگی</label>
       <input id="secEditName" required minlength="3" maxlength="80">
       <label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:.84rem">
@@ -586,15 +590,14 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
         <input id="secEditPass" type="password" minlength="6" maxlength="256" autocomplete="new-password">
       </div>
     </div>
-    <div id="secEditStep2" class="hidden">
-      <div class="sectitle" style="margin:4px 0 8px">مجوزها</div>
-      <div id="secEditPerms" class="chips" style="flex-wrap:wrap"></div>
+    <div>
+      <div class="sectitle" style="margin:8px 0">مجوزها <span class="muted" id="secEditPermCount" style="font-weight:400"></span></div>
+      <p class="muted" style="font-size:.75rem;margin:0 0 8px">تیک هر مجوز را جداگانه فعال یا غیرفعال کنید؛ پس از ذخیره بلافاصله در API اعمال می‌شود.</p>
+      <div id="secEditPerms" class="chips" style="flex-wrap:wrap;max-height:280px;overflow:auto"></div>
     </div>
     <div id="secEditErr" class="state error hidden"></div>
     <div class="mrow">
-      <button class="btn" type="button" id="secEditBackBtn" hidden>بازگشت</button>
-      <button class="btn primary" type="button" id="secEditNextBtn">ادامه به مجوزها</button>
-      <button class="btn primary hidden" type="submit" id="secEditSaveBtn">ذخیره</button>
+      <button class="btn primary" type="submit" id="secEditSaveBtn">ذخیره</button>
       <button class="btn" type="button" id="secEditCancelBtn">انصراف</button>
       <button class="btn sm" type="button" id="secEditDeleteBtn" style="margin-inline-start:auto;border-color:#f87171;color:#fca5a5">حذف</button>
     </div>
@@ -922,8 +925,20 @@ function applyPatientsPaneVisibility(){
   const canView = hasPerm('patients.view');
   const canFiles = hasPerm('files.manage');
   if ($('#patCreateCard')) $('#patCreateCard').hidden = !canCreate;
-  if ($('#pcMedWrap')) $('#pcMedWrap').hidden = !(canCreate && canFiles);
-  if ($('#pcMedPhoto') && !canFiles) $('#pcMedPhoto').value = '';
+  // Med-photo field stays visible whenever create is allowed so the feature is
+  // discoverable; without files.manage the control is disabled (not removed).
+  if ($('#pcMedWrap')) $('#pcMedWrap').hidden = !canCreate;
+  const fileEl = $('#pcMedPhoto');
+  if (fileEl) {
+    fileEl.disabled = !canFiles;
+    if (!canFiles) fileEl.value = '';
+  }
+  if ($('#pcMedDenied')) $('#pcMedDenied').hidden = !(canCreate && !canFiles);
+  if ($('#pcMedHint')) $('#pcMedHint').hidden = !!(canCreate && !canFiles);
+  if ($('#pcMedName') && (!canFiles || !(fileEl && fileEl.files && fileEl.files[0]))) {
+    $('#pcMedName').hidden = true;
+    $('#pcMedName').textContent = '';
+  }
   if ($('#patListCard')) {
     // Keep card for messaging when create-only; hide search/list guts without view.
     if ($('#pq')) $('#pq').classList.toggle('hidden', !canView);
@@ -960,6 +975,7 @@ async function boot() {
   if ($('#remindBtn')) $('#remindBtn').classList.toggle('hidden', ROLE !== 'owner');
   hide('#loginView'); show('#appView');
   applyTabVisibility();
+  applyPatientsPaneVisibility();
   showTab(firstVisibleTab());
   if (hasPerm('messages.view')) pollMsgBadge();
 }
@@ -1037,16 +1053,22 @@ function renderSecPermChecks(box, selected, cls){
   if(!box) return;
   box.innerHTML='';
   const klass = cls || 'sec-perm';
-  Object.keys(PERM_LABELS).forEach(id=>{
+  const ids = Object.keys(PERM_LABELS);
+  ids.forEach(id=>{
     const lab=document.createElement('label');
-    lab.style.cssText='display:flex;gap:6px;align-items:center;font-size:.82rem;margin:4px 8px 4px 0';
+    lab.style.cssText='display:flex;gap:6px;align-items:flex-start;font-size:.82rem;margin:4px 8px 4px 0;line-height:1.45';
+    lab.dataset.perm = id;
     const cb=document.createElement('input');
     cb.type='checkbox'; cb.value=id; cb.className=klass;
+    cb.dataset.perm = id;
     cb.checked = Array.isArray(selected) ? selected.indexOf(id)>=0 : false;
-    cb.style.width='auto'; cb.style.minHeight='auto';
+    cb.style.width='auto'; cb.style.minHeight='auto'; cb.style.marginTop='3px';
     lab.append(cb, document.createTextNode(PERM_LABELS[id]));
     box.appendChild(lab);
   });
+  if ($('#secEditPermCount') && box.id === 'secEditPerms') {
+    $('#secEditPermCount').textContent = '('+fa(ids.length)+' مورد)';
+  }
 }
 function selectedSecPerms(root, cls){
   const c = cls || 'sec-perm';
@@ -1106,13 +1128,6 @@ async function loadSecretaries(){
     box.appendChild(row);
   });
 }
-function showSecEditStep(n){
-  if($('#secEditStep1')) $('#secEditStep1').classList.toggle('hidden', n!==1);
-  if($('#secEditStep2')) $('#secEditStep2').classList.toggle('hidden', n!==2);
-  if($('#secEditBackBtn')) $('#secEditBackBtn').hidden = n===1;
-  if($('#secEditNextBtn')) $('#secEditNextBtn').classList.toggle('hidden', n!==1);
-  if($('#secEditSaveBtn')) $('#secEditSaveBtn').classList.toggle('hidden', n!==2);
-}
 function openSecEdit(s){
   SEC_EDIT = s;
   $('#secEditTitle').textContent = 'ویرایش منشی';
@@ -1122,39 +1137,33 @@ function openSecEdit(s){
   $('#secEditPass').value = '';
   hide('#secEditErr');
   renderSecPermChecks($('#secEditPerms'), s.permissions||[], 'sec-edit-perm');
-  showSecEditStep(1);
   $('#secEditDlg').showModal();
 }
 if($('#secEditCancelBtn')) $('#secEditCancelBtn').onclick=()=>$('#secEditDlg').close();
-if($('#secEditBackBtn')) $('#secEditBackBtn').onclick=()=>showSecEditStep(1);
-if($('#secEditNextBtn')) $('#secEditNextBtn').onclick=()=>{
-  const name=$('#secEditName').value.trim();
-  if(name.length<3){ errBox('#secEditErr',{message:'نام و نام خانوادگی را کامل وارد کنید.'}); show('#secEditErr'); return; }
-  const pass=$('#secEditPass').value;
-  if(pass && pass.length < STAFF_PWD_MIN){
-    errBox('#secEditErr',{message:'رمز عبور جدید باید دست‌کم '+STAFF_PWD_MIN+' نویسه باشد.'});
-    show('#secEditErr'); return;
-  }
-  hide('#secEditErr'); showSecEditStep(2);
-};
 if($('#secEditForm')){
   $('#secEditForm').addEventListener('submit', async e=>{
     e.preventDefault(); if(!SEC_EDIT) return;
     hide('#secEditErr');
+    const name=$('#secEditName').value.trim();
+    if(name.length<3){ errBox('#secEditErr',{message:'نام و نام خانوادگی را کامل وارد کنید.'}); show('#secEditErr'); return; }
+    const pass=$('#secEditPass').value;
+    if(pass && pass.length < STAFF_PWD_MIN){
+      errBox('#secEditErr',{message:'رمز عبور جدید باید دست‌کم '+STAFF_PWD_MIN+' نویسه باشد.'});
+      show('#secEditErr'); return;
+    }
     await withBtn($('#secEditSaveBtn'),'در حال ذخیره…', async ()=>{
       const body={
-        full_name:$('#secEditName').value.trim(),
+        full_name:name,
         is_active:$('#secEditActive').checked,
         permissions:selectedSecPerms($('#secEditDlg'), 'sec-edit-perm')
       };
       const u=await api('/api/admin/secretaries/'+SEC_EDIT.id,{method:'PATCH',body:body});
       if(!u.ok){ errBox('#secEditErr', u.error); show('#secEditErr'); return; }
-      const pass=$('#secEditPass').value;
       if(pass){
         const p=await api('/api/admin/secretaries/'+SEC_EDIT.id+'/password',{method:'POST',body:{password:pass}});
         if(!p.ok){ errBox('#secEditErr', p.error); show('#secEditErr'); return; }
       }
-      $('#secEditDlg').close(); toast('منشی به‌روز شد',true); loadSecretaries();
+      $('#secEditDlg').close(); toast('منشی به‌روز شد — مجوزها ذخیره شد',true); loadSecretaries();
     });
   });
 }
@@ -1756,6 +1765,15 @@ async function loadPatients(){
   items.forEach(p=>box.appendChild(patientCard(p)));
   show('#pList');
 }
+if($('#pcMedPhoto')){
+  $('#pcMedPhoto').addEventListener('change', ()=>{
+    const f = $('#pcMedPhoto').files && $('#pcMedPhoto').files[0];
+    const nm = $('#pcMedName');
+    if(!nm) return;
+    if(f){ nm.textContent = 'فایل انتخاب‌شده: '+f.name; nm.hidden = false; }
+    else { nm.textContent = ''; nm.hidden = true; }
+  });
+}
 if($('#patCreateForm')){
   $('#patCreateForm').addEventListener('submit', async e=>{
     e.preventDefault();
@@ -1763,7 +1781,7 @@ if($('#patCreateForm')){
     hide('#patCreateErr'); hide('#patCreateOk');
     await withBtn($('#patCreateBtn'),'در حال ثبت…', async ()=>{
       const fileEl=$('#pcMedPhoto');
-      const file=(fileEl && fileEl.files && fileEl.files[0]) ? fileEl.files[0] : null;
+      const file=(fileEl && !fileEl.disabled && fileEl.files && fileEl.files[0]) ? fileEl.files[0] : null;
       if(file && !hasPerm('files.manage')){
         errBox('#patCreateErr',{message:'برای آپلود عکس دارو به مجوز مدیریت فایل نیاز است.'});
         show('#patCreateErr'); return;

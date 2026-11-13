@@ -458,7 +458,10 @@ class TestSecretaryUiAndBack:
     def test_admin_has_secretary_wizard_and_edit_dialog(self, owner_client):
         html = owner_client.get("/admin").text
         assert "secBackBtn" in html and "secNextBtn" in html
-        assert "secEditDlg" in html and "secEditBackBtn" in html
+        assert "secEditDlg" in html and "secEditSaveBtn" in html
+        assert "secEditPerms" in html and "secEditPermCount" in html
+        # Permissions are on the edit screen itself (not a second wizard step).
+        assert "secEditNextBtn" not in html and "secEditBackBtn" not in html
         assert "clinical.record" in html and "files.manage" in html
         assert "حداقل ۶ نویسه" in html
 
@@ -992,5 +995,59 @@ class TestStaffMedPhoto:
         assert "pcMedPhoto" in html
         assert "آپلود عکس داروی مصرفی" in html
         assert "pcMedWrap" in html
+        assert "pcMedDenied" in html
+        assert "pcMedName" in html
+        # Field is discoverable whenever create is allowed; disabled without files.manage.
+        assert "$('#pcMedWrap').hidden = !canCreate" in html or '$("#pcMedWrap").hidden = !canCreate' in html
+        assert "fileEl.disabled = !canFiles" in html
         assert "syncPermCatalog" in html
         assert "/patients/'+p.public_id+'/photo" in html or '/patients/\'+p.public_id+\'/photo' in html
+
+    def test_owner_me_lists_all_eleven_permissions(self, owner_client):
+        me = owner_client.get("/api/admin/me").json()
+        assert me["role"] == "owner"
+        assert len(me["permission_catalog"]) == 11
+        assert [c["id"] for c in me["permission_catalog"]] == list(perms.ALL)
+
+    def test_relgin_keeps_permissions(self, owner_client):
+        sec = self._sec(
+            owner_client,
+            "sec_relogin_keep",
+            [perms.PATIENTS_CREATE, perms.FILES_MANAGE],
+        )
+        self._as(owner_client, "sec_relogin_keep")
+        assert owner_client.get("/api/admin/me").json()["permissions"] == sorted(
+            [perms.PATIENTS_CREATE, perms.FILES_MANAGE]
+        )
+        owner_client.post("/api/admin/logout")
+        self._as(owner_client, "sec_relogin_keep")
+        me = owner_client.get("/api/admin/me").json()
+        assert me["permissions"] == sorted([perms.PATIENTS_CREATE, perms.FILES_MANAGE])
+        assert sec["id"]
+
+    def test_each_permission_toggle_persists_in_db(self, owner_client):
+        """Enable then clear every catalog permission via PATCH; DB matches API."""
+        _relogin_owner(owner_client)
+        created = self._sec(owner_client, "sec_toggle_all", [])
+        sid = created["id"]
+        for cap in perms.ALL:
+            r = owner_client.patch(
+                f"/api/admin/secretaries/{sid}",
+                json={"permissions": [cap]},
+            )
+            assert r.status_code == 200, r.text
+            assert r.json()["permissions"] == [cap]
+            assert auth.load_permissions(sid) == frozenset([cap])
+            listed = owner_client.get("/api/admin/secretaries").json()["items"]
+            row = next(x for x in listed if x["id"] == sid)
+            assert row["permissions"] == [cap]
+        cleared = owner_client.patch(
+            f"/api/admin/secretaries/{sid}", json={"permissions": []}
+        )
+        assert cleared.status_code == 200
+        assert cleared.json()["permissions"] == []
+        assert auth.load_permissions(sid) == frozenset()
+        # Live session picks up revoke without re-login.
+        self._as(owner_client, "sec_toggle_all")
+        assert owner_client.get("/api/admin/me").json()["permissions"] == []
+        assert owner_client.get("/api/admin/patients").status_code == 403
