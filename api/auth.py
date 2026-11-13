@@ -9,6 +9,7 @@ import secrets
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError
 
+from . import permissions as perms
 from . import repo
 from .config import settings
 from .errors import Forbidden, Unauthorized
@@ -17,6 +18,10 @@ from .policies import SYSTEM, Actor
 
 ph = PasswordHasher(time_cost=3, memory_cost=64 * 1024, parallelism=2)
 SESSION_COOKIE = "asa_session"
+# Owner / doctor accounts keep a stricter floor; secretaries may use a shorter
+# initial password chosen by the doctor (still Argon2-hashed, never stored raw).
+OWNER_PASSWORD_MIN = 12
+STAFF_PASSWORD_MIN = 6
 # A real hash of a value nobody knows, so a login attempt for a non-existent user costs
 # the same CPU as a real one and account existence cannot be timed.
 _DUMMY_HASH = ph.hash(secrets.token_urlsafe(32))
@@ -30,20 +35,58 @@ def _iso(d: dt.datetime) -> str:
     return d.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def hash_password(raw: str) -> str:
-    if len(raw) < 12:
-        raise ValueError("password must be at least 12 characters")
+def hash_password(raw: str, *, min_length: int | None = None) -> str:
+    """Hash with Argon2. Default minimum matches owner policy (12)."""
+    floor = OWNER_PASSWORD_MIN if min_length is None else int(min_length)
+    if len(raw) < floor:
+        raise ValueError(f"password must be at least {floor} characters")
     return ph.hash(raw)
 
 
-def create_user(username: str, password: str, role: str = "staff") -> int:
+def password_min_for_role(role: str) -> int:
+    return STAFF_PASSWORD_MIN if role == "staff" else OWNER_PASSWORD_MIN
+
+
+def load_permissions(user_id: int) -> frozenset[str]:
+    rows = repo.select(
+        SYSTEM,
+        "staff_permissions",
+        where="user_id = ?",
+        params=[user_id],
+    )
+    return frozenset(str(r["permission"]) for r in rows)
+
+
+def actor_from_user(user: dict, *, session_id: str | None = None) -> Actor:
+    role = user["role"]
+    permissions = frozenset()
+    if role == "staff":
+        permissions = load_permissions(int(user["id"]))
+    return Actor(
+        role=role,
+        user_id=int(user["id"]),
+        session_id=session_id,
+        permissions=permissions,
+    )
+
+
+def create_user(
+    username: str,
+    password: str,
+    role: str = "staff",
+    *,
+    full_name: str = "",
+    created_by: int | None = None,
+) -> int:
     uid = repo.insert(
         SYSTEM,
         "admin_users",
         {
             "username": username.strip().lower(),
             "password_hash": hash_password(password),
+            "full_name": (full_name or username).strip()[:80],
             "role": role,
+            "created_by": created_by,
         },
     )
     info("auth.user_created", user_id=uid, role=role)
@@ -69,18 +112,26 @@ def verify_login(username: str, password: str) -> Actor:
         warn("auth.login_failed", user=fingerprint(username))
         raise Unauthorized("نام کاربری یا گذرواژه درست نیست.")
     user = rows[0]
+    # Orphan secretaries (no owning doctor) cannot use the panel until explicitly assigned.
+    if user["role"] == "staff" and user.get("created_by") is None:
+        warn("auth.login_orphan_staff", user=fingerprint(username))
+        raise Unauthorized("نام کاربری یا گذرواژه درست نیست.")
     if ph.check_needs_rehash(user["password_hash"]):
         repo.update(
             SYSTEM,
             "admin_users",
-            {"password_hash": hash_password(password)},
+            {
+                "password_hash": hash_password(
+                    password, min_length=password_min_for_role(str(user["role"]))
+                )
+            },
             where="id = ?",
             params=[user["id"]],
         )
     repo.update(
         SYSTEM, "admin_users", {"last_login_at": _iso(_now())}, where="id = ?", params=[user["id"]]
     )
-    return Actor(role=user["role"], user_id=user["id"])
+    return actor_from_user(user)
 
 
 def start_session(actor: Actor, ip: str) -> tuple[str, dt.datetime]:
@@ -116,7 +167,10 @@ def resolve_session(sid: str | None) -> Actor:
     )
     if not users:
         return ANON
-    return Actor(role=users[0]["role"], user_id=users[0]["id"], session_id=sid)
+    user = users[0]
+    if user["role"] == "staff" and user.get("created_by") is None:
+        return ANON
+    return actor_from_user(user, session_id=sid)
 
 
 def revoke_session(sid: str) -> None:
@@ -133,6 +187,26 @@ def require(actor: Actor, role: str = "staff") -> Actor:
     if not actor.at_least(role):  # type: ignore[arg-type]
         raise Forbidden()
     return actor
+
+
+def require_perm(actor: Actor, permission: str) -> Actor:
+    """Staff must hold the permission; owners always pass. Call after require(staff)."""
+    require(actor, "staff")
+    if not actor.can(permission):
+        raise Forbidden("اجازهٔ دسترسی به این بخش را ندارید.")
+    return actor
+
+
+def replace_permissions(user_id: int, permissions: list[str] | set[str]) -> frozenset[str]:
+    wanted = perms.normalize(permissions)
+    with repo.tx() as conn:
+        conn.execute("DELETE FROM staff_permissions WHERE user_id = ?", (user_id,))
+        for p in sorted(wanted):
+            conn.execute(
+                "INSERT INTO staff_permissions(user_id, permission) VALUES (?, ?)",
+                (user_id, p),
+            )
+    return wanted
 
 
 def csrf_token(session_id: str) -> str:

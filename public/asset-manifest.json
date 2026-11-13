@@ -1,4 +1,5 @@
 {
+  "assets/asa.jpg": "assets/asa.95d388fc86.jpg",
   "assets/clinic.jpg": "assets/clinic.9c931175d3.jpg",
   "assets/fonts/Vazirmatn-Bold.woff2": "assets/fonts/Vazirmatn-Bold.836fae7d42.woff2",
   "assets/fonts/Vazirmatn-ExtraBold.woff2": "assets/fonts/Vazirmatn-ExtraBold.cd67558bbc.woff2",
@@ -12,12 +13,13 @@
   "assets/mark.svg": "assets/mark.2e65e06783.svg",
   "assets/neck.jpg": "assets/neck.f9f67b32f7.jpg",
   "assets/shoulder.jpg": "assets/shoulder.71557af80b.jpg",
-  "style.css": "style.113cd69c52.css",
+  "style.css": "style.41e8105be2.css",
   "about.html": "about.html",
   "contact.html": "contact.html",
   "faq.html": "faq.html",
   "gallery.html": "gallery.html",
   "index.html": "index.html",
+  "service-detail.html": "service-detail.html",
   "services.html": "services.html",
   "treatments.html": "treatments.html"
 }

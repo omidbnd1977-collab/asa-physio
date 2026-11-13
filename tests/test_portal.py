@@ -47,6 +47,14 @@ PNG = (
 
 @pytest.fixture()
 def patient(client):
+    # Ensure a sole active owner exists for portal auto-attach — without logging
+    # in as staff (tests that only use `patient` must stay patient-scoped).
+    from api import auth, repo
+    from api.policies import SYSTEM
+
+    owners = repo.select(SYSTEM, "admin_users", where="role = 'owner' AND is_active = 1", limit=2)
+    if not owners:
+        auth.create_user("t_owner", "a-very-long-test-password", role="owner", full_name="پزشک تست")
     r = client.post(
         "/api/portal/register",
         data=reg_form(),
@@ -155,6 +163,204 @@ class TestRegistration:
         assert len(sms) == 1 and sms[0]["status"] == "sent"
         assert "اطلاعات شما" in sms[0]["body"]
 
+    def test_mri_url_is_saved_as_private_file_when_image_download_succeeds(
+        self, client, monkeypatch
+    ):
+        from api import repo
+        from api.policies import SYSTEM
+
+        async def fake_download(url):
+            assert url == "https://cdn.example/mri.png"
+            return PNG, "image/png"
+
+        monkeypatch.setattr("api.routes_booking._download_remote_mri", fake_download)
+        r = client.post(
+            "/api/portal/register",
+            data=reg_form(national_id=NID_B, mri_link="https://cdn.example/mri.png"),
+        )
+        assert r.status_code == 201, r.text
+        patient = repo.select(SYSTEM, "patients", where="national_id = ?", params=[NID_B])[0]
+        assert patient["mri_file"].endswith(".png")
+        assert r.json()["mri_warning"] == ""
+
+    def test_mri_download_failure_does_not_abort_registration(self, client, monkeypatch):
+        from api import repo
+        from api.errors import BadRequest
+        from api.policies import SYSTEM
+
+        async def failed_download(url):
+            raise BadRequest("لینک MRI قابل دریافت نیست.", code="mri_download_failed")
+
+        monkeypatch.setattr("api.routes_booking._download_remote_mri", failed_download)
+        r = client.post(
+            "/api/portal/register",
+            data=reg_form(national_id=NID_B, mri_link="https://cdn.example/missing.png"),
+        )
+        assert r.status_code == 201, r.text
+        assert "قابل دریافت" in r.json()["mri_warning"]
+        patient = repo.select(SYSTEM, "patients", where="national_id = ?", params=[NID_B])[0]
+        assert patient["mri_file"] == ""
+
+    def test_mri_private_url_is_rejected(self):
+        from api.errors import BadRequest
+        from api.routes_booking import _public_mri_url
+
+        with pytest.raises(BadRequest):
+            _public_mri_url("http://127.0.0.1/mri.png")
+
+    @pytest.mark.parametrize(
+        "host,ip",
+        [
+            ("loop.example", "127.0.0.1"),
+            ("lan.example", "10.0.0.5"),
+            ("cgnat.example", "100.64.1.2"),
+            ("meta.example", "169.254.169.254"),
+            ("v6loop.example", "::1"),
+            ("v6ula.example", "fc00::1"),
+        ],
+    )
+    def test_mri_pin_rejects_blocked_resolved_ips(self, monkeypatch, host, ip):
+        import socket
+
+        from api.errors import BadRequest
+        from api.routes_booking import _pin_public_mri_url
+
+        def fake_gai(hostname, port, *a, **kw):
+            assert hostname == host
+            family = socket.AF_INET6 if ":" in ip else socket.AF_INET
+            sockaddr = (ip, port, 0, 0) if ":" in ip else (ip, port)
+            return [(family, socket.SOCK_STREAM, 0, "", sockaddr)]
+
+        monkeypatch.setattr("api.routes_booking.socket.getaddrinfo", fake_gai)
+        with pytest.raises(BadRequest) as ei:
+            _pin_public_mri_url(f"https://{host}/mri.png")
+        assert ei.value.code == "blocked_mri_url"
+
+    def test_mri_pin_accepts_public_ipv4_and_ipv6(self, monkeypatch):
+        import socket
+
+        from api.routes_booking import _pin_public_mri_url
+
+        def fake_gai(hostname, port, *a, **kw):
+            return [
+                (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("2606:4700::1", port, 0, 0)),
+                (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("1.1.1.1", port)),
+            ]
+
+        monkeypatch.setattr("api.routes_booking.socket.getaddrinfo", fake_gai)
+        url, host, pinned = _pin_public_mri_url("https://cdn.example/mri.png")
+        assert url.endswith("/mri.png") and host == "cdn.example"
+        assert pinned == "1.1.1.1"  # IPv4 preferred when both are public
+
+    def test_mri_dns_rebinding_cannot_bypass_ip_pin(self, monkeypatch):
+        """Resolve once to a public IP and dial that IP even if DNS later flips to loopback."""
+        import asyncio
+        import socket
+
+        import httpcore
+
+        from api.errors import BadRequest
+        from api.routes_booking import _pin_public_mri_url, _PinnedIPBackend
+
+        answers = iter([["8.8.8.8"], ["127.0.0.1"]])
+
+        def fake_gai(hostname, port, *a, **kw):
+            ip = next(answers)[0]
+            return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", (ip, port))]
+
+        monkeypatch.setattr("api.routes_booking.socket.getaddrinfo", fake_gai)
+        _url, _host, pinned = _pin_public_mri_url("https://rebind.example/a.png")
+        assert pinned == "8.8.8.8"
+        dialed: list[str] = []
+
+        class RecordingInner(httpcore.AsyncNetworkBackend):
+            async def connect_tcp(
+                self, host, port, timeout=None, local_address=None, socket_options=None
+            ):
+                dialed.append(host)
+                raise OSError("stop-after-dial")
+
+            async def connect_unix_socket(self, path, timeout=None, socket_options=None):
+                raise OSError("no uds")
+
+            async def sleep(self, seconds):
+                return None
+
+        backend = _PinnedIPBackend(pinned)
+        backend._inner = RecordingInner()  # noqa: SLF001
+
+        with pytest.raises(OSError, match="stop-after-dial"):
+            asyncio.run(backend.connect_tcp("rebind.example", 443))
+        assert dialed == ["8.8.8.8"]
+        # Second DNS answer is loopback — validation must fail closed.
+        with pytest.raises(BadRequest) as ei:
+            _pin_public_mri_url("https://rebind.example/a.png")
+        assert ei.value.code == "blocked_mri_url"
+
+    def test_mri_redirect_to_private_ip_is_rejected(self, monkeypatch):
+        import asyncio
+        import socket
+
+        from api.errors import BadRequest
+        from api.routes_booking import _download_remote_mri
+
+        def fake_gai(hostname, port, *a, **kw):
+            ip = "1.1.1.1" if hostname == "cdn.example" else "10.1.2.3"
+            return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", (ip, port))]
+
+        monkeypatch.setattr("api.routes_booking.socket.getaddrinfo", fake_gai)
+
+        class FakeStream:
+            status_code = 302
+            headers = {"location": "https://evil.internal/secret.png"}
+
+            async def aiter_bytes(self, chunk_size=0):
+                if False:  # pragma: no cover
+                    yield b""
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+        class FakeClient:
+            def __init__(self, *a, **k):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            def stream(self, *a, **k):
+                return FakeStream()
+
+        monkeypatch.setattr("api.routes_booking.httpx.AsyncClient", FakeClient)
+        monkeypatch.setattr("api.routes_booking._pinned_transport", lambda ip: object())
+
+        with pytest.raises(BadRequest) as ei:
+            asyncio.run(_download_remote_mri("https://cdn.example/mri.png"))
+        assert ei.value.code == "blocked_mri_url"
+
+    def test_mri_download_failure_still_registers_with_warning(self, client, monkeypatch):
+        from api.errors import BadRequest
+
+        async def boom(_url: str):
+            raise BadRequest(
+                "دریافت از شبکه داخلی یا آدرس خصوصی مجاز نیست.", code="blocked_mri_url"
+            )
+
+        monkeypatch.setattr("api.routes_booking._download_remote_mri", boom)
+        r = client.post(
+            "/api/portal/register",
+            data=reg_form(national_id=NID_B, mri_link="https://cdn.example/x.png"),
+        )
+        assert r.status_code == 201, r.text
+        assert "داخلی" in r.json()["mri_warning"] or "خصوصی" in r.json()["mri_warning"]
+        assert client.get("/api/portal/me").status_code == 200
+
     def test_the_session_cookie_is_set_so_the_patient_goes_straight_to_booking(self, client):
         r = client.post("/api/portal/register", data=reg_form())
         assert r.status_code == 201
@@ -199,13 +405,26 @@ class TestRegistration:
     def test_oversized_upload_is_refused(self, client, monkeypatch):
         from api.config import settings
 
-        monkeypatch.setattr(settings, "MAX_UPLOAD_BYTES", 100)
+        monkeypatch.setattr(settings, "MEDS_UPLOAD_MAX_BYTES", 100)
         r = client.post(
             "/api/portal/register",
             data=reg_form(),
             files={"med_photo": ("m.png", io.BytesIO(PNG + b"\x00" * 500), "image/png")},
         )
         assert r.status_code == 413
+
+    def test_medication_upload_uses_exact_two_megabyte_limit(self, client, monkeypatch):
+        from api.config import settings
+
+        monkeypatch.setattr(settings, "MEDS_UPLOAD_MAX_BYTES", 2 * 1024 * 1024)
+        oversized = PNG + b"\\x00" * (2 * 1024 * 1024)
+        r = client.post(
+            "/api/portal/register",
+            data=reg_form(national_id=NID_B),
+            files={"med_photo": ("m.png", io.BytesIO(oversized), "image/png")},
+        )
+        assert r.status_code == 413
+        assert "2 مگابایت" in r.json()["error"]["message"]
 
     def test_honeypot_is_absorbed(self, client):
         from api import repo
@@ -289,7 +508,7 @@ class TestSlots:
         from api import scheduling
 
         assert scheduling.SLOTS[0] == "16:00"
-        assert scheduling.SLOTS[-1] == "20:30"
+        assert scheduling.SLOTS == ["16:00", "17:30", "19:00", "20:30"]
         assert len(scheduling.SLOTS) == 4
         assert scheduling.CABINS == 10
         assert scheduling.DAY_CAPACITY == 40
@@ -370,9 +589,9 @@ class TestSlots:
                     "phone": f"091500000{i:02d}",
                 },
             )
-            scheduling.allocate(pid, tomorrow(), "16:00")
+            scheduling.allocate(pid, tomorrow(), "17:30")
         g = client.get("/api/portal/slots?date=" + tomorrow()).json()
-        slot = next(s for s in g["slots"] if s["time"] == "16:00")
+        slot = next(s for s in g["slots"] if s["time"] == "17:30")
         assert slot["free"] == 0 and slot["full"] and slot["disabled"]
 
     @pytest.mark.parametrize("time_", ["09:00", "15:30", "22:00", "23:30"])
@@ -407,6 +626,144 @@ class TestSlots:
         )
         g = client.get("/api/portal/slots?date=" + tomorrow()).json()
         assert next(s for s in g["slots"] if s["time"] == "19:00")["free"] == 10
+
+    def test_rebook_same_slot_and_cabin_after_cancel(self, client, patient):
+        """C1: cancelled history stays; the same cabin can be booked again."""
+        from api import repo
+        from api.policies import SYSTEM
+
+        day, slot = tomorrow(), "19:00"
+        first = client.post("/api/portal/appointments", json={"slot_date": day, "slot_time": slot})
+        assert first.status_code == 201, first.text
+        cabin = first.json()["cabin"]
+        code = first.json()["code"]
+
+        cancelled = client.post(f"/api/portal/appointments/{code}/cancel")
+        assert cancelled.status_code == 200, cancelled.text
+
+        again = client.post("/api/portal/appointments", json={"slot_date": day, "slot_time": slot})
+        assert again.status_code == 201, again.text
+        assert again.json()["cabin"] == cabin
+        assert again.json()["code"] != code
+
+        rows = repo.select(
+            SYSTEM,
+            "appointments",
+            where="slot_date = ? AND slot_time = ? AND cabin = ?",
+            params=[day, slot, cabin],
+        )
+        assert len(rows) == 2
+        by_status = {r["status"] for r in rows}
+        assert by_status == {"cancelled", "booked"}
+        assert {r["public_id"] for r in rows} == {code, again.json()["code"]}
+
+
+# ======================================================================
+# Patient cancel (portal)
+# ======================================================================
+class TestPatientCancel:
+    def _book(self, client, slot_time: str = "19:00") -> dict:
+        r = client.post(
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": slot_time}
+        )
+        assert r.status_code == 201, r.text
+        return r.json()
+
+    def test_cancel_sets_status_and_updated_at(self, client, patient):
+        from api import repo
+        from api.policies import SYSTEM
+
+        booked = self._book(client)
+        code = booked["code"]
+        before = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[code])[0]
+        repo.update(
+            SYSTEM,
+            "appointments",
+            {"updated_at": "2020-01-01T00:00:00Z"},
+            where="id = ?",
+            params=[before["id"]],
+        )
+
+        r = client.post(f"/api/portal/appointments/{code}/cancel")
+        assert r.status_code == 200, r.text
+        after = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[code])[0]
+        assert after["status"] == "cancelled"
+        assert after["updated_at"] > "2020-01-01T00:00:00Z"
+        assert after["updated_at"].endswith("Z")
+
+    def test_duplicate_cancel_is_conflict(self, client, patient):
+        code = self._book(client)["code"]
+        assert client.post(f"/api/portal/appointments/{code}/cancel").status_code == 200
+        r = client.post(f"/api/portal/appointments/{code}/cancel")
+        assert r.status_code == 409
+        assert r.json()["error"]["code"] == "conflict"
+
+    @pytest.mark.parametrize("status", ["attended", "no_show"])
+    def test_non_booked_status_cannot_be_cancelled(self, client, patient, status):
+        from api import repo
+        from api.policies import SYSTEM
+
+        code = self._book(client)["code"]
+        repo.update(
+            SYSTEM, "appointments", {"status": status}, where="public_id = ?", params=[code]
+        )
+        r = client.post(f"/api/portal/appointments/{code}/cancel")
+        assert r.status_code == 409
+        assert r.json()["error"]["code"] == "conflict"
+        assert (
+            repo.select(SYSTEM, "appointments", where="public_id = ?", params=[code])[0]["status"]
+            == status
+        )
+
+    def test_cancel_without_auth_is_unauthorized(self, client, patient):
+        code = self._book(client)["code"]
+        client.cookies.clear()
+        assert client.post(f"/api/portal/appointments/{code}/cancel").status_code == 401
+
+    def test_cannot_cancel_another_patients_appointment(self, client, patient):
+        code = self._book(client)["code"]
+        client.cookies.clear()
+        other = client.post(
+            "/api/portal/register",
+            data=reg_form(national_id=NID_B, phone="۰۹۱۲۳۳۳۴۴۵۵", full_name="بیمار دیگر"),
+            files={"med_photo": ("m.png", io.BytesIO(PNG), "image/png")},
+        )
+        assert other.status_code == 201, other.text
+        assert client.post(f"/api/portal/appointments/{code}/cancel").status_code == 404
+
+    def test_cancel_inside_three_hours_is_forbidden(self, client, patient):
+        from api import repo
+        from api.jalali import now_tehran
+        from api.policies import SYSTEM
+
+        code = self._book(client)["code"]
+        soon = now_tehran() + dt.timedelta(hours=2)
+        repo.update(
+            SYSTEM,
+            "appointments",
+            {
+                "slot_date": soon.date().isoformat(),
+                "slot_time": soon.strftime("%H:%M"),
+            },
+            where="public_id = ?",
+            params=[code],
+        )
+        r = client.post(f"/api/portal/appointments/{code}/cancel")
+        assert r.status_code == 403
+        assert (
+            repo.select(SYSTEM, "appointments", where="public_id = ?", params=[code])[0]["status"]
+            == "booked"
+        )
+
+    def test_cancel_does_not_send_sms(self, client, patient):
+        from api import repo
+        from api.policies import SYSTEM
+
+        code = self._book(client)["code"]
+        before = repo.count(SYSTEM, "sms_messages")
+        assert client.post(f"/api/portal/appointments/{code}/cancel").status_code == 200
+        assert repo.count(SYSTEM, "sms_messages") == before
+        assert repo.count(SYSTEM, "sms_messages", where="kind = 'cancelled'") == 0
 
 
 # ======================================================================
@@ -445,7 +802,7 @@ class TestBooking:
             client.post(
                 "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": t}
             ).status_code
-            for t in ("16:00", "17:30", "16:00", "17:30")
+            for t in ("16:00", "17:30", "19:00", "20:30")
         ]
         assert codes[:2] == [201, 201] and 429 in codes[2:]
 
@@ -538,14 +895,358 @@ class TestDoctorPanel:
                     "phone": f"091600000{i:02d}",
                 },
             )
-            scheduling.allocate(pid, tomorrow(), "19:00")
+            scheduling.allocate(pid, tomorrow(), "20:30")
         r = owner_client.patch(
             f"/api/admin/appointments/{book['code']}/move",
-            json={"slot_date": tomorrow(), "slot_time": "19:00"},
+            json={"slot_date": tomorrow(), "slot_time": "20:30"},
         )
         assert r.status_code == 409
         still = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[book["code"]])[0]
         assert still["status"] == "booked" and still["slot_time"] == "16:00"
+
+    def test_failed_allocate_rolls_back_without_manual_restore(
+        self, owner_client, patient, monkeypatch
+    ):
+        """Cancel+insert share one tx: a mid-flight failure must not leave cancelled."""
+        from api import repo, scheduling
+        from api.errors import Conflict
+        from api.policies import SYSTEM
+
+        book = owner_client.post(
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
+        ).json()
+        before = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[book["code"]])[
+            0
+        ]
+
+        def boom(conn, *a, **k):
+            raise Conflict("پر شد", code="slot_full")
+
+        monkeypatch.setattr(scheduling, "allocate_on_conn", boom)
+        r = owner_client.patch(
+            f"/api/admin/appointments/{book['code']}/move",
+            json={"slot_date": tomorrow(), "slot_time": "20:30", "notify": False},
+        )
+        assert r.status_code == 409
+        after = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[book["code"]])[0]
+        assert after["status"] == "booked"
+        assert after["slot_time"] == before["slot_time"]
+        assert after["cabin"] == before["cabin"]
+        assert (
+            repo.count(
+                SYSTEM,
+                "appointments",
+                where="status = 'cancelled' AND patient_id = ?",
+                params=[before["patient_id"]],
+            )
+            == 0
+        )
+
+    def test_dest_cabin_integrity_error_becomes_conflict(self, owner_client, patient, monkeypatch):
+        import sqlite3
+
+        from api import repo, scheduling
+        from api.policies import SYSTEM
+
+        book = owner_client.post(
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
+        ).json()
+
+        def boom(conn, *a, **k):
+            raise sqlite3.IntegrityError("UNIQUE constraint failed: idx_appt_active_cabin")
+
+        monkeypatch.setattr(scheduling, "allocate_on_conn", boom)
+        r = owner_client.patch(
+            f"/api/admin/appointments/{book['code']}/move",
+            json={"slot_date": tomorrow(), "slot_time": "19:00", "notify": False},
+        )
+        assert r.status_code == 409
+        assert r.json()["error"]["code"] == "slot_full"
+        still = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[book["code"]])[0]
+        assert still["status"] == "booked" and still["slot_time"] == "16:00"
+
+    def test_reschedule_real_unique_index_conflict_returns_409(
+        self, owner_client, patient, monkeypatch
+    ):
+        """Real SQLite partial UNIQUE hit inside allocate_on_conn → HTTP 409; source stays booked.
+
+        Under BEGIN IMMEDIATE, two writers cannot interleave SELECT+INSERT, so a true
+        check-then-act race is not reproducible. Instead we keep the real
+        allocate_on_conn body and only wrap the connection so the cabin SELECT
+        returns empty while cabin 1 is already taken — the subsequent INSERT
+        collides with idx_appt_active_cabin on the live database.
+        """
+        from api import repo, scheduling
+        from api.errors import Conflict
+        from api.policies import SYSTEM
+
+        class _StaleActiveCabinConn:
+            def __init__(self, conn):
+                self._conn = conn
+
+            def execute(self, sql, parameters=()):
+                text = sql if isinstance(sql, str) else str(sql)
+                if "SELECT cabin FROM appointments" in text and "status != 'cancelled'" in text:
+
+                    class _Empty:
+                        def fetchall(self_inner):
+                            return []
+
+                    return _Empty()
+                return self._conn.execute(sql, parameters)
+
+        book = owner_client.post(
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
+        ).json()
+        source = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[book["code"]])[
+            0
+        ]
+
+        other_pid = repo.insert(
+            SYSTEM,
+            "patients",
+            {
+                "public_id": "z" * 12,
+                "national_id": nid(700000099),
+                "full_name": "رقیب کابین",
+                "birth_date": "1980-01-01",
+                "birth_jalali": "1358/10/11",
+                "phone": "09170000099",
+            },
+        )
+        dest = scheduling.allocate(other_pid, tomorrow(), "19:00")
+        assert dest["cabin"] == 1
+
+        real_allocate = scheduling.allocate_on_conn
+
+        def allocate_via_stale_read(conn, *args, **kwargs):
+            return real_allocate(_StaleActiveCabinConn(conn), *args, **kwargs)
+
+        monkeypatch.setattr(scheduling, "allocate_on_conn", allocate_via_stale_read)
+
+        # Direct reschedule path (same TX as HTTP move)
+        with pytest.raises(Conflict) as raised:
+            scheduling.reschedule(source, tomorrow(), "19:00", booked_by="staff")
+        assert raised.value.code == "slot_full"
+        import sqlite3 as _sqlite3
+
+        assert isinstance(raised.value.__cause__, _sqlite3.IntegrityError)
+
+        after_direct = repo.select(
+            SYSTEM, "appointments", where="public_id = ?", params=[book["code"]]
+        )[0]
+        assert after_direct["status"] == "booked" and after_direct["slot_time"] == "16:00"
+        assert after_direct["cabin"] == source["cabin"]
+
+        r = owner_client.patch(
+            f"/api/admin/appointments/{book['code']}/move",
+            json={"slot_date": tomorrow(), "slot_time": "19:00", "notify": False},
+        )
+        assert r.status_code == 409
+        assert r.json()["error"]["code"] == "slot_full"
+        assert "UNIQUE" not in r.text and "idx_appt" not in r.text
+        still = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[book["code"]])[0]
+        assert still["status"] == "booked" and still["slot_time"] == "16:00"
+        assert (
+            repo.count(
+                SYSTEM,
+                "appointments",
+                where="status = 'cancelled' AND public_id = ?",
+                params=[book["code"]],
+            )
+            == 0
+        )
+
+    def test_partial_unique_rejects_duplicate_cabin_on_independent_connections(self, patient):
+        """Two separate sqlite connections: first commits cabin 1; second INSERT hits UNIQUE."""
+        import sqlite3
+
+        from api import repo
+        from api.db import connect
+        from api.policies import SYSTEM
+
+        day, slot = tomorrow(), "20:30"
+        pid = repo.select(SYSTEM, "patients")[0]["id"]
+        other = repo.insert(
+            SYSTEM,
+            "patients",
+            {
+                "public_id": "w" * 12,
+                "national_id": nid(700000088),
+                "full_name": "اتصال دوم",
+                "birth_date": "1980-01-01",
+                "birth_jalali": "1358/10/11",
+                "phone": "09170000088",
+            },
+        )
+
+        c1 = connect()
+        try:
+            c1.execute("BEGIN IMMEDIATE")
+            c1.execute(
+                "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin)"
+                " VALUES ('conn1cabin', ?, ?, ?, 1)",
+                (pid, day, slot),
+            )
+            c1.execute("COMMIT")
+        finally:
+            c1.close()
+
+        c2 = connect()
+        try:
+            c2.execute("BEGIN IMMEDIATE")
+            with pytest.raises(sqlite3.IntegrityError) as hit:
+                c2.execute(
+                    "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin)"
+                    " VALUES ('conn2cabin', ?, ?, ?, 1)",
+                    (other, day, slot),
+                )
+            assert "idx_appt_active_cabin" in str(hit.value) or "UNIQUE" in str(hit.value).upper()
+            c2.execute("ROLLBACK")
+        finally:
+            c2.close()
+
+    def test_begin_immediate_writers_serialize_then_second_hits_unique(self, patient):
+        """Parallel BEGIN IMMEDIATE writers are serialized by SQLite (deterministic barriers).
+
+        Limitation: they cannot interleave allocate's SELECT+INSERT to race inside one
+        check-then-act window; the second blocks at BEGIN until the first commits, then
+        the INSERT collides with the partial UNIQUE index.
+        """
+        import sqlite3
+        import threading
+
+        from api import repo
+        from api.db import connect
+        from api.policies import SYSTEM
+
+        day, slot = tomorrow(), "17:30"
+        pid = repo.select(SYSTEM, "patients")[0]["id"]
+        other = repo.insert(
+            SYSTEM,
+            "patients",
+            {
+                "public_id": "v" * 12,
+                "national_id": nid(700000077),
+                "full_name": "نویسنده دوم",
+                "birth_date": "1980-01-01",
+                "birth_jalali": "1358/10/11",
+                "phone": "09170000077",
+            },
+        )
+
+        holding = threading.Event()
+        release = threading.Event()
+        second_result: list[object] = []
+
+        def first_writer() -> None:
+            c = connect()
+            try:
+                c.execute("BEGIN IMMEDIATE")
+                c.execute(
+                    "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin)"
+                    " VALUES ('immfirst01', ?, ?, ?, 1)",
+                    (pid, day, slot),
+                )
+                holding.set()
+                assert release.wait(timeout=5)
+                c.execute("COMMIT")
+            finally:
+                c.close()
+
+        def second_writer() -> None:
+            assert holding.wait(timeout=5)
+            c = connect()
+            try:
+                # Blocks here until first_writer COMMITs (IMMEDIATE reserved lock).
+                c.execute("BEGIN IMMEDIATE")
+                try:
+                    c.execute(
+                        "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin)"
+                        " VALUES ('immsecond1', ?, ?, ?, 1)",
+                        (other, day, slot),
+                    )
+                    c.execute("COMMIT")
+                    second_result.append("committed")
+                except sqlite3.IntegrityError as exc:
+                    second_result.append(exc)
+                    c.execute("ROLLBACK")
+            finally:
+                c.close()
+
+        t1 = threading.Thread(target=first_writer)
+        t2 = threading.Thread(target=second_writer)
+        t1.start()
+        assert holding.wait(timeout=5)
+        t2.start()
+        release.set()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+        assert len(second_result) == 1
+        assert isinstance(second_result[0], sqlite3.IntegrityError)
+
+    def test_source_cabin_stays_held_until_move_commits(self, owner_client, patient, monkeypatch):
+        """While reschedule's IMMEDIATE tx is open, the source cabin must still look taken
+        to a concurrent allocate — proving cancel is not visible until commit."""
+        import threading
+
+        from api import repo, scheduling
+        from api.db import connect
+        from api.policies import SYSTEM
+
+        book = owner_client.post(
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
+        ).json()
+        old = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[book["code"]])[0]
+        day, slot = old["slot_date"], old["slot_time"]
+        cabin = old["cabin"]
+        seen_active: list[int] = []
+        gate = threading.Event()
+        done = threading.Event()
+
+        real_allocate = scheduling.allocate_on_conn
+
+        def slow_allocate(conn, *a, **k):
+            gate.set()
+            assert done.wait(timeout=5), "concurrent probe did not finish"
+            return real_allocate(conn, *a, **k)
+
+        monkeypatch.setattr(scheduling, "allocate_on_conn", slow_allocate)
+
+        def probe():
+            assert gate.wait(timeout=5)
+            c = connect()
+            try:
+                n = c.execute(
+                    "SELECT COUNT(*) AS n FROM appointments "
+                    "WHERE slot_date = ? AND slot_time = ? AND cabin = ? "
+                    "AND status != 'cancelled'",
+                    (day, slot, cabin),
+                ).fetchone()["n"]
+                seen_active.append(int(n))
+            finally:
+                c.close()
+                done.set()
+
+        t = threading.Thread(target=probe)
+        t.start()
+        r = owner_client.patch(
+            f"/api/admin/appointments/{book['code']}/move",
+            json={"slot_date": tomorrow(), "slot_time": "20:30", "notify": False},
+        )
+        t.join(timeout=10)
+        assert r.status_code == 200, r.text
+        assert seen_active == [1], "source cabin must stay occupied until commit"
+        # after commit the old row is cancelled and the cabin is free for reuse
+        leftover = repo.select(
+            SYSTEM,
+            "appointments",
+            where="slot_date = ? AND slot_time = ? AND cabin = ? AND status != 'cancelled'",
+            params=[day, slot, cabin],
+        )
+        assert leftover == []
+        again = scheduling.allocate(old["patient_id"], day, slot)
+        assert again["cabin"] == cabin
 
     def test_next_session_is_booked_and_texted(self, owner_client, patient):
         from api import repo
@@ -603,7 +1304,8 @@ class TestReminders:
         out = reminders.run_once(lead_min=60 * 24 * 7)
         assert out["due"] == 1 and out["sent"] == 1
         sms = repo.select(SYSTEM, "sms_messages", where="kind = 'confirm_request'")[0]
-        assert "عدد 1 را ارسال کنید" in sms["body"]
+        assert "عدد ۱" in sms["body"] and "عدد ۲" in sms["body"]
+        assert "تأیید حضور" in sms["body"] and "عدم حضور" in sms["body"]
         assert repo.select(SYSTEM, "appointments")[0]["confirm_sent_at"]
 
     def test_the_reminder_is_never_sent_twice(self, client, patient):
@@ -615,6 +1317,29 @@ class TestReminders:
         reminders.run_once(lead_min=60 * 24 * 7)
         assert reminders.run_once(lead_min=60 * 24 * 7)["sent"] == 0
 
+    def test_run_once_skips_sms_when_claim_update_changes_no_rows(
+        self, client, patient, monkeypatch
+    ):
+        from api import reminders, sms
+
+        client.post(
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
+        )
+        sends: list[str] = []
+
+        def _no_claim(*_a, **_k):
+            return 0
+
+        def _track_send(phone, body, kind, **kwargs):
+            sends.append(kind)
+            return ("", True)
+
+        monkeypatch.setattr(reminders.repo, "update", _no_claim)
+        monkeypatch.setattr(sms, "send_now", _track_send)
+        out = reminders.run_once(lead_min=60 * 24 * 7)
+        assert out["due"] == 1 and out["sent"] == 0 and out["failed"] == 0
+        assert sends == []
+
     def test_nothing_is_sent_outside_the_window(self, client, patient):
         from api import reminders
 
@@ -622,6 +1347,36 @@ class TestReminders:
             "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "20:30"}
         )
         assert reminders.run_once(lead_min=5)["due"] == 0
+
+    def test_lifespan_starts_and_cancels_reminder_loop(self, monkeypatch):
+        import asyncio
+        import time
+
+        from fastapi.testclient import TestClient
+
+        from api import reminders
+        from api.config import settings
+        from api.main import app
+
+        events: list[str] = []
+
+        async def fake_loop():
+            events.append("start")
+            try:
+                while True:
+                    await asyncio.sleep(0.05)
+            except asyncio.CancelledError:
+                events.append("cancel")
+                raise
+
+        monkeypatch.setattr(settings, "REMINDER_BACKGROUND", True)
+        monkeypatch.setattr(reminders, "loop", fake_loop)
+        with TestClient(app):
+            deadline = time.time() + 2
+            while "start" not in events and time.time() < deadline:
+                time.sleep(0.02)
+            assert "start" in events
+        assert "cancel" in events
 
     @pytest.mark.parametrize("reply", ["1", "۱", "بله", "تایید", "OK"])
     def test_replying_one_marks_the_patient_as_coming(self, client, patient, reply):
@@ -721,14 +1476,18 @@ class TestSms:
 
         monkeypatch.setenv("APP_ENV", "production")
         monkeypatch.setenv("SECRET_KEY", "x" * 40)
-        monkeypatch.setenv("NOTIFY_PROVIDER", "telegram")
+        monkeypatch.setenv("NOTIFY_PROVIDER", "smsir")
+        monkeypatch.setenv("ADMIN_NOTIFICATION_PHONE", "09121111111")
         monkeypatch.setenv("SMS_PROVIDER", "file")
+        monkeypatch.setenv("SMS_API_KEY", "test-key")
+        monkeypatch.setenv("SMS_SENDER", "300000000000")
         import api.config as cfg
 
         with pytest.raises(RuntimeError, match="SMS_PROVIDER=file"):
             importlib.reload(cfg)
         monkeypatch.setenv("APP_ENV", "development")
         monkeypatch.setenv("NOTIFY_PROVIDER", "file")
+        monkeypatch.setenv("SMS_PROVIDER", "file")
         importlib.reload(cfg)
 
 
@@ -811,6 +1570,117 @@ class TestPortalPolicies:
                 " VALUES ('dupdupdup1', ?, ?, '16:00', ?, 'booked')",
                 (pid, tomorrow(), a["cabin"]),
             )
+
+    def test_cancelled_row_does_not_block_same_cabin_unique(self):
+        from api import db, repo, scheduling
+        from api.policies import SYSTEM
+
+        pid = repo.insert(
+            SYSTEM,
+            "patients",
+            {
+                "public_id": "y" * 12,
+                "national_id": nid(700000002),
+                "full_name": "تست آزاد",
+                "birth_date": "1980-01-01",
+                "birth_jalali": "1358/10/11",
+                "phone": "09170000002",
+            },
+        )
+        a = scheduling.allocate(pid, tomorrow(), "16:00")
+        repo.update(
+            SYSTEM, "appointments", {"status": "cancelled"}, where="id = ?", params=[a["id"]]
+        )
+        db.get_conn().execute(
+            "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin)"
+            " VALUES ('newnewnew1', ?, ?, '16:00', ?)",
+            (pid, tomorrow(), a["cabin"]),
+        )
+        rows = (
+            db.get_conn()
+            .execute(
+                "SELECT status FROM appointments WHERE slot_date = ? AND slot_time = '16:00' AND cabin = ?",
+                (tomorrow(), a["cabin"]),
+            )
+            .fetchall()
+        )
+        assert sorted(r["status"] for r in rows) == ["booked", "cancelled"]
+
+    def test_migration_0009_preserves_rows_on_existing_database(self, tmp_path):
+        """Apply 0001–0008, seed a cancelled row, then run 0009 and keep every column."""
+        import hashlib
+        import sqlite3
+
+        from api import db
+
+        path = tmp_path / "pre-0009.db"
+        conn = sqlite3.connect(path, timeout=10, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.executescript(db.BOOTSTRAP)
+
+        legacy = [p for p in db._files() if p.name[:4] < "0009"]
+        assert legacy and legacy[-1].name.startswith("0008")
+        for path_sql in legacy:
+            body = path_sql.read_text(encoding="utf-8")
+            checksum = hashlib.sha256(body.encode()).hexdigest()
+            conn.execute("PRAGMA foreign_keys=OFF")
+            conn.execute("BEGIN")
+            try:
+                for stmt in db.split_statements(body):
+                    conn.execute(stmt)
+                conn.execute(
+                    "INSERT INTO schema_migrations(version, checksum) VALUES (?,?)",
+                    (path_sql.name[:4], checksum),
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                conn.execute("PRAGMA foreign_keys=ON")
+                raise
+            conn.execute("PRAGMA foreign_keys=ON")
+
+        conn.execute(
+            "INSERT INTO patients(public_id, national_id, full_name, birth_date, birth_jalali, phone)"
+            " VALUES (?, ?, 'بیمار قدیم', '1990-01-01', '1368/10/11', '09121112233')",
+            ("p" * 12, nid(800000001)),
+        )
+        pid = conn.execute("SELECT id FROM patients").fetchone()["id"]
+        conn.execute(
+            "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin, status, note)"
+            " VALUES ('oldoldold1', ?, '2099-06-01', '16:00', 3, 'cancelled', 'keep-me')",
+            (pid,),
+        )
+        before = dict(
+            conn.execute("SELECT * FROM appointments WHERE public_id = 'oldoldold1'").fetchone()
+        )
+
+        applied = db.migrate(conn)
+        assert any(name.startswith("0009") for name in applied)
+        assert db.migrate(conn) == []
+
+        after = dict(
+            conn.execute("SELECT * FROM appointments WHERE public_id = 'oldoldold1'").fetchone()
+        )
+        assert after["note"] == "keep-me"
+        assert after["status"] == "cancelled"
+        assert after["cabin"] == 3
+        assert after["patient_id"] == before["patient_id"]
+        assert after["public_id"] == before["public_id"]
+        idx = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_appt_active_cabin'"
+        ).fetchone()
+        assert idx and "cancelled" in idx["sql"]
+        conn.execute(
+            "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin)"
+            " VALUES ('newnewnew2', ?, '2099-06-01', '16:00', 3)",
+            (pid,),
+        )
+        n = conn.execute(
+            "SELECT COUNT(*) AS c FROM appointments WHERE slot_date='2099-06-01' AND cabin=3"
+        ).fetchone()["c"]
+        assert n == 2
+        conn.close()
 
     def test_the_database_rejects_an_out_of_range_cabin(self):
         import sqlite3
@@ -945,6 +1815,11 @@ class TestTreatmentHistory:
         )
         a = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[book["code"]])[0]
         assert a["status"] == "attended"
+        sessions = repo.select(
+            SYSTEM, "treatment_sessions", where="appointment_id = ?", params=[a["id"]]
+        )
+        assert len(sessions) == 1
+        assert sessions[0]["patient_id"] == a["patient_id"]
         assert metrics.outcome(30)["north_star"]["value"] == 1
 
     def test_a_session_needs_both_an_area_and_a_treatment(self, owner_client, patient):
@@ -985,7 +1860,8 @@ class TestTreatmentHistory:
 
         bp, tx = self._ids(owner_client)
         p = repo.select(SYSTEM, "patients")[0]
-        actor = Actor("owner", 1)
+        owner_id = repo.select(SYSTEM, "admin_users", where="role = 'owner'", limit=1)[0]["id"]
+        actor = Actor("owner", owner_id)
         clinical.record_session(
             actor, p["id"], body_part_ids=[bp], treatment_ids=tx[:1], session_date="2026-01-10"
         )
@@ -1123,11 +1999,13 @@ class TestWelcomeBack:
 
         p = repo.select(SYSTEM, "patients")[0]
         long_ago = (now_tehran().date() - dt.timedelta(days=200)).isoformat()
-        c = clinical.catalog(Actor("owner", 1))
+        owner_id = repo.select(SYSTEM, "admin_users", where="role = 'owner'", limit=1)[0]["id"]
+        actor = Actor("owner", owner_id)
+        c = clinical.catalog(actor)
         bp = c["body_parts"][0]["items"][0]["id"]
         tx = c["treatments"][0]["id"]
         clinical.record_session(
-            Actor("owner", 1),
+            actor,
             p["id"],
             body_part_ids=[bp],
             treatment_ids=[tx],
@@ -1135,3 +2013,69 @@ class TestWelcomeBack:
         )
         gap = clinical.returning_after_gap(p["id"], tomorrow())
         assert gap is not None and gap > 190
+
+
+# ======================================================================
+# Clinic closure dates
+# ======================================================================
+def closure_future_day() -> str:
+    from api.jalali import now_tehran
+
+    return (now_tehran().date() + dt.timedelta(days=2)).isoformat()
+
+
+def test_closed_day_disables_patient_slots_and_can_be_reopened(owner_client, patient):
+    date = closure_future_day()
+    closed = owner_client.post(
+        "/api/admin/closed-days",
+        json={"date": date, "reason": "تعمیرات"},
+    )
+    assert closed.status_code == 201, closed.text
+
+    grid = owner_client.get(f"/api/portal/slots?date={date}")
+    assert grid.status_code == 200, grid.text
+    assert grid.json()["closed"] is True
+    assert grid.json()["closed_reason"] == "تعمیرات"
+    assert all(slot["disabled"] for slot in grid.json()["slots"])
+    days = owner_client.get("/api/portal/days")
+    closed_day = next(d for d in days.json()["days"] if d["date"] == date)
+    assert closed_day["closed"] is True
+    assert closed_day["closed_reason"] == "تعمیرات"
+
+    booking = owner_client.post(
+        "/api/portal/appointments",
+        json={"slot_date": date, "slot_time": "16:00"},
+    )
+    assert booking.status_code == 409, booking.text
+    assert booking.json()["error"]["code"] == "day_closed"
+
+    reopened = owner_client.delete(f"/api/admin/closed-days/{date}")
+    assert reopened.status_code == 200, reopened.text
+    grid = owner_client.get(f"/api/portal/slots?date={date}")
+    assert grid.status_code == 200
+    assert grid.json()["closed"] is False
+
+
+def test_staff_cannot_close_a_day_with_existing_bookings(owner_client, patient):
+    date = closure_future_day()
+    booking = owner_client.post(
+        "/api/portal/appointments",
+        json={"slot_date": date, "slot_time": "16:00"},
+    )
+    assert booking.status_code == 201, booking.text
+
+    closed = owner_client.post(
+        "/api/admin/closed-days",
+        json={"date": date},
+    )
+    assert closed.status_code == 409, closed.text
+    assert closed.json()["error"]["code"] == "day_has_bookings"
+
+
+def test_closed_day_controls_require_staff_authentication(client):
+    date = closure_future_day()
+    response = client.post(
+        "/api/admin/closed-days",
+        json={"date": date},
+    )
+    assert response.status_code == 401

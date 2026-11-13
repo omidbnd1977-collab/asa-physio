@@ -33,6 +33,7 @@ os.environ.update(
         "SMS_WEBHOOK": "",
         "SMS_API_KEY": "",
         "SMS_INBOUND_SECRET": "",
+        "REMINDER_BACKGROUND": "0",
         "UPLOAD_DIR": str(TMP / "uploads"),
         "RL_REGISTER_IP_PER_DAY": "1000",
         "RL_PATIENT_LOGIN_IP_PER_15MIN": "1000",
@@ -72,12 +73,28 @@ def _clean():
         "appointments",
         "patient_sessions",
         "patients",
+        "staff_permissions",
     ):
         conn.execute(f"DELETE FROM {t}")
+    # Fresh staff/owner graph every test — sole-owner portal attach depends on this.
+    conn.execute("DELETE FROM admin_users")
+    conn.execute("DELETE FROM audit_logs")
     conn.execute("UPDATE breaker_state SET open_until = 0, reason = ''")
     from api import cache
 
     cache.purge()
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _ensure_clinic_owner(_clean):
+    """Portal register/book require a sole active owner (single-clinic mode)."""
+    from api import auth, repo
+    from api.policies import SYSTEM
+
+    owners = repo.select(SYSTEM, "admin_users", where="role = 'owner' AND is_active = 1", limit=1)
+    if not owners:
+        auth.create_user("t_owner", "a-very-long-test-password", role="owner", full_name="پزشک تست")
     yield
 
 
@@ -109,8 +126,10 @@ def owner_client(client):
     from api import auth, repo
     from api.policies import SYSTEM
 
-    repo.delete(SYSTEM, "admin_users", where="username = ?", params=["t_owner"])
-    auth.create_user("t_owner", "a-very-long-test-password", role="owner")
+    # Do not delete+recreate: patients may already reference this owner_id.
+    rows = repo.select(SYSTEM, "admin_users", where="username = ?", params=["t_owner"], limit=1)
+    if not rows:
+        auth.create_user("t_owner", "a-very-long-test-password", role="owner")
     r = client.post(
         "/api/admin/login", json={"username": "t_owner", "password": "a-very-long-test-password"}
     )

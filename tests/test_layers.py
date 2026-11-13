@@ -213,15 +213,18 @@ class TestLayer04Authz:
         assert client.patch("/api/admin/bookings/abc", json={"status": "done"}).status_code == 401
 
     def test_staff_cannot_reach_owner_endpoints(self, client):
-        from api import auth
+        from api import auth, repo
+        from api.policies import SYSTEM
 
-        auth.create_user("plain_staff", "staff-password-long", role="staff")
+        oid = auth.create_user("plain_owner", "owner-password-long", role="owner")
+        auth.create_user("plain_staff", "staff-password-long", role="staff", created_by=oid)
         r = client.post(
             "/api/admin/login", json={"username": "plain_staff", "password": "staff-password-long"}
         )
         assert r.status_code == 200
         assert client.get("/api/admin/costs").status_code == 403
         assert client.get("/api/admin/ops").status_code == 403
+        assert repo.select(SYSTEM, "admin_users", where="username = ?", params=["plain_staff"])
 
     def test_owner_can(self, owner_client):
         assert owner_client.get("/api/admin/costs").status_code == 200
@@ -259,7 +262,8 @@ class TestLayer08Security:
     def test_login_failure_is_generic(self, client):
         from api import auth
 
-        auth.create_user("realuser", "the-real-password-x")
+        oid = auth.create_user("realowner", "owner-password-longxx", role="owner")
+        auth.create_user("realuser", "the-real-password-x", role="staff", created_by=oid)
         a = client.post("/api/admin/login", json={"username": "realuser", "password": "wrong-pass"})
         b = client.post(
             "/api/admin/login", json={"username": "ghostuser", "password": "wrong-pass"}
@@ -270,7 +274,8 @@ class TestLayer08Security:
     def test_session_cookie_is_httponly(self, client):
         from api import auth
 
-        auth.create_user("cookieuser", "cookie-password-long")
+        oid = auth.create_user("cookieowner", "owner-password-longxx", role="owner")
+        auth.create_user("cookieuser", "cookie-password-long", role="staff", created_by=oid)
         r = client.post(
             "/api/admin/login", json={"username": "cookieuser", "password": "cookie-password-long"}
         )
@@ -285,6 +290,51 @@ class TestLayer08Security:
 
         assert "bookings" in db.tables()
         assert repo.select(SYSTEM, "bookings")[0]["note"] == evil
+
+    def test_c4_admin_and_site_js_do_not_sink_untrusted_strings_into_innerhtml(self):
+        """C4: patient name, inbound SMS, and showMsg must use text sinks — not innerHTML."""
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[1]
+        admin = (root / "api" / "templates" / "admin.html").read_text(encoding="utf-8")
+        site = (root / "static" / "site.js").read_text(encoding="utf-8")
+
+        assert "who.innerHTML=" not in admin
+        assert "whoName.textContent=" in admin.replace(" ", "")
+        assert "d.innerHTML='<b dir=\"ltr\">'+m.phone" not in admin
+        assert "phone.textContent=" in admin.replace(" ", "")
+        assert "createTextNode(m.body" in admin
+        assert "box.innerHTML = text ?" not in site
+        assert "notice.textContent = text" in site
+
+    def test_c4_inbound_xss_payload_is_stored_as_text_not_executable_html(
+        self, client, owner_client
+    ):
+        """A crafted inbound SMS body must round-trip as plain text (textContent semantics)."""
+        from html import escape
+
+        from api import repo
+        from api.policies import SYSTEM
+
+        payload = "<img src=x onerror=alert(1)>"
+        r = client.post(
+            "/api/sms/inbound",
+            json={"phone": "09120001122", "body": payload},
+        )
+        assert r.status_code == 200, r.text
+
+        rows = repo.select(SYSTEM, "sms_inbound", where="phone = ?", params=["09120001122"])
+        assert rows and rows[0]["body"] == payload
+
+        inbound = owner_client.get("/api/admin/sms").json()["inbound"]
+        assert any(m["body"] == payload for m in inbound)
+
+        # textContent / createTextNode serialization escapes markup; innerHTML would not.
+        as_text_node = escape(payload, quote=True)
+        assert "<img" not in as_text_node
+        assert "&lt;img" in as_text_node
+        assert "onerror" in as_text_node  # still visible as characters, not an attribute node
+        assert as_text_node != payload
 
     def test_logs_never_contain_a_phone_or_a_secret(self):
         from api.logging_ import scrub
@@ -670,11 +720,34 @@ class TestLayer0507Release:
 
         monkeypatch.setenv("APP_ENV", "production")
         monkeypatch.setenv("SECRET_KEY", "")
-        monkeypatch.setenv("NOTIFY_PROVIDER", "telegram")
+        monkeypatch.setenv("NOTIFY_PROVIDER", "smsir")
+        monkeypatch.setenv("ADMIN_NOTIFICATION_PHONE", "09120000000")
+        monkeypatch.setenv("SMS_PROVIDER", "smsir")
+        monkeypatch.setenv("SMS_API_KEY", "test-key")
+        monkeypatch.setenv("SMS_SENDER", "300000000000")
         import api.config as cfg
 
         with pytest.raises(RuntimeError, match="SECRET_KEY"):
             importlib.reload(cfg)
         monkeypatch.setenv("APP_ENV", "development")
         monkeypatch.setenv("NOTIFY_PROVIDER", "file")
+        monkeypatch.setenv("SMS_PROVIDER", "file")
+        importlib.reload(cfg)
+
+    def test_production_refuses_removed_telegram_notify(self, monkeypatch):
+        import importlib
+
+        monkeypatch.setenv("APP_ENV", "production")
+        monkeypatch.setenv("SECRET_KEY", "x" * 40)
+        monkeypatch.setenv("NOTIFY_PROVIDER", "telegram")
+        monkeypatch.setenv("SMS_PROVIDER", "smsir")
+        monkeypatch.setenv("SMS_API_KEY", "test-key")
+        monkeypatch.setenv("SMS_SENDER", "300000000000")
+        import api.config as cfg
+
+        with pytest.raises(RuntimeError, match="telegram"):
+            importlib.reload(cfg)
+        monkeypatch.setenv("APP_ENV", "development")
+        monkeypatch.setenv("NOTIFY_PROVIDER", "file")
+        monkeypatch.setenv("SMS_PROVIDER", "file")
         importlib.reload(cfg)

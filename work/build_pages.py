@@ -12,6 +12,7 @@ SITE = ROOT / "site"
 EXPECTED_PAGES = (
     "index.html",
     "services.html",
+    "service-detail.html",
     "treatments.html",
     "about.html",
     "gallery.html",
@@ -21,6 +22,7 @@ EXPECTED_PAGES = (
 
 EXPECTED_ASSETS = (
     "style.css",
+    "assets/asa.jpg",
     "assets/clinic.jpg",
     "assets/hands.jpg",
     "assets/heel.jpg",
