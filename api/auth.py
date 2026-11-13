@@ -18,6 +18,10 @@ from .policies import SYSTEM, Actor
 
 ph = PasswordHasher(time_cost=3, memory_cost=64 * 1024, parallelism=2)
 SESSION_COOKIE = "asa_session"
+# Owner / doctor accounts keep a stricter floor; secretaries may use a shorter
+# initial password chosen by the doctor (still Argon2-hashed, never stored raw).
+OWNER_PASSWORD_MIN = 12
+STAFF_PASSWORD_MIN = 6
 # A real hash of a value nobody knows, so a login attempt for a non-existent user costs
 # the same CPU as a real one and account existence cannot be timed.
 _DUMMY_HASH = ph.hash(secrets.token_urlsafe(32))
@@ -31,10 +35,16 @@ def _iso(d: dt.datetime) -> str:
     return d.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def hash_password(raw: str) -> str:
-    if len(raw) < 12:
-        raise ValueError("password must be at least 12 characters")
+def hash_password(raw: str, *, min_length: int | None = None) -> str:
+    """Hash with Argon2. Default minimum matches owner policy (12)."""
+    floor = OWNER_PASSWORD_MIN if min_length is None else int(min_length)
+    if len(raw) < floor:
+        raise ValueError(f"password must be at least {floor} characters")
     return ph.hash(raw)
+
+
+def password_min_for_role(role: str) -> int:
+    return STAFF_PASSWORD_MIN if role == "staff" else OWNER_PASSWORD_MIN
 
 
 def load_permissions(user_id: int) -> frozenset[str]:
@@ -110,7 +120,11 @@ def verify_login(username: str, password: str) -> Actor:
         repo.update(
             SYSTEM,
             "admin_users",
-            {"password_hash": hash_password(password)},
+            {
+                "password_hash": hash_password(
+                    password, min_length=password_min_for_role(str(user["role"]))
+                )
+            },
             where="id = ?",
             params=[user["id"]],
         )

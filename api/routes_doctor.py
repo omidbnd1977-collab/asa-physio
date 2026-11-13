@@ -55,7 +55,15 @@ def _now() -> str:
     return dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def full_appt(a: dict, p: dict | None = None) -> dict[str, Any]:
+def _can_clinical(actor: Actor) -> bool:
+    return actor.role == "owner" or actor.can(perms.CLINICAL_RECORD)
+
+
+def _can_files(actor: Actor) -> bool:
+    return actor.role == "owner" or actor.can(perms.FILES_MANAGE)
+
+
+def full_appt(a: dict, p: dict | None = None, *, actor: Actor | None = None) -> dict[str, Any]:
     out = {
         "public_id": a["public_id"],
         "slot_date": a["slot_date"],
@@ -75,16 +83,17 @@ def full_appt(a: dict, p: dict | None = None) -> dict[str, Any]:
         "created_at": a["created_at"],
     }
     if p:
+        show_files = actor is None or _can_files(actor)
         out["patient"] = {
             "public_id": p["public_id"],
             "full_name": p["full_name"],
             "phone": p["phone"],
             "national_id": p["national_id"],
             "birth_jalali": p["birth_jalali"],
-            "mri_link": p["mri_link"],
+            "mri_link": p["mri_link"] if show_files else None,
             "ortho_doctor": p["ortho_doctor"],
-            "med_photo": p["med_photo"],
-            "mri_file": p["mri_file"],
+            "med_photo": p["med_photo"] if show_files else None,
+            "mri_file": p["mri_file"] if show_files else None,
             "staff_note": p["staff_note"],
         }
     return out
@@ -142,7 +151,8 @@ async def list_appointments(
     where = f"({where}) AND ({own_sql})"
     params = [*params, *own_params]
     scope_key = ownership.clinic_owner_id(actor) or 0
-    key = f"admin:appointments:{scope_key}:{where}:{params}:{page}:{per_page}"
+    file_flag = 1 if _can_files(actor) else 0
+    key = f"admin:appointments:{scope_key}:f{file_flag}:{where}:{params}:{page}:{per_page}"
 
     def build() -> dict[str, Any]:
         rows = repo.select(
@@ -157,7 +167,9 @@ async def list_appointments(
         rows.sort(key=lambda a: (a["slot_date"], a["slot_time"]))
         pmap = _patient_map(actor, [r["patient_id"] for r in rows])
         return {
-            "items": [full_appt(a, pmap.get(a["patient_id"])) for a in rows],
+            "items": [
+                full_appt(a, pmap.get(a["patient_id"]), actor=actor) for a in rows
+            ],
             "total": repo.count(SYSTEM, "appointments", where=where, params=params),
             "page": page,
             "per_page": per_page,
@@ -567,6 +579,8 @@ async def list_patients(
         limit=per_page,
         offset=(page - 1) * per_page,
     )
+    can_clin = _can_clinical(actor)
+    can_files = _can_files(actor)
     out = []
     for p in rows:
         appts = repo.select(
@@ -578,24 +592,23 @@ async def list_patients(
             limit=50,
         )
         appts.sort(key=lambda a: (a["slot_date"], a["slot_time"]))
-        out.append(
-            {
-                "public_id": p["public_id"],
-                "full_name": p["full_name"],
-                "national_id": p["national_id"],
-                "phone": p["phone"],
-                "birth_jalali": p["birth_jalali"],
-                "mri_link": p["mri_link"],
-                "ortho_doctor": p["ortho_doctor"],
-                "med_photo": p["med_photo"],
-                "mri_file": p["mri_file"],
-                "staff_note": p["staff_note"],
-                "created_at": p["created_at"],
-                "appointments": [full_appt(a) for a in appts],
-                "history": clinical.history(actor, p["id"], limit=20),
-                "clinical": clinical.summary(actor, p["id"]),
-            }
-        )
+        item: dict[str, Any] = {
+            "public_id": p["public_id"],
+            "full_name": p["full_name"],
+            "national_id": p["national_id"],
+            "phone": p["phone"],
+            "birth_jalali": p["birth_jalali"],
+            "mri_link": p["mri_link"] if can_files else None,
+            "ortho_doctor": p["ortho_doctor"],
+            "med_photo": p["med_photo"] if can_files else None,
+            "mri_file": p["mri_file"] if can_files else None,
+            "staff_note": p["staff_note"],
+            "created_at": p["created_at"],
+            "appointments": [full_appt(a, actor=actor) for a in appts],
+            "history": clinical.history(actor, p["id"], limit=20) if can_clin else [],
+            "clinical": clinical.summary(actor, p["id"]) if can_clin else None,
+        }
+        out.append(item)
     return {
         "items": out,
         "page": page,
@@ -666,7 +679,7 @@ async def appointment_audit(public_id: str, request: Request) -> dict[str, Any]:
 @router.get("/patients/{public_id}/photo")
 async def patient_photo(public_id: str, request: Request) -> Response:
     """Medication photo. Staff only — uploads are never served from a public path."""
-    actor = need(staff(request), perms.PATIENTS_VIEW)
+    actor = need(staff(request), perms.FILES_MANAGE)
     patient = ownership.get_owned_patient(actor, public_id)
     if not patient["med_photo"]:
         raise NotFound("فایلی ثبت نشده است.")
@@ -683,7 +696,7 @@ async def patient_photo(public_id: str, request: Request) -> Response:
 # --------------------------------------------------------------------------
 @router.get("/catalog")
 async def get_catalog(request: Request) -> dict[str, Any]:
-    actor = owner(request)
+    actor = need(staff(request), perms.CLINICAL_RECORD)
     return cache.memo("admin:catalog", 30, lambda: clinical.catalog(actor))
 
 
@@ -716,7 +729,7 @@ async def add_treatment(
 # --------------------------------------------------------------------------
 @router.get("/patients/{public_id}/sessions")
 async def patient_history(public_id: str, request: Request) -> dict[str, Any]:
-    actor = owner(request)
+    actor = need(staff(request), perms.CLINICAL_RECORD)
     patient = ownership.get_owned_patient(actor, public_id)
     pid = patient["id"]
     return {"history": clinical.history(actor, pid), "summary": clinical.summary(actor, pid)}
@@ -726,12 +739,15 @@ async def patient_history(public_id: str, request: Request) -> dict[str, Any]:
 async def record_treatment(
     public_id: str, request: Request, payload: dict[str, Any] = Body(default={})
 ) -> dict[str, Any]:
-    """The doctor records what was done: affected area, treatment performed, notes."""
-    actor = owner(request)
+    """Record what was done: affected area, treatment performed, notes."""
+    actor = need(staff(request), perms.CLINICAL_RECORD)
     csrf(request, actor)
     data = schemas.TreatmentSessionIn.model_validate(payload)
 
     patient = ownership.get_owned_patient(actor, public_id)
+    oid = ownership.clinic_owner_id(actor)
+    if oid is None:
+        raise Forbidden("حساب شما به هیچ کلینیکی متصل نیست.")
 
     appt = None
     if data.appointment_id:
@@ -742,7 +758,7 @@ async def record_treatment(
                 "public_id = ? AND patient_id = ? AND patient_id IN "
                 "(SELECT id FROM patients WHERE owner_id = ?)"
             ),
-            params=[data.appointment_id, patient["id"], actor.user_id],
+            params=[data.appointment_id, patient["id"], oid],
             limit=1,
         )
         appt = a[0] if a else None
@@ -801,7 +817,7 @@ async def record_treatment(
 async def upload_mri(
     public_id: str, request: Request, mri_file: UploadFile = File(...)
 ) -> dict[str, Any]:
-    actor = need(staff(request), perms.PATIENTS_EDIT)
+    actor = need(staff(request), perms.FILES_MANAGE)
     csrf(request, actor)
     patient = ownership.get_owned_patient(actor, public_id)
     name = patients.save_upload(mri_file, prefix=f"mri-{public_id[:6]}")
@@ -814,12 +830,19 @@ async def upload_mri(
         where="id = ?",
         params=[patient["id"]],
     )
+    audit.record(
+        actor,
+        "patient.mri_uploaded",
+        "patient",
+        patient["public_id"],
+        after={"file": name},
+    )
     return {"ok": True, "file": name}
 
 
 @router.get("/patients/{public_id}/mri")
 async def view_mri(public_id: str, request: Request) -> Response:
-    actor = need(staff(request), perms.PATIENTS_VIEW)
+    actor = need(staff(request), perms.FILES_MANAGE)
     patient = ownership.get_owned_patient(actor, public_id)
     if not patient["mri_file"]:
         raise NotFound("فایل MRI ثبت نشده است.")
@@ -1105,6 +1128,13 @@ async def reset_secretary_password(
     csrf(request, actor)
     data = schemas.SecretaryPasswordIn.model_validate(payload)
     return staff_users.set_secretary_password(actor, secretary_id, data.password)
+
+
+@router.delete("/secretaries/{secretary_id}")
+async def delete_secretary(secretary_id: int, request: Request) -> dict[str, Any]:
+    actor = owner(request)
+    csrf(request, actor)
+    return staff_users.delete_secretary(actor, secretary_id)
 
 
 @router.get("/orphan-secretaries")

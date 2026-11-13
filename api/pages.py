@@ -272,6 +272,7 @@ REGISTER_BODY = """
       <span id="fileHint">عکس یا PDF — حداکثر ۲ مگابایت (اختیاری)</span>
       <input type="file" id="meds_photo" name="meds_photo" accept="image/jpeg,image/png,image/webp,application/pdf">
     </label>
+    <p class="hint" id="fileDraftHint" style="margin-top:8px">به‌دلیل محدودیت مرورگر، فایل انتخاب‌شده در پیش‌نویس ذخیره نمی‌شود؛ اگر صفحه را ترک کنید باید دوباره انتخاب شود.</p>
 
     <div class="field" style="margin-top:16px">
       <textarea id="note" name="note" maxlength="500" placeholder=" "></textarea>
@@ -391,6 +392,8 @@ $('#regNextBtn').onclick=()=>{
 $('#regBackBtn').onclick=()=>{
   saveDraft();
   if(REG_STEP===2){ showRegStep(1); return; }
+  const hasFile = fileInput && fileInput.files && fileInput.files[0];
+  if(hasFile && !confirm('فایل انتخاب‌شده با ترک صفحه از بین می‌رود (محدودیت مرورگر). ادامه می‌دهید؟')) return;
   location.href='/booking';
 };
 restoreDraft();

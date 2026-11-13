@@ -114,8 +114,12 @@ def create_secretary(
         raise BadRequest("نام و نام خانوادگی را کامل وارد کنید.")
     if not (3 <= len(user) <= 32) or not user.replace("_", "").isalnum():
         raise BadRequest("نام کاربری باید ۳ تا ۳۲ نویسه و فقط حروف، رقم یا _ باشد.")
-    if len(password) < 12:
-        raise BadRequest("رمز عبور اولیه باید دست‌کم ۱۲ نویسه باشد.")
+    if len(password) < auth.STAFF_PASSWORD_MIN:
+        raise BadRequest(
+            f"رمز عبور اولیه باید دست‌کم {auth.STAFF_PASSWORD_MIN} نویسه باشد."
+        )
+    if len(password) > 256:
+        raise BadRequest("رمز عبور بیش از حد طولانی است.")
     caps = perms.normalize(permissions)
     existing = repo.select(
         SYSTEM, "admin_users", where="username = ?", params=[user], limit=1
@@ -123,11 +127,21 @@ def create_secretary(
     if existing:
         raise Conflict("این نام کاربری قبلاً ثبت شده است.")
     try:
-        uid = auth.create_user(
-            user, password, role="staff", full_name=name, created_by=owner.user_id
-        )
+        hashed = auth.hash_password(password, min_length=auth.STAFF_PASSWORD_MIN)
     except ValueError as exc:
-        raise BadRequest(str(exc)) from exc
+        raise BadRequest("رمز عبور اولیه معتبر نیست.") from exc
+    uid = repo.insert(
+        SYSTEM,
+        "admin_users",
+        {
+            "username": user,
+            "password_hash": hashed,
+            "full_name": name[:80],
+            "role": "staff",
+            "created_by": owner.user_id,
+        },
+    )
+    info("auth.user_created", user_id=uid, role="staff")
     auth.replace_permissions(uid, caps)
     row = repo.select(SYSTEM, "admin_users", where="id = ?", params=[uid], limit=1)[0]
     out = _public(row, caps)
@@ -198,14 +212,16 @@ def update_secretary(
 def set_secretary_password(owner: Actor, secretary_id: int, password: str) -> dict[str, Any]:
     auth.require(owner, "owner")
     _owned_secretary(owner, secretary_id)
-    if len(password) < 12:
-        raise BadRequest("رمز عبور باید دست‌کم ۱۲ نویسه باشد.")
+    if len(password) < auth.STAFF_PASSWORD_MIN:
+        raise BadRequest(
+            f"رمز عبور باید دست‌کم {auth.STAFF_PASSWORD_MIN} نویسه باشد."
+        )
     if len(password) > 256:
         raise BadRequest("رمز عبور بیش از حد طولانی است.")
     try:
-        hashed = auth.hash_password(password)
+        hashed = auth.hash_password(password, min_length=auth.STAFF_PASSWORD_MIN)
     except ValueError as exc:
-        raise BadRequest(str(exc)) from exc
+        raise BadRequest("رمز عبور معتبر نیست.") from exc
     repo.update(
         SYSTEM,
         "admin_users",
@@ -229,6 +245,82 @@ def set_secretary_password(owner: Actor, secretary_id: int, password: str) -> di
     )
     info("secretary.password_reset", secretary_id=secretary_id, by=owner.user_id)
     return {"ok": True}
+
+
+def _secretary_has_history(secretary_id: int) -> bool:
+    """True when deleting the row would lose booker/audit/clinical attribution."""
+    if repo.count(
+        SYSTEM, "appointments", where="booked_by_user_id = ?", params=[secretary_id]
+    ):
+        return True
+    if repo.count(
+        SYSTEM,
+        "audit_logs",
+        where="actor_role = 'staff' AND actor_id = ?",
+        params=[secretary_id],
+    ):
+        return True
+    if repo.count(
+        SYSTEM, "treatment_sessions", where="created_by = ?", params=[secretary_id]
+    ):
+        return True
+    return bool(
+        repo.count(SYSTEM, "messages", where="created_by = ?", params=[secretary_id])
+    )
+
+
+def delete_secretary(owner: Actor, secretary_id: int) -> dict[str, Any]:
+    """Hard-delete only when safe; otherwise soft-deactivate and revoke sessions."""
+    auth.require(owner, "owner")
+    row = _owned_secretary(owner, secretary_id)
+    before = _public(row)
+    repo.update(
+        SYSTEM,
+        "sessions",
+        {"revoked_at": auth._iso(auth._now())},
+        where="user_id = ? AND revoked_at IS NULL",
+        params=[secretary_id],
+    )
+    if _secretary_has_history(secretary_id):
+        repo.update(
+            SYSTEM,
+            "admin_users",
+            {"is_active": 0},
+            where="id = ? AND role = 'staff' AND created_by = ?",
+            params=[secretary_id, owner.user_id],
+        )
+        audit.record(
+            owner,
+            "secretary.soft_deleted",
+            "admin_user",
+            secretary_id,
+            before={"is_active": before["is_active"], "username": before["username"]},
+            after={"is_active": False, "mode": "soft"},
+        )
+        info("secretary.soft_deleted", secretary_id=secretary_id, by=owner.user_id)
+        return {
+            "ok": True,
+            "mode": "soft",
+            "id": secretary_id,
+            "message": "منشی سابقه دارد؛ حساب غیرفعال شد تا سوابق نوبت و Audit حفظ شود.",
+        }
+    auth.replace_permissions(secretary_id, [])
+    repo.delete(SYSTEM, "admin_users", where="id = ? AND role = 'staff'", params=[secretary_id])
+    audit.record(
+        owner,
+        "secretary.deleted",
+        "admin_user",
+        secretary_id,
+        before={"username": before["username"], "full_name": before["full_name"]},
+        after={"mode": "hard"},
+    )
+    info("secretary.deleted", secretary_id=secretary_id, by=owner.user_id)
+    return {
+        "ok": True,
+        "mode": "hard",
+        "id": secretary_id,
+        "message": "منشی حذف شد.",
+    }
 
 
 def list_orphan_patients(owner: Actor) -> dict[str, Any]:

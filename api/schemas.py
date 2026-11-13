@@ -102,7 +102,9 @@ class BookingIn(BaseModel):
 class LoginIn(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     username: str = Field(min_length=3, max_length=32, pattern=r"^[A-Za-z0-9_.\-]+$")
-    password: str = Field(min_length=8, max_length=256)
+    # Floor is 1 so short staff passwords (min 6 at create) can still authenticate;
+    # creation/reset policies enforce length separately.
+    password: str = Field(min_length=1, max_length=256)
 
 
 class BookingStatusIn(BaseModel):
@@ -403,7 +405,7 @@ class SecretaryCreateIn(BaseModel):
 
     full_name: str = Field(min_length=3, max_length=80)
     username: str = Field(min_length=3, max_length=32, pattern=r"^[A-Za-z0-9_]+$")
-    password: str = Field(min_length=12, max_length=256)
+    password: str = Field(min_length=6, max_length=256)
     permissions: list[str] = Field(default_factory=list, max_length=20)
 
     @field_validator("full_name")
@@ -435,7 +437,7 @@ class SecretaryUpdateIn(BaseModel):
 class SecretaryPasswordIn(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    password: str = Field(min_length=12, max_length=256)
+    password: str = Field(min_length=6, max_length=256)
 
 
 class OrphanPatientsAssignIn(BaseModel):

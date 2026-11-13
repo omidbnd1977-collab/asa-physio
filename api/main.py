@@ -477,9 +477,7 @@ async def public_feedback() -> dict[str, Any]:
 
 @app.get("/api/admin/feedback")
 async def list_feedback(request: Request) -> dict[str, Any]:
-    from . import permissions as perms
-
-    actor = auth.require_perm(staff(request), perms.MESSAGES_VIEW)
+    actor = owner(request)
     items = repo.select(actor, "feedback", order_by="created_at desc", limit=300)
     for item in items:
         item.pop("ip_fp", None)
@@ -490,9 +488,7 @@ async def list_feedback(request: Request) -> dict[str, Any]:
 async def update_feedback(
     public_id: str, request: Request, payload: dict[str, Any] = Body(default={})
 ) -> dict[str, Any]:
-    from . import permissions as perms
-
-    actor = auth.require_perm(staff(request), perms.MESSAGES_VIEW)
+    actor = owner(request)
     auth.check_csrf(actor.session_id or "", request.headers.get("x-csrf-token"))
     published = payload.get("published")
     if published not in (True, False, 0, 1):
@@ -570,8 +566,9 @@ async def change_admin_password(
     new_password = payload.get("new_password", "")
     if not isinstance(current_password, str) or not isinstance(new_password, str):
         raise BadRequest("اطلاعات گذرواژه نامعتبر است.")
-    if len(new_password) < 12:
-        raise BadRequest("گذرواژه جدید باید دست‌کم ۱۲ نویسه داشته باشد.")
+    min_len = auth.password_min_for_role(actor.role)
+    if len(new_password) < min_len:
+        raise BadRequest(f"گذرواژه جدید باید دست‌کم {min_len} نویسه داشته باشد.")
     if len(new_password) > 256 or len(current_password) > 256:
         raise BadRequest("گذرواژه بیش از حد طولانی است.")
     rows = repo.select(
@@ -590,7 +587,7 @@ async def change_admin_password(
     repo.update(
         SYSTEM,
         "admin_users",
-        {"password_hash": auth.hash_password(new_password)},
+        {"password_hash": auth.hash_password(new_password, min_length=min_len)},
         where="id = ?",
         params=[actor.user_id],
     )
@@ -835,7 +832,7 @@ async def summarize(public_id: str, request: Request) -> dict[str, Any]:
 
 @app.get("/api/admin/metrics")
 async def admin_metrics(request: Request, days: int = 30) -> dict[str, Any]:
-    staff(request)
+    owner(request)
     days = max(1, min(days, 365))
     return cache.memo(
         f"metrics:{days}",
@@ -921,7 +918,7 @@ async def sms_inbound(
 @app.post("/api/admin/reminders/run")
 async def run_reminders(request: Request) -> dict[str, int]:
     """Manual trigger, so staff never have to wait for the ticker."""
-    actor = auth.require(current_actor(request), "staff")
+    actor = owner(request)
     auth.check_csrf(actor.session_id or "", request.headers.get("x-csrf-token"))
     return reminders.run_once()
 

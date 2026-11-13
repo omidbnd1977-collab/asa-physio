@@ -14,6 +14,8 @@ APPOINTMENTS_MOVE: Final = "appointments.move"
 APPOINTMENTS_CANCEL: Final = "appointments.cancel"
 MESSAGES_VIEW: Final = "messages.view"
 RECEPTION_QUEUE: Final = "reception.queue"
+CLINICAL_RECORD: Final = "clinical.record"
+FILES_MANAGE: Final = "files.manage"
 
 ALL: Final[tuple[str, ...]] = (
     PATIENTS_VIEW,
@@ -25,6 +27,8 @@ ALL: Final[tuple[str, ...]] = (
     APPOINTMENTS_CANCEL,
     MESSAGES_VIEW,
     RECEPTION_QUEUE,
+    CLINICAL_RECORD,
+    FILES_MANAGE,
 )
 
 LABELS_FA: Final[dict[str, str]] = {
@@ -37,6 +41,8 @@ LABELS_FA: Final[dict[str, str]] = {
     APPOINTMENTS_CANCEL: "لغو نوبت",
     MESSAGES_VIEW: "مشاهده پیام‌ها و درخواست‌های مشاورهٔ تخصیص‌شده",
     RECEPTION_QUEUE: "صف پذیرش (پیامک و مشاورهٔ بدون مالک)",
+    CLINICAL_RECORD: "ثبت جلسه درمانی و اطلاعات بالینی",
+    FILES_MANAGE: "مشاهده و مدیریت تصاویر و فایل‌های MRI",
 }
 
 
