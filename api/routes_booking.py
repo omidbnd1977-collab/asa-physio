@@ -381,6 +381,11 @@ async def slots(request: Request, response: Response, date: str = "") -> Any:
 @router.post("/appointments", status_code=201)
 async def book(request: Request, payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     p = patients.require(current_patient(request))
+    if p.get("owner_id") is None:
+        raise Conflict(
+            "حساب شما هنوز به کلینیک متصل نیست؛ رزرو اینترنتی ممکن نیست. لطفاً تماس بگیرید.",
+            code="patient_unassigned",
+        )
     ratelimit.enforce(
         ratelimit.id_bucket("appt", str(p["id"])),
         settings.RL_APPT_PATIENT_PER_DAY,

@@ -26,12 +26,14 @@ from starlette.middleware.cors import CORSMiddleware
 
 from . import (
     ai,
+    audit,
     auth,
     budget,
     cache,
     db,
     metrics,
     notify,
+    ownership,
     pages,
     ratelimit,
     reminders,
@@ -45,6 +47,7 @@ from .config import settings
 from .errors import (
     AppError,
     BadRequest,
+    Conflict,
     Forbidden,
     IdempotencyMismatch,
     NotFound,
@@ -474,7 +477,9 @@ async def public_feedback() -> dict[str, Any]:
 
 @app.get("/api/admin/feedback")
 async def list_feedback(request: Request) -> dict[str, Any]:
-    actor = staff(request)
+    from . import permissions as perms
+
+    actor = auth.require_perm(staff(request), perms.MESSAGES_VIEW)
     items = repo.select(actor, "feedback", order_by="created_at desc", limit=300)
     for item in items:
         item.pop("ip_fp", None)
@@ -485,7 +490,9 @@ async def list_feedback(request: Request) -> dict[str, Any]:
 async def update_feedback(
     public_id: str, request: Request, payload: dict[str, Any] = Body(default={})
 ) -> dict[str, Any]:
-    actor = staff(request)
+    from . import permissions as perms
+
+    actor = auth.require_perm(staff(request), perms.MESSAGES_VIEW)
     auth.check_csrf(actor.session_id or "", request.headers.get("x-csrf-token"))
     published = payload.get("published")
     if published not in (True, False, 0, 1):
@@ -592,32 +599,70 @@ async def change_admin_password(
 
 @app.get("/api/admin/me")
 async def me(request: Request) -> dict[str, Any]:
+    from . import permissions as perms
+
     actor = staff(request)
+    rows = repo.select(
+        SYSTEM, "admin_users", where="id = ?", params=[actor.user_id], limit=1
+    )
+    full_name = (rows[0].get("full_name") or rows[0]["username"]) if rows else ""
+    caps = sorted(actor.permissions) if actor.role == "staff" else list(perms.ALL)
     return {
         "role": actor.role,
         "user_id": actor.user_id,
+        "full_name": full_name,
+        "permissions": caps,
+        "can_manage_secretaries": actor.role == "owner",
         "csrf": auth.csrf_token(actor.session_id or ""),
     }
+
+
+def _booking_access(actor: Any, public_id: str) -> dict[str, Any]:
+    """Load one booking visible to this actor or raise NotFound."""
+    from .policies import SYSTEM
+
+    vis, vparams = ownership.bookings_visible_where(actor)
+    rows = repo.select(
+        SYSTEM,
+        "bookings",
+        where=f"public_id = ? AND ({vis})",
+        params=[public_id[:12], *vparams],
+        limit=1,
+    )
+    if not rows:
+        raise NotFound("این درخواست پیدا نشد.")
+    return dict(rows[0])
 
 
 @app.get("/api/admin/bookings")
 async def list_bookings(
     request: Request, response: Response, status: str = "", page: int = 1, per_page: int = 20
 ) -> Any:
+    from . import permissions as perms
+    from .policies import SYSTEM
+
     actor = staff(request)
+    # Assigned leads: messages.view; unassigned queue also needs reception (enforced in WHERE).
+    if actor.role != "owner" and not (
+        actor.can(perms.MESSAGES_VIEW) or actor.can(perms.RECEPTION_QUEUE)
+    ):
+        raise Forbidden("اجازهٔ دسترسی به این بخش را ندارید.")
     page = max(1, min(page, 500))
     per_page = max(1, min(per_page, 100))
-    where, params = "1=1", []
+    vis, vparams = ownership.bookings_visible_where(actor)
+    where, params = vis, list(vparams)
     if status:
         if status not in ("new", "contacted", "scheduled", "done", "spam"):
             raise BadRequest("وضعیت نامعتبر است.")
-        where, params = "status = ?", [status]
+        where = f"({vis}) AND status = ?"
+        params = [*vparams, status]
 
-    key = f"admin:bookings:{status}:{page}:{per_page}"
+    scope_key = ownership.clinic_owner_id(actor) or 0
+    key = f"admin:bookings:{scope_key}:{actor.role}:{status}:{page}:{per_page}"
 
     def build() -> dict[str, Any]:
         rows = repo.select(
-            actor,
+            SYSTEM,
             "bookings",
             where=where,
             params=params,
@@ -629,17 +674,23 @@ async def list_bookings(
         dmap: dict[int, str] = {}
         if ids:
             marks = ",".join("?" for _ in ids)
-            for d in repo.select(actor, "deliveries", where=f"booking_id IN ({marks})", params=ids):
+            for d in repo.select(
+                SYSTEM, "deliveries", where=f"booking_id IN ({marks})", params=ids
+            ):
                 dmap[d["booking_id"]] = d["status"]
+        items = []
         for r in rows:
-            r["delivery"] = dmap.get(r["id"], "pending")
-            r.pop("ip_fp", None)
-            r.pop("ua_fp", None)
+            item = dict(r)
+            item["delivery"] = dmap.get(r["id"], "pending")
+            item.pop("ip_fp", None)
+            item.pop("ua_fp", None)
+            items.append(item)
         return {
-            "items": rows,
+            "items": items,
             "page": page,
             "per_page": per_page,
-            "total": repo.count(actor, "bookings", where=where, params=params),
+            "total": repo.count(SYSTEM, "bookings", where=where, params=params),
+            "can_manage_queue": ownership.can_manage_reception_queue(actor),
         }
 
     data = cache.memo(key, settings.API_CACHE_TTL_S, build)
@@ -657,40 +708,114 @@ async def list_bookings(
 async def set_status(
     public_id: str, request: Request, payload: dict[str, Any] = Body(default={})
 ) -> dict[str, Any]:
+    from . import permissions as perms
+    from .policies import SYSTEM
+
     actor = staff(request)
+    if actor.role != "owner" and not (
+        actor.can(perms.MESSAGES_VIEW) or actor.can(perms.RECEPTION_QUEUE)
+    ):
+        raise Forbidden("اجازهٔ دسترسی به این بخش را ندارید.")
     auth.check_csrf(actor.session_id or "", request.headers.get("x-csrf-token"))
+    row = _booking_access(actor, public_id)
+    # Unassigned leads: only reception/owner may mutate until claimed.
+    if row.get("owner_id") is None and not ownership.can_manage_reception_queue(actor):
+        raise Forbidden("برای مدیریت صف بدون مالک به مجوز پذیرش نیاز است.")
     data = schemas.BookingStatusIn.model_validate(payload)
     now = dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     with repo.tx():
         n = repo.update(
-            actor,
+            SYSTEM,
             "bookings",
             {"status": data.status, "updated_at": now},
-            where="public_id = ?",
-            params=[public_id[:12]],
+            where="id = ?",
+            params=[row["id"]],
         )
     if not n:
         raise NotFound("این درخواست پیدا نشد.")
+    audit.record(
+        actor,
+        "booking.status_changed",
+        "booking",
+        public_id[:12],
+        before={"status": row["status"], "owner_id": row.get("owner_id")},
+        after={"status": data.status, "owner_id": row.get("owner_id")},
+    )
     cache.purge("admin:bookings")
     return {"public_id": public_id, "status": data.status}
 
 
+@app.post("/api/admin/bookings/{public_id}/assign")
+async def assign_booking(
+    public_id: str, request: Request, payload: dict[str, Any] = Body(default={})
+) -> dict[str, Any]:
+    """Claim an unassigned consult lead for this clinic (reception queue)."""
+    from .policies import SYSTEM
+
+    actor = staff(request)
+    if not ownership.can_manage_reception_queue(actor):
+        raise Forbidden("اجازهٔ مدیریت صف پذیرش را ندارید.")
+    auth.check_csrf(actor.session_id or "", request.headers.get("x-csrf-token"))
+    data = schemas.BookingAssignIn.model_validate(payload or {})
+    oid = ownership.clinic_owner_id(actor)
+    if oid is None:
+        raise Forbidden("حساب شما به هیچ کلینیکی متصل نیست.")
+    rows = repo.select(
+        SYSTEM,
+        "bookings",
+        where="public_id = ? AND owner_id IS NULL",
+        params=[public_id[:12]],
+        limit=1,
+    )
+    if not rows:
+        raise NotFound("درخواست بدون مالک پیدا نشد.")
+    patient_public = None
+    if data.patient_public_id:
+        patient = ownership.get_owned_patient(actor, data.patient_public_id)
+        patient_public = patient["public_id"]
+        # Prefer the patient's owner when linking (same clinic in single-doctor mode).
+        oid = int(patient["owner_id"]) if patient.get("owner_id") is not None else oid
+    n = repo.update(
+        SYSTEM,
+        "bookings",
+        {"owner_id": oid, "updated_at": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")},
+        where="public_id = ? AND owner_id IS NULL",
+        params=[public_id[:12]],
+    )
+    if n != 1:
+        raise Conflict("این درخواست هم‌اکنون تخصیص یافته است.")
+    audit.record(
+        actor,
+        "booking.owner_assigned",
+        "booking",
+        public_id[:12],
+        before={"owner_id": None},
+        after={"owner_id": oid, "patient_public_id": patient_public},
+    )
+    cache.purge("admin:bookings")
+    return {"ok": True, "public_id": public_id[:12], "owner_id": oid}
+
+
 @app.post("/api/admin/bookings/{public_id}/redeliver")
 async def redeliver(public_id: str, request: Request) -> dict[str, Any]:
+    from . import permissions as perms
+
     actor = staff(request)
+    if actor.role != "owner" and not (
+        actor.can(perms.MESSAGES_VIEW) or actor.can(perms.RECEPTION_QUEUE)
+    ):
+        raise Forbidden("اجازهٔ دسترسی به این بخش را ندارید.")
     auth.check_csrf(actor.session_id or "", request.headers.get("x-csrf-token"))
-    rows = repo.select(actor, "bookings", where="public_id = ?", params=[public_id[:12]], limit=1)
-    if not rows:
-        raise NotFound("این درخواست پیدا نشد.")
+    row = _booking_access(actor, public_id)
     ratelimit.enforce(
         ratelimit.id_bucket("redeliver", public_id),
         3,
         600,
         message="ارسال مجدد بیش از حد انجام شده است.",
     )
-    ok = notify.deliver(rows[0], attempts=2)
+    ok = notify.deliver(row, attempts=2)
     metrics.record(
-        "booking_delivered" if ok else "booking_delivery_failed", booking_id=rows[0]["id"]
+        "booking_delivered" if ok else "booking_delivery_failed", booking_id=row["id"]
     )
     cache.purge("admin:bookings")
     return {"delivered": ok}
@@ -698,12 +823,14 @@ async def redeliver(public_id: str, request: Request) -> dict[str, Any]:
 
 @app.post("/api/admin/bookings/{public_id}/summary")
 async def summarize(public_id: str, request: Request) -> dict[str, Any]:
+    from . import permissions as perms
+
     actor = staff(request)
+    if actor.role != "owner" and not actor.can(perms.MESSAGES_VIEW):
+        raise Forbidden("اجازهٔ دسترسی به این بخش را ندارید.")
     auth.check_csrf(actor.session_id or "", request.headers.get("x-csrf-token"))
-    rows = repo.select(actor, "bookings", where="public_id = ?", params=[public_id[:12]], limit=1)
-    if not rows:
-        raise NotFound("این درخواست پیدا نشد.")
-    return ai.summarize_booking(actor, rows[0])  # type: ignore[return-value]
+    row = _booking_access(actor, public_id)
+    return ai.summarize_booking(actor, row)  # type: ignore[return-value]
 
 
 @app.get("/api/admin/metrics")

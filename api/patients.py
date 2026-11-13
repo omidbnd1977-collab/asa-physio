@@ -92,17 +92,35 @@ def upload_path(name: str) -> pathlib.Path | None:
 # --------------------------------------------------------------------------
 # registration and login
 # --------------------------------------------------------------------------
-def register(data: dict, *, med_photo: str, ip: str, mri_file: str = "") -> dict:
+def register(
+    data: dict,
+    *,
+    med_photo: str,
+    ip: str,
+    mri_file: str = "",
+    owner_id: int | None = None,
+) -> dict:
+    from . import ownership
+    from .errors import Conflict
+
     existing = repo.select(
         SYSTEM, "patients", where="national_id = ?", params=[data["national_id"]], limit=1
     )
     if existing:
         # Not an error the patient should be punished for: send them to the login path.
-        from .errors import Conflict
-
         raise Conflict(
             "با این کد ملی قبلاً ثبت‌نام شده است. از گزینه‌ی «قبلاً ثبت‌نام کرده‌ام» وارد شوید.",
             code="already_registered",
+        )
+    # Single-clinic: attach to the sole active owner. Never create an unowned
+    # patient via register — that would allow invisible bookings that occupy cabins.
+    resolved_owner = owner_id
+    if resolved_owner is None:
+        resolved_owner = ownership.sole_active_owner_id()
+    if resolved_owner is None:
+        raise Conflict(
+            "ثبت‌نام اینترنتی فعلاً ممکن نیست. لطفاً تلفنی با کلینیک هماهنگ کنید.",
+            code="clinic_unavailable",
         )
     public_id = secrets.token_hex(6)
     pid = repo.insert(
@@ -120,9 +138,10 @@ def register(data: dict, *, med_photo: str, ip: str, mri_file: str = "") -> dict
             "med_photo": med_photo,
             "mri_file": mri_file,
             "ip_fp": fingerprint(ip),
+            "owner_id": resolved_owner,
         },
     )
-    info("patient.registered", patient_id=pid)
+    info("patient.registered", patient_id=pid, owner_id=resolved_owner)
     return repo.select(SYSTEM, "patients", where="id = ?", params=[pid], limit=1)[0]
 
 

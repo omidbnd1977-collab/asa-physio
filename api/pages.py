@@ -205,15 +205,19 @@ REGISTER_BODY = """
 <div class="pcard">
   <h1 class="ptitle">ثبت‌نام بیمار جدید</h1>
   <p class="psub">
-    اطلاعات پرونده را به ترتیب زیر وارد کنید. موارد ستاره‌دار برای ثبت نوبت الزامی‌اند؛
-    پس از ثبت، مستقیم به جدول انتخاب نوبت می‌روید.
+    اطلاعات پرونده را مرحله‌به‌مرحله وارد کنید. موارد ستاره‌دار الزامی‌اند.
   </p>
+  <div class="steps" id="regSteps" aria-hidden="true">
+    <i class="on" data-step-dot="1"></i><i data-step-dot="2"></i>
+    <span id="regStepLabel">مرحله ۱ از ۲ — مشخصات اصلی</span>
+  </div>
 
   <form id="regForm" novalidate enctype="multipart/form-data">
     <div aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden">
       <label for="website">Website</label><input type="text" id="website" tabindex="-1" autocomplete="off">
     </div>
 
+    <div id="regStep1">
     <div class="field">
       <input type="text" id="full_name" name="full_name" placeholder=" " required minlength="3" maxlength="80" autocomplete="name">
       <label for="full_name">نام و نام خانوادگی <span class="req">*</span></label>
@@ -246,7 +250,9 @@ REGISTER_BODY = """
       <p class="hint">پیامک تأیید نوبت به همین شماره ارسال می‌شود.</p>
       <p class="err-msg" id="e-mobile"></p>
     </div>
+    </div>
 
+    <div id="regStep2" class="hidden">
     <div class="field">
       <input type="url" id="mri_url" name="mri_url" placeholder=" " maxlength="500" dir="ltr" style="text-align:left">
       <label for="mri_url">لینک MRI <span class="muted">(اختیاری)</span></label>
@@ -272,10 +278,12 @@ REGISTER_BODY = """
       <label for="note">یادداشت <span class="muted">(اختیاری)</span></label>
       <p class="hint">توضیح کوتاه درباره مشکل یا درخواست شما؛ در مرحله رزرو برای پزشک ثبت می‌شود.</p>
     </div>
+    </div>
 
-    <div style="margin-top:22px">
-      <button class="btn btn-primary" type="submit" id="regBtn" style="width:100%;padding:15px">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg>
+    <div class="mrow" style="margin-top:22px;display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-ghost" type="button" id="regBackBtn" style="flex:1;min-width:120px;padding:14px">بازگشت</button>
+      <button class="btn btn-primary" type="button" id="regNextBtn" style="flex:2;min-width:160px;padding:14px">ادامه</button>
+      <button class="btn btn-primary hidden" type="submit" id="regBtn" style="flex:2;min-width:160px;padding:14px">
         ثبت اطلاعات و ادامه
       </button>
     </div>
@@ -283,21 +291,18 @@ REGISTER_BODY = """
       با ثبت این فرم، پیامک «اطلاعات شما ثبت شد» برای شما ارسال می‌شود.
     </p>
   </form>
-
-  <a class="backlink" href="/booking">
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg>
-    بازگشت
-  </a>
 </div>
 """
 
 REGISTER_JS = r"""
 const UI_IDS=['full_name','national_code','birth_year','birth_month','birth_day','mobile','mri_url','orthopedist','note'];
+const DRAFT_KEY='asa_register_draft';
+let REG_STEP=1;
 const DIGITS=s=>String(s).replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
   .replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d));
 ['national_code','birth_year','birth_month','birth_day','mobile'].forEach(id=>{
   const el=document.getElementById(id);
-  el.addEventListener('input',()=>{el.value=DIGITS(el.value).replace(/[^\d+]/g,'');});
+  el.addEventListener('input',()=>{el.value=DIGITS(el.value).replace(/[^\d+]/g,''); saveDraft();});
 });
 ['birth_year','birth_month','birth_day'].forEach((id,i,all)=>{
   const el=document.getElementById(id);
@@ -305,8 +310,36 @@ const DIGITS=s=>String(s).replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d
     const max=el.maxLength;
     el.value=DIGITS(el.value).replace(/\D/g,'').slice(0,max);
     if(el.value.length===max && all[i+1]) all[i+1].focus();
+    saveDraft();
   });
 });
+UI_IDS.forEach(id=>{
+  const el=document.getElementById(id); if(!el) return;
+  el.addEventListener('input',saveDraft); el.addEventListener('change',saveDraft);
+});
+function saveDraft(){
+  const data={step:REG_STEP};
+  UI_IDS.forEach(id=>{ const el=document.getElementById(id); if(el) data[id]=el.value; });
+  sessionStorage.setItem(DRAFT_KEY, JSON.stringify(data));
+}
+function restoreDraft(){
+  try{
+    const raw=sessionStorage.getItem(DRAFT_KEY); if(!raw) return;
+    const data=JSON.parse(raw);
+    UI_IDS.forEach(id=>{ if(data[id]!=null && document.getElementById(id)) document.getElementById(id).value=data[id]; });
+    if(data.step===2) showRegStep(2);
+  }catch(_e){}
+}
+function showRegStep(n){
+  REG_STEP=n;
+  $('#regStep1').classList.toggle('hidden', n!==1);
+  $('#regStep2').classList.toggle('hidden', n!==2);
+  $('#regNextBtn').classList.toggle('hidden', n!==1);
+  $('#regBtn').classList.toggle('hidden', n!==2);
+  $$('[data-step-dot]').forEach(i=>i.classList.toggle('on', +i.dataset.stepDot<=n));
+  $('#regStepLabel').textContent = n===1 ? 'مرحله ۱ از ۲ — مشخصات اصلی' : 'مرحله ۲ از ۲ — اطلاعات تکمیلی';
+  saveDraft();
+}
 function wireFile(inputId,boxId,labelId,hintId,idleLabel){
   const inp=document.getElementById(inputId), box=document.getElementById(boxId);
   if(!inp) return inp;
@@ -329,7 +362,7 @@ function nidValid(v){
   let s=0; for(let i=0;i<9;i++)s+=+v[i]*(10-i);
   const r=s%11, c=+v[9]; return r<2 ? c===r : c===11-r;
 }
-function localCheck(){
+function localCheckStep1(){
   let first=null;
   const nm=$('#full_name').value.trim();
   if(nm.split(/\s+/).filter(Boolean).length<2){markErr('full_name','نام و نام خانوادگی را کامل وارد کنید.');first='full_name';}
@@ -341,16 +374,36 @@ function localCheck(){
   }
   const ph=DIGITS($('#mobile').value.trim());
   if(!/^(09\d{9}|\+989\d{9}|9\d{9})$/.test(ph)){markErr('mobile','شماره موبایل باید ۱۱ رقم و با ۰۹ شروع شود.');first=first||'mobile';}
+  return first;
+}
+function localCheck(){
+  let first=localCheckStep1();
   const mri=$('#mri_url').value.trim();
   if(mri && !/^https?:\/\/\S+\.\S+/.test(mri)){markErr('mri_url','لینک باید با http:// یا https:// شروع شود.');first=first||'mri_url';}
   return first;
 }
+$('#regNextBtn').onclick=()=>{
+  clearErrs(UI_IDS.concat(['birth_date']));
+  const bad=localCheckStep1();
+  if(bad){document.getElementById(bad).focus();flash('لطفاً خطاهای فرم را برطرف کنید.',true);return;}
+  showRegStep(2);
+};
+$('#regBackBtn').onclick=()=>{
+  saveDraft();
+  if(REG_STEP===2){ showRegStep(1); return; }
+  location.href='/booking';
+};
+restoreDraft();
 let sending=false;
 $('#regForm').addEventListener('submit',async e=>{
   e.preventDefault(); if(sending)return;
   clearErrs(UI_IDS.concat(['birth_date']));
   const bad=localCheck();
-  if(bad){document.getElementById(bad).focus();flash('لطفاً خطاهای فرم را برطرف کنید.',true);return;}
+  if(bad){
+    if(['full_name','national_code','birth_year','birth_month','birth_day','mobile'].indexOf(bad)>=0) showRegStep(1);
+    else showRegStep(2);
+    document.getElementById(bad).focus();flash('لطفاً خطاهای فرم را برطرف کنید.',true);return;
+  }
   sending=true;
   await withBtn($('#regBtn'),'در حال ثبت…',async()=>{
     const birth_date=[$('#birth_year').value,$('#birth_month').value.padStart(2,'0'),$('#birth_day').value.padStart(2,'0')].join('/');
@@ -375,6 +428,7 @@ $('#regForm').addEventListener('submit',async e=>{
       else flash((err.message||'ثبت نشد.')+(err.trace_id?' (کد: '+err.trace_id+')':''),true);
       return;
     }
+    sessionStorage.removeItem(DRAFT_KEY);
     flash(r.data.mri_warning ? 'ثبت شد؛ '+r.data.mri_warning : (r.data.sms_sent?'ثبت شد ✓ پیامک تأیید برای شما ارسال شد':'ثبت شد ✓ (ارسال پیامک با تأخیر انجام می‌شود)'), !!r.data.mri_warning);
     setTimeout(()=>location.href=r.data.redirect||'/booking/reserve',1300);
   });
@@ -464,9 +518,13 @@ RESERVE_BODY = """
 <div class="pcard">
   <h1 class="ptitle">انتخاب تاریخ و ساعت مراجعه</h1>
   <p class="psub">
-    کلینیک هر روز از ساعت <b>۱۶:۰۰ تا ۲۲:۰۰</b> فعال است و هر نوبت نیم‌ساعت طول می‌کشد.
+    کلینیک هر روز از ساعت <b>۱۶:۰۰ تا ۲۲:۰۰</b> فعال است و هر نوبت ۹۰ دقیقه است.
     ساعت‌هایی که کم‌رنگ هستند پر شده‌اند و قابل انتخاب نیستند.
   </p>
+  <div class="steps" id="reserveSteps" aria-hidden="true">
+    <i class="on" data-rstep-dot="1"></i><i data-rstep-dot="2"></i><i data-rstep-dot="3"></i>
+    <span id="reserveStepLabel">مرحله ۱ از ۳ — انتخاب روز</span>
+  </div>
 
   <div id="dayLoading"><div class="skel" style="height:72px"></div></div>
   <div id="dayError" class="state error hidden"></div>
@@ -505,13 +563,19 @@ RESERVE_BODY = """
       <div><b id="rTime" style="direction:ltr">—</b><span>ساعت مراجعه</span></div>
       <div><b id="rName">—</b><span>به نام</span></div>
     </div>
-    <button class="btn btn-primary" id="bookBtn" style="width:100%;padding:15px">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 2v4M16 2v4M3 10h18"/><rect x="3" y="4" width="18" height="18" rx="3"/><path d="M9 16l2 2 4-4"/></svg>
-      ثبت نهایی نوبت
-    </button>
+    <div class="mrow" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px">
+      <button class="btn btn-ghost" type="button" id="reserveBackBtn" style="flex:1;min-width:120px;padding:14px">بازگشت</button>
+      <button class="btn btn-primary" id="bookBtn" style="flex:2;min-width:160px;padding:14px">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 2v4M16 2v4M3 10h18"/><rect x="3" y="4" width="18" height="18" rx="3"/><path d="M9 16l2 2 4-4"/></svg>
+        ثبت نهایی نوبت
+      </button>
+    </div>
     <p class="hint" style="text-align:center;margin-top:10px">
       پس از ثبت، پیامک تأیید با کد پیگیری برای شما ارسال می‌شود.
     </p>
+  </div>
+  <div style="margin-top:16px">
+    <button class="btn btn-ghost" type="button" id="reserveBackEarly" style="width:100%;padding:12px">بازگشت</button>
   </div>
 </div>
 
@@ -522,8 +586,49 @@ RESERVE_BODY = """
 """
 
 RESERVE_JS = r"""
-let DAYS=[], SEL_DATE=null, SEL_TIME=null, ME=null;
+let DAYS=[], SEL_DATE=null, SEL_TIME=null, ME=null, RESERVE_STEP=1;
 const REGISTER_NOTE=sessionStorage.getItem('asa_booking_note')||'';
+const RESERVE_DRAFT='asa_reserve_draft';
+
+function saveReserveDraft(){
+  sessionStorage.setItem(RESERVE_DRAFT, JSON.stringify({
+    step:RESERVE_STEP, date:SEL_DATE, time:SEL_TIME, note:($('#note')&&$('#note').value)||''
+  }));
+}
+function setReserveStep(n){
+  RESERVE_STEP=n;
+  $$('[data-rstep-dot]').forEach(i=>i.classList.toggle('on', +i.dataset.rstepDot<=n));
+  const labels={1:'مرحله ۱ از ۳ — انتخاب روز',2:'مرحله ۲ از ۳ — انتخاب ساعت',3:'مرحله ۳ از ۳ — تأیید نهایی'};
+  $('#reserveStepLabel').textContent=labels[n]||'';
+  // Early back visible until confirm; confirm has its own back beside book.
+  if($('#reserveBackEarly')) $('#reserveBackEarly').classList.toggle('hidden', n===3);
+  saveReserveDraft();
+}
+function goReserveBack(){
+  saveReserveDraft();
+  if(RESERVE_STEP===3){
+    SEL_TIME=null;
+    $('#confirmWrap').classList.add('hidden');
+    $('#noteWrap').classList.add('hidden');
+    $$('.slot').forEach(b=>b.classList.remove('on'));
+    setReserveStep(2);
+    return;
+  }
+  if(RESERVE_STEP===2){
+    SEL_TIME=null; SEL_DATE=null;
+    $('#slotGrid').classList.add('hidden');
+    $('#gridHead').classList.add('hidden');
+    $('#legend').classList.add('hidden');
+    $('#confirmWrap').classList.add('hidden');
+    $('#noteWrap').classList.add('hidden');
+    $$('.daybtn').forEach(b=>b.classList.remove('on'));
+    setReserveStep(1);
+    return;
+  }
+  location.href='/booking';
+}
+if($('#reserveBackBtn')) $('#reserveBackBtn').onclick=goReserveBack;
+if($('#reserveBackEarly')) $('#reserveBackEarly').onclick=goReserveBack;
 
 document.addEventListener('who',e=>{
   if(!e.detail){ location.href='/booking'; return; }
@@ -594,14 +699,26 @@ async function loadDays(){
     row.appendChild(b);
   });
   row.classList.remove('hidden');
-  const firstOpen=DAYS.find(d=>!d.closed);
-  if(firstOpen) pickDay(firstOpen.date);
-  else {
-    $('#gridHead').classList.add('hidden');
-    $('#slotGrid').classList.add('hidden');
-    $('#slotLoading').classList.add('hidden');
-    $('#slotEmpty').textContent='در بازهٔ فعلی روز قابل رزرو وجود ندارد.';
-    $('#slotEmpty').classList.remove('hidden');
+  setReserveStep(1);
+  let draft=null;
+  try{ draft=JSON.parse(sessionStorage.getItem(RESERVE_DRAFT)||'null'); }catch(_e){}
+  if(draft && draft.date && DAYS.some(d=>d.date===draft.date && !d.closed)){
+    await pickDay(draft.date);
+    if(draft.time){
+      const btn=document.querySelector('.slot[data-time="'+draft.time+'"]:not([disabled])');
+      if(btn) pickSlot(draft.time, btn);
+    }
+    if(draft.note && $('#note')) $('#note').value=draft.note;
+  } else {
+    const firstOpen=DAYS.find(d=>!d.closed);
+    if(firstOpen) pickDay(firstOpen.date);
+    else {
+      $('#gridHead').classList.add('hidden');
+      $('#slotGrid').classList.add('hidden');
+      $('#slotLoading').classList.add('hidden');
+      $('#slotEmpty').textContent='در بازهٔ فعلی روز قابل رزرو وجود ندارد.';
+      $('#slotEmpty').classList.remove('hidden');
+    }
   }
 }
 
@@ -660,6 +777,7 @@ async function pickDay(date){
   });
   box.classList.remove('hidden');
   $('#legend').classList.remove('hidden');
+  setReserveStep(2);
 }
 
 function pickSlot(time,btn){
@@ -668,10 +786,12 @@ function pickSlot(time,btn){
   const day=DAYS.find(d=>d.date===SEL_DATE);
   $('#rDate').textContent=day?day.label:SEL_DATE;
   $('#rTime').textContent=time;
-  $('#note').value=REGISTER_NOTE;
+  if(!$('#note').value) $('#note').value=REGISTER_NOTE;
   $('#noteWrap').classList.remove('hidden');
   $('#confirmWrap').classList.remove('hidden');
+  setReserveStep(3);
   $('#confirmWrap').scrollIntoView({behavior:'smooth',block:'nearest'});
+  saveReserveDraft();
 }
 
 document.addEventListener('click',async e=>{
@@ -697,6 +817,7 @@ document.addEventListener('click',async e=>{
       return;
     }
     sessionStorage.removeItem('asa_booking_note');
+    sessionStorage.removeItem(RESERVE_DRAFT);
     flash(r.data.sms_sent?'نوبت ثبت شد ✓ پیامک تأیید ارسال شد':'نوبت ثبت شد ✓');
     setTimeout(()=>location.href=r.data.redirect,1100);
   });

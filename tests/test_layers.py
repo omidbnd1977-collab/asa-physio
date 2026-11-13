@@ -213,15 +213,20 @@ class TestLayer04Authz:
         assert client.patch("/api/admin/bookings/abc", json={"status": "done"}).status_code == 401
 
     def test_staff_cannot_reach_owner_endpoints(self, client):
-        from api import auth
+        from api import auth, repo
+        from api.policies import SYSTEM
 
-        auth.create_user("plain_staff", "staff-password-long", role="staff")
+        oid = auth.create_user("plain_owner", "owner-password-long", role="owner")
+        auth.create_user(
+            "plain_staff", "staff-password-long", role="staff", created_by=oid
+        )
         r = client.post(
             "/api/admin/login", json={"username": "plain_staff", "password": "staff-password-long"}
         )
         assert r.status_code == 200
         assert client.get("/api/admin/costs").status_code == 403
         assert client.get("/api/admin/ops").status_code == 403
+        assert repo.select(SYSTEM, "admin_users", where="username = ?", params=["plain_staff"])
 
     def test_owner_can(self, owner_client):
         assert owner_client.get("/api/admin/costs").status_code == 200
@@ -259,7 +264,10 @@ class TestLayer08Security:
     def test_login_failure_is_generic(self, client):
         from api import auth
 
-        auth.create_user("realuser", "the-real-password-x")
+        oid = auth.create_user("realowner", "owner-password-longxx", role="owner")
+        auth.create_user(
+            "realuser", "the-real-password-x", role="staff", created_by=oid
+        )
         a = client.post("/api/admin/login", json={"username": "realuser", "password": "wrong-pass"})
         b = client.post(
             "/api/admin/login", json={"username": "ghostuser", "password": "wrong-pass"}
@@ -270,7 +278,10 @@ class TestLayer08Security:
     def test_session_cookie_is_httponly(self, client):
         from api import auth
 
-        auth.create_user("cookieuser", "cookie-password-long")
+        oid = auth.create_user("cookieowner", "owner-password-longxx", role="owner")
+        auth.create_user(
+            "cookieuser", "cookie-password-long", role="staff", created_by=oid
+        )
         r = client.post(
             "/api/admin/login", json={"username": "cookieuser", "password": "cookie-password-long"}
         )

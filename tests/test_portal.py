@@ -47,6 +47,18 @@ PNG = (
 
 @pytest.fixture()
 def patient(client):
+    # Ensure a sole active owner exists for portal auto-attach — without logging
+    # in as staff (tests that only use `patient` must stay patient-scoped).
+    from api import auth, repo
+    from api.policies import SYSTEM
+
+    owners = repo.select(
+        SYSTEM, "admin_users", where="role = 'owner' AND is_active = 1", limit=2
+    )
+    if not owners:
+        auth.create_user(
+            "t_owner", "a-very-long-test-password", role="owner", full_name="پزشک تست"
+        )
     r = client.post(
         "/api/portal/register",
         data=reg_form(),
@@ -1852,7 +1864,10 @@ class TestTreatmentHistory:
 
         bp, tx = self._ids(owner_client)
         p = repo.select(SYSTEM, "patients")[0]
-        actor = Actor("owner", 1)
+        owner_id = repo.select(
+            SYSTEM, "admin_users", where="role = 'owner'", limit=1
+        )[0]["id"]
+        actor = Actor("owner", owner_id)
         clinical.record_session(
             actor, p["id"], body_part_ids=[bp], treatment_ids=tx[:1], session_date="2026-01-10"
         )
@@ -1990,11 +2005,15 @@ class TestWelcomeBack:
 
         p = repo.select(SYSTEM, "patients")[0]
         long_ago = (now_tehran().date() - dt.timedelta(days=200)).isoformat()
-        c = clinical.catalog(Actor("owner", 1))
+        owner_id = repo.select(
+            SYSTEM, "admin_users", where="role = 'owner'", limit=1
+        )[0]["id"]
+        actor = Actor("owner", owner_id)
+        c = clinical.catalog(actor)
         bp = c["body_parts"][0]["items"][0]["id"]
         tx = c["treatments"][0]["id"]
         clinical.record_session(
-            Actor("owner", 1),
+            actor,
             p["id"],
             body_part_ids=[bp],
             treatment_ids=[tx],

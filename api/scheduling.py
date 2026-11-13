@@ -198,6 +198,7 @@ def allocate_on_conn(
     *,
     kind: str = "first",
     booked_by: str = "patient",
+    booked_by_user_id: int | None = None,
     note: str = "",
     moved_from: str = "",
 ) -> dict[str, object]:
@@ -234,8 +235,20 @@ def allocate_on_conn(
     try:
         cur = conn.execute(
             "INSERT INTO appointments(public_id, patient_id, slot_date, slot_time, cabin,"
-            " kind, booked_by, note, moved_from) VALUES (?,?,?,?,?,?,?,?,?)",
-            (public_id, patient_id, slot_date, slot_time, free, kind, booked_by, note, moved_from),
+            " kind, booked_by, booked_by_user_id, note, moved_from)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                public_id,
+                patient_id,
+                slot_date,
+                slot_time,
+                free,
+                kind,
+                booked_by,
+                booked_by_user_id,
+                note,
+                moved_from,
+            ),
         )
     except sqlite3.IntegrityError as exc:
         raise Conflict(
@@ -249,6 +262,8 @@ def allocate_on_conn(
         "slot_date": slot_date,
         "slot_time": slot_time,
         "kind": kind,
+        "booked_by": booked_by,
+        "booked_by_user_id": booked_by_user_id,
     }
 
 
@@ -259,6 +274,7 @@ def allocate(
     *,
     kind: str = "first",
     booked_by: str = "patient",
+    booked_by_user_id: int | None = None,
     note: str = "",
     moved_from: str = "",
 ) -> dict[str, object]:
@@ -272,6 +288,7 @@ def allocate(
             slot_time,
             kind=kind,
             booked_by=booked_by,
+            booked_by_user_id=booked_by_user_id,
             note=note,
             moved_from=moved_from,
         )
@@ -283,14 +300,22 @@ def reschedule(
     slot_time: str,
     *,
     booked_by: str = "staff",
+    booked_by_user_id: int | None = None,
 ) -> dict[str, object]:
     """Cancel `old` and book the new slot inside one IMMEDIATE transaction.
 
     Order is cancel-then-insert so a move can reuse a cabin that the old row
     held (same slot edge cases / capacity accounting). On any failure the
     whole transaction rolls back and `old` stays active.
+
+    Always copies booked_by / booked_by_user_id from `old` onto the new row so
+    a move never rewrites the original booker (legacy NULL stays NULL). The
+    booked_by* keyword args are accepted for call-site compatibility only.
     """
+    _ = (booked_by, booked_by_user_id)  # call-site compat; original booker comes from `old`
     validate_slot(slot_date, slot_time)
+    keep_booked_by = old.get("booked_by") or "staff"
+    keep_user_id = old.get("booked_by_user_id")
     with repo.tx() as conn:
         claimed = repo.update(
             SYSTEM,
@@ -308,7 +333,8 @@ def reschedule(
                 slot_date,
                 slot_time,
                 kind=old["kind"],
-                booked_by=booked_by,
+                booked_by=keep_booked_by,
+                booked_by_user_id=keep_user_id,
                 note=old.get("note") or "",
                 moved_from=f"{old['slot_date']} {old['slot_time']}",
             )

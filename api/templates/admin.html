@@ -259,14 +259,15 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
     </header>
 
     <div class="tabs" id="tabs">
-      <button class="tab on" data-tab="sched">🗓 نوبت‌ها</button>
-      <button class="tab" data-tab="closed">🔒 تعطیلات</button>
-      <button class="tab" data-tab="pts">👤 بیماران</button>
-      <button class="tab" data-tab="msg">💬 پیام‌ها<span id="msgTabBadge" class="hidden"></span></button>
-      <button class="tab" data-tab="sms">✉️ پیامک‌ها</button>
-      <button class="tab" data-tab="req">📨 درخواست‌های سایت</button>
-      <button class="tab" data-tab="feedback">⭐ دیدگاه‌ها</button>
-      <button class="tab" data-tab="ops">⚙️ سامانه</button>
+      <button class="tab on" data-tab="sched" data-need="appointments.view">🗓 نوبت‌ها</button>
+      <button class="tab" data-tab="closed" data-owner-only="1">🔒 تعطیلات</button>
+      <button class="tab" data-tab="pts" data-need="patients.view">👤 بیماران</button>
+      <button class="tab" data-tab="msg" data-need="messages.view">💬 پیام‌ها<span id="msgTabBadge" class="hidden"></span></button>
+      <button class="tab" data-tab="sms" data-need-any="reception.queue,messages.view">✉️ پیامک‌ها</button>
+      <button class="tab" data-tab="req" data-need-any="messages.view,reception.queue">📨 درخواست‌های سایت</button>
+      <button class="tab" data-tab="feedback" data-need="messages.view">⭐ دیدگاه‌ها</button>
+      <button class="tab" data-tab="secretaries" data-owner-only="1">👥 مدیریت منشی‌ها</button>
+      <button class="tab" data-tab="ops" data-owner-only="1">⚙️ سامانه</button>
     </div>
 
     <!-- ============ TAB: schedule ============ -->
@@ -366,7 +367,7 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
     <!-- ============ TAB: sms ============ -->
     <section data-pane="sms" class="hidden">
       <div class="card">
-        <h2>✉️ پیامک‌های ارسال‌شده <span class="badge" id="smsProv">—</span>
+        <h2 id="smsOutHead">✉️ پیامک‌های ارسال‌شده <span class="badge" id="smsProv">—</span>
           <button class="btn sm" id="smsRetry">تلاش دوباره برای ناموفق‌ها</button>
         </h2>
         <div id="sLoading"><div class="skel"></div><div class="skel"></div></div>
@@ -424,6 +425,49 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
       </div>
     </div>
 
+    </section>
+
+    <!-- ============ TAB: secretaries ============ -->
+    <section data-pane="secretaries" class="hidden">
+    <div class="card">
+      <h2>مدیریت منشی‌ها</h2>
+      <p class="muted">حساب منشی بسازید و مجوزهای هر نفر را جداگانه تنظیم کنید. رمز عبور به‌صورت امن ذخیره می‌شود.</p>
+      <form id="secForm" style="display:grid;gap:10px;margin:14px 0 18px;max-width:560px">
+        <div style="display:grid;gap:10px;grid-template-columns:1fr 1fr">
+          <div><label for="secName">نام و نام خانوادگی</label>
+            <input id="secName" required minlength="3" maxlength="80" autocomplete="name"></div>
+          <div><label for="secUser">نام کاربری</label>
+            <input id="secUser" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_]+" autocomplete="off" dir="ltr"></div>
+        </div>
+        <div><label for="secPass">رمز عبور اولیه (حداقل ۱۲ نویسه)</label>
+          <input id="secPass" type="password" required minlength="12" maxlength="256" autocomplete="new-password"></div>
+        <div>
+          <div class="sectitle" style="margin:4px 0 8px">سطح دسترسی</div>
+          <div id="secPerms" class="chips" style="flex-wrap:wrap"></div>
+        </div>
+        <div class="mrow">
+          <button class="btn primary" type="submit" id="secCreateBtn">ایجاد منشی</button>
+        </div>
+        <div id="secFormErr" class="state error hidden"></div>
+      </form>
+      <div id="secList"><div class="skel" style="height:80px"></div></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>منشی‌های بدون مالک</h2>
+      <p class="muted">این حساب‌ها تا زمان اختصاص صریح امکان ورود ندارند. اختصاص خودکار انجام نمی‌شود.</p>
+      <div id="orphanSecList"><div class="skel" style="height:48px"></div></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>بیماران بدون مالک</h2>
+      <p class="muted">فقط بیماران انتخاب‌شده با تأیید شما به این کلینیک اختصاص می‌یابند. بازکردن صفحه چیزی را اختصاص نمی‌دهد.</p>
+      <div class="mrow" style="margin-bottom:10px">
+        <button class="btn sm" type="button" id="orphanPatSelectAll">انتخاب همهٔ فهرست</button>
+        <button class="btn sm primary" type="button" id="orphanPatAssignBtn">اختصاص موارد انتخاب‌شده</button>
+        <span class="muted" id="orphanPatTotal"></span>
+      </div>
+      <div id="orphanPatList"><div class="skel" style="height:48px"></div></div>
+      <div id="orphanPatErr" class="state error hidden"></div>
+    </div>
     </section>
 
     <!-- ============ TAB: ops ============ -->
@@ -584,7 +628,23 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const fa = n => Number(n || 0).toLocaleString('fa-IR');
-let CSRF = '', ROLE = 'anon', PAGE = 1, TOTAL = 0, PER = 20;
+let CSRF = '', ROLE = 'anon', PERMS = [], CAN_MANAGE_SEC = false,
+    CAN_MANAGE_QUEUE = false, PAGE = 1, TOTAL = 0, PER = 20;
+const PERM_LABELS = {
+  'patients.view':'مشاهده فهرست بیماران',
+  'patients.create':'ثبت بیمار جدید',
+  'patients.edit':'ویرایش اطلاعات بیمار',
+  'appointments.view':'مشاهده نوبت‌ها',
+  'appointments.create':'ثبت نوبت جدید',
+  'appointments.move':'جابه‌جایی نوبت',
+  'appointments.cancel':'لغو نوبت',
+  'messages.view':'مشاهده پیام‌ها و درخواست‌های مشاورهٔ تخصیص‌شده',
+  'reception.queue':'صف پذیرش (پیامک و مشاورهٔ بدون مالک)'
+};
+function hasPerm(p){ return ROLE==='owner' || PERMS.indexOf(p)>=0; }
+function hasAnyPerm(list){
+  return (list||[]).some(p => hasPerm(String(p).trim()));
+}
 
 function toast(msg, ok = true) {
   const t = $('#toast'); t.textContent = msg;
@@ -664,6 +724,7 @@ async function loadBookings() {
   hide('#bLoading');
   if (!r.ok) return errBox('#bError', r.error, loadBookings);
   TOTAL = r.data.total;
+  if (typeof r.data.can_manage_queue === 'boolean') CAN_MANAGE_QUEUE = r.data.can_manage_queue;
   const items = r.data.items || [];
   if (!items.length) { show('#bEmpty'); return; }
   const list = $('#bList'); list.innerHTML = '';
@@ -681,9 +742,19 @@ async function loadBookings() {
     const ts = document.createElement('span');
     ts.textContent = new Date(b.created_at).toLocaleString('fa-IR');
     meta.append(sp, dp, sv, ts);
+    if (b.owner_id == null) {
+      const q = document.createElement('span'); q.className = 'pill p-new';
+      q.textContent = 'صف پذیرش'; meta.appendChild(q);
+    }
     if (b.note) { const n = document.createElement('span'); n.style.opacity = '.85';
                   n.textContent = '«' + b.note + '»'; meta.appendChild(n); }
     const acts = document.createElement('div'); acts.className = 'acts';
+    if (b.owner_id == null && CAN_MANAGE_QUEUE) {
+      const ab = document.createElement('button');
+      ab.className = 'btn sm primary'; ab.textContent = 'تخصیص به کلینیک';
+      ab.onclick = () => assignBooking(b.public_id, ab);
+      acts.appendChild(ab);
+    }
     for (const s of ['contacted', 'scheduled', 'done', 'spam']) {
       if (s === b.status) continue;
       const btn = document.createElement('button');
@@ -726,21 +797,49 @@ function redeliver(id, btn) {
     loadBookings(); loadMetrics();
   });
 }
+function assignBooking(id, btn) {
+  return withBtn(btn, 'در حال تخصیص…', async () => {
+    const r = await api('/api/admin/bookings/' + id + '/assign', { method: 'POST', body: {} });
+    if (!r.ok) return toast(r.error.message, false);
+    toast('درخواست به کلینیک تخصیص یافت ✓');
+    loadBookings();
+  });
+}
 
 // ---------- ops ----------
 async function loadOps() { return; }
 
 // ---------- session ----------
+function applyTabVisibility(){
+  $$('#tabs .tab').forEach(t=>{
+    const ownerOnly = t.dataset.ownerOnly === '1';
+    const need = t.dataset.need;
+    const needAny = t.dataset.needAny;
+    let ok = true;
+    if (ownerOnly) ok = ROLE === 'owner';
+    else if (needAny) ok = hasAnyPerm(needAny.split(','));
+    else if (need) ok = hasPerm(need);
+    t.classList.toggle('hidden', !ok);
+  });
+}
+function firstVisibleTab(){
+  const t = Array.from($$('#tabs .tab')).find(x => !x.classList.contains('hidden'));
+  return t ? t.dataset.tab : 'ops';
+}
 async function boot() {
   const r = await api('/api/admin/me');
   if (!r.ok) { show('#loginView'); hide('#appView'); return; }
   CSRF = r.data.csrf; ROLE = r.data.role;
-  $('#roleBadge').textContent = ROLE === 'owner' ? 'مدیر' : 'کارمند';
+  PERMS = r.data.permissions || [];
+  CAN_MANAGE_SEC = !!r.data.can_manage_secretaries;
+  CAN_MANAGE_QUEUE = ROLE === 'owner' || hasPerm('reception.queue');
+  $('#roleBadge').textContent = ROLE === 'owner' ? 'پزشک / مدیر' : (r.data.full_name || 'منشی');
   const h = await api('/api/healthz');
   $('#envBadge').textContent = h.ok ? (h.data.env + ' · ' + h.data.version) : '—';
   hide('#loginView'); show('#appView');
-  showTab('sched');
-  pollMsgBadge();
+  applyTabVisibility();
+  showTab(firstVisibleTab());
+  if (hasPerm('messages.view')) pollMsgBadge();
 }
 
 $('#loginForm').addEventListener('submit', async e => {
@@ -781,6 +880,8 @@ $('#nextBtn').onclick = () => { PAGE++; loadBookings(); };
 
 // ======================= tabs =======================
 function showTab(name){
+  const tab = document.querySelector('.tab[data-tab="'+name+'"]');
+  if (tab && tab.classList.contains('hidden')) name = firstVisibleTab();
   $$('.tab').forEach(t=>t.classList.toggle('on',t.dataset.tab===name));
   $$('[data-pane]').forEach(p=>p.classList.toggle('hidden',p.dataset.pane!==name));
   if(name==='sched') loadAppts();
@@ -790,9 +891,165 @@ function showTab(name){
   if(name==='sms')   loadSms();
   if(name==='req'){ loadMetrics(); loadBookings(); }
   if(name==='feedback') loadFeedback();
+  if(name==='secretaries'){ loadSecretaries(); loadOrphanSecretaries(); loadOrphanPatients(); }
   if(name==='ops')   loadOps();
 }
 $$('.tab').forEach(t=>t.onclick=()=>showTab(t.dataset.tab));
+
+// ======================= secretaries =======================
+function renderSecPermChecks(selected){
+  const box=$('#secPerms'); if(!box) return;
+  box.innerHTML='';
+  Object.keys(PERM_LABELS).forEach(id=>{
+    const lab=document.createElement('label');
+    lab.style.cssText='display:flex;gap:6px;align-items:center;font-size:.82rem;margin:4px 8px 4px 0';
+    const cb=document.createElement('input');
+    cb.type='checkbox'; cb.value=id; cb.className='sec-perm';
+    cb.checked = !selected || selected.indexOf(id)>=0;
+    cb.style.width='auto'; cb.style.minHeight='auto';
+    lab.append(cb, document.createTextNode(PERM_LABELS[id]));
+    box.appendChild(lab);
+  });
+}
+function selectedSecPerms(root){
+  return Array.from((root||document).querySelectorAll('.sec-perm:checked')).map(x=>x.value);
+}
+async function loadSecretaries(){
+  if(!CAN_MANAGE_SEC) return;
+  renderSecPermChecks(null);
+  const box=$('#secList'); box.innerHTML='<div class="skel" style="height:80px"></div>';
+  const r=await api('/api/admin/secretaries');
+  if(!r.ok){ box.innerHTML='<div class="state error">'+(r.error.message||'خطا')+'</div>'; return; }
+  const items=r.data.items||[];
+  if(!items.length){ box.innerHTML='<div class="state empty">هنوز منشی‌ای ثبت نشده است.</div>'; return; }
+  box.innerHTML='';
+  items.forEach(s=>{
+    const row=document.createElement('div'); row.className='row';
+    const nm=document.createElement('div'); nm.className='nm';
+    nm.textContent=s.full_name+' (@'+s.username+')';
+    const st=document.createElement('span'); st.className='pill '+(s.is_active?'p-done':'p-new');
+    st.textContent=s.is_active?'فعال':'غیرفعال';
+    const caps=document.createElement('div');
+    caps.style.cssText='grid-column:1/-1;font-size:.78rem;color:var(--muted);line-height:1.8';
+    caps.textContent=(s.permissions||[]).map(p=>PERM_LABELS[p]||p).join(' · ') || 'بدون مجوز';
+    const acts=document.createElement('div'); acts.className='acts';
+    const tog=document.createElement('button'); tog.className='btn sm';
+    tog.textContent=s.is_active?'غیرفعال‌کردن':'فعال‌کردن';
+    tog.onclick=async()=>{
+      const u=await api('/api/admin/secretaries/'+s.id,{method:'PATCH',body:{is_active:!s.is_active}});
+      if(!u.ok) return toast(u.error.message,false);
+      toast('وضعیت به‌روز شد',true); loadSecretaries();
+    };
+    const edit=document.createElement('button'); edit.className='btn sm'; edit.textContent='مجوزها';
+    edit.onclick=()=>editSecretaryPerms(s);
+    const pw=document.createElement('button'); pw.className='btn sm'; pw.textContent='رمز جدید';
+    pw.onclick=async()=>{
+      const pass=prompt('رمز عبور جدید (حداقل ۱۲ نویسه):');
+      if(!pass) return;
+      const u=await api('/api/admin/secretaries/'+s.id+'/password',{method:'POST',body:{password:pass}});
+      if(!u.ok) return toast(u.error.message,false);
+      toast('رمز عبور به‌روز شد',true);
+    };
+    acts.append(tog,edit,pw);
+    row.append(nm,st,caps,acts);
+    box.appendChild(row);
+  });
+}
+async function loadOrphanSecretaries(){
+  if(!CAN_MANAGE_SEC) return;
+  const box=$('#orphanSecList'); if(!box) return;
+  box.innerHTML='<div class="skel" style="height:48px"></div>';
+  const r=await api('/api/admin/orphan-secretaries');
+  if(!r.ok){ box.innerHTML='<div class="state error">'+(r.error.message||'خطا')+'</div>'; return; }
+  const items=r.data.items||[];
+  if(!items.length){ box.innerHTML='<div class="state empty">منشی بدون مالک وجود ندارد.</div>'; return; }
+  box.innerHTML='';
+  items.forEach(s=>{
+    const row=document.createElement('div'); row.className='row';
+    const nm=document.createElement('div'); nm.className='nm';
+    nm.textContent=s.full_name+' (@'+s.username+')';
+    const acts=document.createElement('div'); acts.className='acts';
+    const btn=document.createElement('button'); btn.className='btn sm primary';
+    btn.textContent='اختصاص به من';
+    btn.onclick=()=>withBtn(btn,'در حال اختصاص…',async()=>{
+      if(!confirm('این منشی به حساب شما اختصاص یابد؟ ورود او پس از این فعال می‌شود.')) return;
+      const u=await api('/api/admin/orphan-secretaries/'+s.id+'/assign',{method:'POST',body:{}});
+      if(!u.ok) return toast(u.error.message,false);
+      toast('منشی اختصاص یافت',true);
+      loadOrphanSecretaries(); loadSecretaries();
+    });
+    acts.appendChild(btn); row.append(nm,acts); box.appendChild(row);
+  });
+}
+async function loadOrphanPatients(){
+  if(!CAN_MANAGE_SEC) return;
+  const box=$('#orphanPatList'); if(!box) return;
+  hide('#orphanPatErr');
+  box.innerHTML='<div class="skel" style="height:48px"></div>';
+  const r=await api('/api/admin/orphan-patients');
+  if(!r.ok){ box.innerHTML='<div class="state error">'+(r.error.message||'خطا')+'</div>'; return; }
+  const items=r.data.items||[];
+  const total=r.data.total||0;
+  const totEl=$('#orphanPatTotal');
+  if(totEl) totEl.textContent='جمع بدون مالک: '+fa(total);
+  if(!items.length){ box.innerHTML='<div class="state empty">بیمار بدون مالک وجود ندارد.</div>'; return; }
+  box.innerHTML='';
+  items.forEach(p=>{
+    const row=document.createElement('div'); row.className='row';
+    const lab=document.createElement('label');
+    lab.style.cssText='display:flex;gap:8px;align-items:center;grid-column:1/-1';
+    const cb=document.createElement('input');
+    cb.type='checkbox'; cb.className='orphan-pat'; cb.value=p.public_id;
+    cb.style.width='auto'; cb.style.minHeight='auto';
+    const nm=document.createElement('span');
+    nm.textContent=p.full_name+' · '+p.phone+' · '+p.public_id;
+    lab.append(cb,nm); row.appendChild(lab); box.appendChild(row);
+  });
+}
+if($('#orphanPatSelectAll')){
+  $('#orphanPatSelectAll').onclick=()=>{
+    $$('.orphan-pat').forEach(cb=>{ cb.checked=true; });
+  };
+}
+if($('#orphanPatAssignBtn')){
+  $('#orphanPatAssignBtn').onclick=async()=>{
+    const ids=Array.from($$('.orphan-pat:checked')).map(x=>x.value);
+    if(!ids.length) return toast('هیچ بیماری انتخاب نشده است',false);
+    if(!confirm(fa(ids.length)+' بیمار انتخاب‌شده به شما اختصاص یابد؟ این کار فقط با تأیید شما انجام می‌شود.')) return;
+    hide('#orphanPatErr');
+    await withBtn($('#orphanPatAssignBtn'),'در حال اختصاص…',async()=>{
+      const r=await api('/api/admin/orphan-patients/assign',{method:'POST',body:{public_ids:ids}});
+      if(!r.ok){ errBox('#orphanPatErr', r.error); show('#orphanPatErr'); return; }
+      toast(fa(r.data.count)+' بیمار اختصاص یافت',true);
+      loadOrphanPatients();
+    });
+  };
+}
+async function editSecretaryPerms(s){
+  const chosen=prompt('مجوزها را با ویرگول وارد کنید:\n'+Object.keys(PERM_LABELS).join(', '),
+    (s.permissions||[]).join(','));
+  if(chosen===null) return;
+  const permissions=chosen.split(',').map(x=>x.trim()).filter(Boolean);
+  const u=await api('/api/admin/secretaries/'+s.id,{method:'PATCH',body:{permissions}});
+  if(!u.ok) return toast(u.error.message,false);
+  toast('مجوزها به‌روز شد',true); loadSecretaries();
+}
+if($('#secForm')){
+  $('#secForm').addEventListener('submit', async e=>{
+    e.preventDefault(); hide('#secFormErr');
+    await withBtn($('#secCreateBtn'),'در حال ایجاد…', async ()=>{
+      const r=await api('/api/admin/secretaries',{method:'POST',body:{
+        full_name:$('#secName').value.trim(),
+        username:$('#secUser').value.trim(),
+        password:$('#secPass').value,
+        permissions:selectedSecPerms()
+      }});
+      if(!r.ok){ errBox('#secFormErr', r.error); show('#secFormErr'); return; }
+      $('#secForm').reset(); renderSecPermChecks(null);
+      toast('منشی ایجاد شد',true); loadSecretaries();
+    });
+  });
+}
 
 // ======================= feedback moderation =======================
 async function loadFeedback(){
@@ -1368,9 +1625,15 @@ async function loadSms(){
   const r=await api('/api/admin/sms?per_page=40');
   hide('#sLoading');
   if(!r.ok) return errBox('#sError',r.error,loadSms);
+  if (typeof r.data.can_manage_queue === 'boolean') CAN_MANAGE_QUEUE = r.data.can_manage_queue;
   $('#smsProv').textContent='کانال: '+r.data.provider;
+  const isOwner = ROLE === 'owner';
+  if ($('#smsOutHead')) $('#smsOutHead').classList.toggle('hidden', !isOwner);
+  if ($('#smsRetry')) $('#smsRetry').classList.toggle('hidden', !isOwner);
   const items=r.data.items||[];
-  if(!items.length){ show('#sEmpty'); }
+  if(!isOwner){
+    hide('#sList'); hide('#sEmpty');
+  } else if(!items.length){ show('#sEmpty'); }
   else{
     const box=$('#sList'); box.innerHTML='';
     items.forEach(m=>{
@@ -1407,10 +1670,36 @@ async function loadSms(){
         document.createTextNode(' — «'),
         document.createTextNode(m.body||''),
         document.createTextNode('» → '+(IH[m.handled]||m.handled||'')));
+      if (m.owner_id == null) {
+        const q=document.createElement('span'); q.className='pill p-new';
+        q.style.marginInlineStart='8px'; q.textContent='صف پذیرش';
+        d.appendChild(q);
+      }
+      if (m.owner_id == null && CAN_MANAGE_QUEUE) {
+        const acts=document.createElement('div'); acts.className='acts';
+        acts.style.marginTop='8px';
+        const ab=document.createElement('button');
+        ab.className='btn sm primary'; ab.textContent='تخصیص به بیمار';
+        ab.onclick=()=>assignInbound(m.id, ab);
+        acts.appendChild(ab);
+        d.appendChild(acts);
+      }
       box.appendChild(d);
     });
     show('#sIn'); hide('#sInEmpty');
   } else { hide('#sIn'); show('#sInEmpty'); }
+}
+function assignInbound(id, btn){
+  const pid=prompt('شناسه عمومی بیمار (patient public_id):');
+  if(!pid) return;
+  return withBtn(btn,'در حال تخصیص…',async()=>{
+    const r=await api('/api/admin/sms/inbound/'+id+'/assign',{
+      method:'POST', body:{patient_public_id:pid.trim()}
+    });
+    if(!r.ok) return toast(r.error.message,false);
+    toast('پیامک به بیمار تخصیص یافت ✓');
+    loadSms();
+  });
 }
 $('#smsRetry').onclick=async function(){
   await withBtn(this,'…',async()=>{

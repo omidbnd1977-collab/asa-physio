@@ -111,12 +111,22 @@ def handle_inbound(phone: str, body: str) -> dict[str, object]:
 
     rows = repo.select(SYSTEM, "patients", where="phone = ?", params=[phone], limit=1)
     if not rows:
+        # Unassigned reception queue (owner_id NULL) until staff links a patient.
         repo.insert(
-            SYSTEM, "sms_inbound", {"phone": phone, "body": body[:300], "handled": "unknown_phone"}
+            SYSTEM,
+            "sms_inbound",
+            {
+                "phone": phone,
+                "body": body[:300],
+                "handled": "unknown_phone",
+                "patient_id": None,
+                "owner_id": None,
+            },
         )
         warn("sms.inbound_unknown_phone", phone=fingerprint(phone))
         return {"matched": False, "reason": "unknown_phone"}
     patient = rows[0]
+    patient_owner = patient.get("owner_id")
 
     now = now_tehran()
     appts = repo.select(
@@ -164,6 +174,8 @@ def handle_inbound(phone: str, body: str) -> dict[str, object]:
             "body": body[:300],
             "appointment_id": target["id"] if target else None,
             "handled": handled,
+            "patient_id": patient["id"],
+            "owner_id": patient_owner,
         },
     )
     info("sms.inbound", handled=handled, has_appointment=bool(target))
