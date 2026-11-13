@@ -160,6 +160,12 @@ input:focus,select:focus{outline:2px solid rgba(45,212,191,.5);outline-offset:1p
 .mslot:disabled{opacity:.28;cursor:not-allowed}
 dialog{border:0;padding:0;background:transparent;max-width:min(94vw,520px);width:100%}
 dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
+#passwordDlg{margin:auto}
+#passwordDlg .modal{text-align:center}
+#msgDlg .modal{text-align:center}
+#passwordDlg label{text-align:center}
+#passwordDlg input{text-align:center}
+#passwordDlg .mrow{justify-content:center}
 .modal{background:linear-gradient(165deg,rgba(9,32,56,.98),rgba(4,18,34,.99));
   border:1px solid rgba(45,212,191,.22);border-radius:20px;padding:22px;color:var(--ink);
   max-height:88vh;overflow:auto}
@@ -248,16 +254,20 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
       <span class="badge" id="envBadge">—</span>
       <span class="sp"></span>
       <button class="btn sm" id="refreshBtn">تازه‌سازی</button>
+      <button class="btn sm" id="changePasswordBtn">تغییر گذرواژه</button>
       <button class="btn sm" id="logoutBtn">خروج</button>
     </header>
 
     <div class="tabs" id="tabs">
-      <button class="tab on" data-tab="sched">🗓 نوبت‌ها</button>
-      <button class="tab" data-tab="pts">👤 بیماران</button>
-      <button class="tab" data-tab="msg">💬 پیام‌ها<span id="msgTabBadge" class="hidden"></span></button>
-      <button class="tab" data-tab="sms">✉️ پیامک‌ها</button>
-      <button class="tab" data-tab="req">📨 درخواست‌های سایت</button>
-      <button class="tab" data-tab="ops">⚙️ سامانه</button>
+      <button class="tab on" data-tab="sched" data-need-any="appointments.view,appointments.create,appointments.move,appointments.cancel">🗓 نوبت‌ها</button>
+      <button class="tab" data-tab="closed" data-owner-only="1">🔒 تعطیلات</button>
+      <button class="tab" data-tab="pts" data-need-any="patients.view,patients.create,patients.edit">👤 بیماران</button>
+      <button class="tab" data-tab="msg" data-need="messages.view">💬 پیام‌ها<span id="msgTabBadge" class="hidden"></span></button>
+      <button class="tab" data-tab="sms" data-need-any="reception.queue,messages.view">✉️ پیامک‌ها</button>
+      <button class="tab" data-tab="req" data-need-any="messages.view,reception.queue">📨 درخواست‌های سایت</button>
+      <button class="tab" data-tab="feedback" data-owner-only="1">⭐ دیدگاه‌ها</button>
+      <button class="tab" data-tab="secretaries" data-owner-only="1">👥 مدیریت منشی‌ها</button>
+      <button class="tab" data-tab="ops" data-owner-only="1">⚙️ سامانه</button>
     </div>
 
     <!-- ============ TAB: schedule ============ -->
@@ -282,9 +292,75 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
       </div>
     </section>
 
+    <!-- ============ TAB: clinic closure dates ============ -->
+    <section data-pane="closed" class="hidden">
+      <div class="card">
+        <h2>🔒 قفل کردن روز تعطیل یا تعمیرات</h2>
+        <p class="muted" style="margin-bottom:14px">
+          روزهای قفل‌شده برای بیماران قابل انتخاب نیستند. اگر آن روز نوبت ثبت‌شده داشته باشد، ابتدا باید نوبت‌ها را تعیین تکلیف کنید.
+        </p>
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));align-items:end">
+          <div>
+            <label for="closedDate">انتخاب روز</label>
+            <select id="closedDate"></select>
+          </div>
+          <div>
+            <label for="closedReason">دلیل (اختیاری)</label>
+            <input id="closedReason" maxlength="200" placeholder="مثلاً تعمیرات یا مرخصی">
+          </div>
+          <div>
+            <button class="btn primary" id="closeDayBtn" style="width:100%">قفل کردن روز</button>
+          </div>
+        </div>
+        <div id="closedLoading" class="state loading hidden">در حال دریافت روزهای قفل‌شده…</div>
+        <div id="closedError" class="state error hidden" style="margin-top:12px"></div>
+        <div id="closedEmpty" class="state empty hidden" style="margin-top:12px">هیچ روزی قفل نشده است.</div>
+        <div id="closedList" style="margin-top:12px"></div>
+      </div>
+    </section>
+
     <!-- ============ TAB: patients ============ -->
     <section data-pane="pts" class="hidden">
-      <div class="card">
+      <div class="card" id="patCreateCard" hidden>
+        <h2>ثبت بیمار جدید</h2>
+        <p class="muted" style="margin-bottom:12px">بیمار به کلینیک شما اختصاص می‌یابد. فقط فیلدهای لازم را وارد کنید.</p>
+        <form id="patCreateForm" style="display:grid;gap:10px;max-width:560px">
+          <div style="display:grid;gap:10px;grid-template-columns:1fr 1fr">
+            <div><label for="pcName">نام و نام خانوادگی</label>
+              <input id="pcName" required minlength="3" maxlength="80" autocomplete="name"></div>
+            <div><label for="pcPhone">موبایل</label>
+              <input id="pcPhone" required minlength="10" maxlength="20" inputmode="tel" dir="ltr" autocomplete="tel"></div>
+          </div>
+          <div style="display:grid;gap:10px;grid-template-columns:1fr 1fr">
+            <div><label for="pcNid">کد ملی</label>
+              <input id="pcNid" required minlength="10" maxlength="10" inputmode="numeric" dir="ltr"></div>
+            <div><label for="pcBirth">تاریخ تولد (جلالی، مثل ۱۳۷۰/۰۵/۰۳)</label>
+              <input id="pcBirth" required maxlength="12" placeholder="۱۳۷۰/۰۵/۰۳" dir="ltr"></div>
+          </div>
+          <div style="display:grid;gap:10px;grid-template-columns:1fr 1fr">
+            <div><label for="pcOrtho">پزشک ارتوپد <span class="muted">(اختیاری)</span></label>
+              <input id="pcOrtho" maxlength="80"></div>
+            <div><label for="pcMri">لینک MRI <span class="muted">(اختیاری)</span></label>
+              <input id="pcMri" maxlength="500" dir="ltr" placeholder="https://"></div>
+          </div>
+          <div id="pcMedWrap">
+            <label for="pcMedPhoto">آپلود عکس داروی مصرفی <span class="muted">(اختیاری)</span></label>
+            <input id="pcMedPhoto" type="file" accept="image/jpeg,image/png,image/webp,application/pdf"
+                   style="padding:8px">
+            <p id="pcMedHint" class="muted" style="font-size:.75rem;margin-top:4px">JPG، PNG، WEBP یا PDF — حداکثر ۲ مگابایت.</p>
+            <p id="pcMedName" class="muted" style="font-size:.78rem;margin-top:4px" hidden></p>
+            <p id="pcMedDenied" class="muted" style="font-size:.78rem;margin-top:6px;color:#fbbf24" hidden>
+              برای آپلود عکس دارو به مجوز «مشاهده و مدیریت تصاویر و فایل‌های MRI» نیاز است. ثبت بیمار بدون عکس همچنان ممکن است.
+            </p>
+          </div>
+          <div class="mrow">
+            <button class="btn primary" type="submit" id="patCreateBtn">ثبت بیمار</button>
+          </div>
+          <div id="patCreateErr" class="state error hidden"></div>
+          <div id="patCreateOk" class="state empty hidden" style="border-color:rgba(45,212,191,.35)"></div>
+        </form>
+      </div>
+      <div class="card" id="patListCard" style="margin-top:16px">
         <h2>👤 پرونده‌ی بیماران
           <input id="pq" placeholder="جست‌وجوی نام، تلفن یا کد ملی"
                  style="width:auto;flex:1;min-width:160px;min-height:36px;padding:7px 11px;font-size:.8rem">
@@ -292,10 +368,21 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
         <div id="pLoading"><div class="skel"></div><div class="skel"></div></div>
         <div id="pEmpty" class="state empty hidden">
           هنوز بیماری ثبت‌نام نکرده است.
-          <span class="sub">ثبت‌نام از مسیر «رزرو نوبت» در سایت انجام می‌شود.</span>
+          <span class="sub">ثبت‌نام از مسیر «رزرو نوبت» در سایت یا فرم بالا انجام می‌شود.</span>
         </div>
         <div id="pError" class="state error hidden"></div>
         <div id="pList" class="hidden"></div>
+        <div id="pNoView" class="state empty hidden">
+          مجوز مشاهده فهرست بیماران را ندارید.
+          <span class="sub">اگر مجوز «ثبت بیمار جدید» دارید، از فرم بالا استفاده کنید.</span>
+        </div>
+      </div>
+    </section>
+
+    <section data-pane="noperm" class="hidden">
+      <div class="card">
+        <h2>دسترسی فعالی برای شما تنظیم نشده است</h2>
+        <p class="muted">از پزشک بخواهید مجوزهای لازم (مثلاً مشاهده بیماران یا ثبت بیمار) را برای حساب شما فعال کند.</p>
       </div>
     </section>
 
@@ -315,10 +402,22 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
       </div>
     </section>
 
+    <!-- ============ TAB: feedback ============ -->
+    <section data-pane="feedback" class="hidden">
+      <div class="card">
+        <h2>⭐ رضایت‌مندی، پیشنهادها و شکایت‌ها</h2>
+        <p class="muted" style="margin-bottom:12px">پیام‌ها به‌صورت خصوصی ثبت می‌شوند؛ با «تأیید و انتشار» به شکل کامنت فقط‌خواندنی در سایت نمایش داده خواهند شد.</p>
+        <div id="fbAdminLoading" class="state loading">در حال دریافت پیام‌ها…</div>
+        <div id="fbAdminError" class="state error hidden"></div>
+        <div id="fbAdminEmpty" class="state empty hidden">هنوز پیامی ثبت نشده است.</div>
+        <div id="fbAdminList" class="hidden"></div>
+      </div>
+    </section>
+
     <!-- ============ TAB: sms ============ -->
     <section data-pane="sms" class="hidden">
       <div class="card">
-        <h2>✉️ پیامک‌های ارسال‌شده <span class="badge" id="smsProv">—</span>
+        <h2 id="smsOutHead">✉️ پیامک‌های ارسال‌شده <span class="badge" id="smsProv">—</span>
           <button class="btn sm" id="smsRetry">تلاش دوباره برای ناموفق‌ها</button>
         </h2>
         <div id="sLoading"><div class="skel"></div><div class="skel"></div></div>
@@ -347,9 +446,7 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
           <div class="kpi"><b id="kBook">۰</b><span>نوبت رزروشده</span></div>
           <div class="kpi"><b id="kShow">—</b><span>نرخ حضور (از رزرو تا جلسه)</span></div>
           <div class="kpi"><b id="kConf">۰</b><span>تأیید حضور با پیامک</span></div>
-          <div class="kpi"><b id="kDeliv">۰</b><span>درخواست سایت که به کلینیک رسید</span></div>
-          <div class="kpi vanity"><b id="kCall">۰</b><span>کلیک تماس <i>(تزئینی)</i></span></div>
-          <div class="kpi vanity"><b id="kIg">۰</b><span>کلیک اینستاگرام <i>(تزئینی)</i></span></div>
+          <div class="kpi"><b id="kDeliv">۰</b><span>درخواست‌های سایت که با موفقیت ثبت شدند</span></div>
         </div>
         <p class="muted" id="kFunnel" style="margin-top:12px;text-align:center"></p>
       </div>
@@ -380,16 +477,76 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
 
     </section>
 
+    <!-- ============ TAB: secretaries ============ -->
+    <section data-pane="secretaries" class="hidden">
+    <div class="card">
+      <h2>مدیریت منشی‌ها</h2>
+      <p class="muted">حساب منشی بسازید و مجوزهای هر نفر را جداگانه تنظیم کنید. رمز عبور با Argon2 ذخیره می‌شود و هرگز به‌صورت خام ثبت نمی‌گردد.</p>
+      <form id="secForm" novalidate style="display:grid;gap:10px;margin:14px 0 18px;max-width:640px">
+        <p class="muted" id="secStepLabel">مرحله ۱ از ۲ — مشخصات حساب</p>
+        <div id="secStep1" style="display:grid;gap:10px">
+          <div style="display:grid;gap:10px;grid-template-columns:1fr 1fr">
+            <div><label for="secName">نام و نام خانوادگی</label>
+              <input id="secName" maxlength="80" autocomplete="name"></div>
+            <div><label for="secUser">نام کاربری</label>
+              <input id="secUser" maxlength="32" autocomplete="off" dir="ltr"
+                     placeholder="مثلاً moradi (بدون @)"></div>
+          </div>
+          <div><label for="secPass">رمز عبور اولیه (حداقل ۶ نویسه)</label>
+            <input id="secPass" type="password" maxlength="256" autocomplete="new-password"></div>
+          <p class="muted" style="font-size:.75rem">نام کاربری فقط حروف انگلیسی، رقم و _ — بدون @ و فاصله.</p>
+        </div>
+        <div id="secStep2" class="hidden">
+          <div class="sectitle" style="margin:4px 0 8px">سطح دسترسی</div>
+          <p class="muted" style="font-size:.75rem;margin:0 0 8px">انتخاب مجوز اختیاری است؛ می‌توانید بعداً از ویرایش منشی اضافه کنید.</p>
+          <div id="secPerms" class="chips" style="flex-wrap:wrap"></div>
+        </div>
+        <div class="mrow">
+          <button class="btn" type="button" id="secBackBtn" hidden>بازگشت</button>
+          <button class="btn primary" type="button" id="secNextBtn">ادامه</button>
+          <button class="btn primary hidden" type="submit" id="secCreateBtn">ایجاد منشی</button>
+        </div>
+        <div id="secFormErr" class="state error hidden"></div>
+      </form>
+      <h2 style="margin-top:8px">فهرست منشی‌ها</h2>
+      <div id="secList"><div class="skel" style="height:80px"></div></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>منشی‌های بدون مالک</h2>
+      <p class="muted">این حساب‌ها تا زمان اختصاص صریح امکان ورود ندارند. اختصاص خودکار انجام نمی‌شود.</p>
+      <div id="orphanSecList"><div class="skel" style="height:48px"></div></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>بیماران بدون مالک</h2>
+      <p class="muted">فقط بیماران انتخاب‌شده با تأیید شما به این کلینیک اختصاص می‌یابند. بازکردن صفحه چیزی را اختصاص نمی‌دهد.</p>
+      <div class="mrow" style="margin-bottom:10px">
+        <button class="btn sm" type="button" id="orphanPatSelectAll">انتخاب همهٔ فهرست</button>
+        <button class="btn sm primary" type="button" id="orphanPatAssignBtn">اختصاص موارد انتخاب‌شده</button>
+        <span class="muted" id="orphanPatTotal"></span>
+      </div>
+      <div id="orphanPatList"><div class="skel" style="height:48px"></div></div>
+      <div id="orphanPatErr" class="state error hidden"></div>
+    </div>
+    </section>
+
     <!-- ============ TAB: ops ============ -->
     <section data-pane="ops" class="hidden">
-    <div class="card hidden" id="opsCard">
-      <h2>⚙️ وضعیت سامانه</h2>
-      <div id="oLoading"><div class="skel" style="height:80px"></div></div>
-      <div id="oError" class="state error hidden"></div>
-      <div id="oBody" class="hidden"><div class="grid" id="opsGrid"></div>
-        <div style="margin-top:12px"><button class="btn sm" id="breakerBtn">بستن قطع‌کننده</button></div>
+    <div class="card">
+      <h2>🔗 سامانه‌های موردنیاز پزشک</h2>
+      <div class="row">
+        <div class="nm">سامانه خدمات غیرحضوری تأمین اجتماعی</div>
+        <div class="acts"><a class="btn sm" href="https://eservices.tamin.ir/" target="_blank" rel="noopener noreferrer">ورود به سامانه</a></div>
+      </div>
+      <div class="row">
+        <div class="nm">سازمان نظام پزشکی</div>
+        <div class="acts"><a class="btn sm" href="https://irimc.org/" target="_blank" rel="noopener noreferrer">ورود به سامانه</a></div>
+      </div>
+      <div class="row">
+        <div class="nm">سازمان بیمه سلامت ایران</div>
+        <div class="acts"><a class="btn sm" href="https://www.ihio.gov.ir/" target="_blank" rel="noopener noreferrer">ورود به وب‌سایت</a></div>
       </div>
     </div>
+
     </section>
   </section>
 </div>
@@ -402,6 +559,53 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
   </div>
   <div id="lbBody"></div>
 </div>
+
+<dialog id="passwordDlg"><div class="modal">
+  <h3>تغییر گذرواژه</h3>
+  <p class="muted" style="margin-bottom:14px" id="pwdHint">برای امنیت، گذرواژه فعلی را وارد کنید. گذرواژه جدید باید حداقل ۱۲ نویسه باشد.</p>
+  <form id="passwordForm">
+    <label for="currentPassword">گذرواژه فعلی</label>
+    <input id="currentPassword" type="password" autocomplete="current-password" required maxlength="256">
+    <label for="newPassword" style="margin-top:12px">گذرواژه جدید</label>
+    <input id="newPassword" type="password" autocomplete="new-password" required minlength="12" maxlength="256">
+    <label for="confirmPassword" style="margin-top:12px">تکرار گذرواژه جدید</label>
+    <input id="confirmPassword" type="password" autocomplete="new-password" required minlength="12" maxlength="256">
+    <div id="passwordErr" class="state error hidden" style="margin-top:12px;padding:10px"></div>
+    <div class="mrow">
+      <button class="btn primary" id="savePasswordBtn" type="submit">ذخیره گذرواژه جدید</button>
+      <button class="btn" id="cancelPasswordBtn" type="button">انصراف</button>
+    </div>
+  </form>
+</div></dialog>
+
+<dialog id="secEditDlg"><div class="modal" style="max-width:560px">
+  <h3 id="secEditTitle">ویرایش منشی</h3>
+  <p class="muted" id="secEditSub" style="margin-bottom:12px"></p>
+  <form id="secEditForm" style="display:grid;gap:10px">
+    <div>
+      <label for="secEditName">نام و نام خانوادگی</label>
+      <input id="secEditName" required minlength="3" maxlength="80">
+      <label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:.84rem">
+        <input id="secEditActive" type="checkbox" style="width:auto;min-height:auto"> حساب فعال باشد
+      </label>
+      <div style="margin-top:12px">
+        <label for="secEditPass">رمز عبور جدید <span class="muted">(اختیاری — حداقل ۶ نویسه)</span></label>
+        <input id="secEditPass" type="password" minlength="6" maxlength="256" autocomplete="new-password">
+      </div>
+    </div>
+    <div>
+      <div class="sectitle" style="margin:8px 0">مجوزها <span class="muted" id="secEditPermCount" style="font-weight:400"></span></div>
+      <p class="muted" style="font-size:.75rem;margin:0 0 8px">تیک هر مجوز را جداگانه فعال یا غیرفعال کنید؛ پس از ذخیره بلافاصله در API اعمال می‌شود.</p>
+      <div id="secEditPerms" class="chips" style="flex-wrap:wrap;max-height:280px;overflow:auto"></div>
+    </div>
+    <div id="secEditErr" class="state error hidden"></div>
+    <div class="mrow">
+      <button class="btn primary" type="submit" id="secEditSaveBtn">ذخیره</button>
+      <button class="btn" type="button" id="secEditCancelBtn">انصراف</button>
+      <button class="btn sm" type="button" id="secEditDeleteBtn" style="margin-inline-start:auto;border-color:#f87171;color:#fca5a5">حذف</button>
+    </div>
+  </form>
+</div></dialog>
 
 <dialog id="sessDlg"><div class="modal">
   <h3>ثبت جلسه درمان</h3>
@@ -512,7 +716,30 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const fa = n => Number(n || 0).toLocaleString('fa-IR');
-let CSRF = '', ROLE = 'anon', PAGE = 1, TOTAL = 0, PER = 20;
+let CSRF = '', ROLE = 'anon', PERMS = [], CAN_MANAGE_SEC = false,
+    CAN_MANAGE_QUEUE = false, PAGE = 1, TOTAL = 0, PER = 20;
+const PERM_LABELS = {
+  'patients.view':'مشاهده فهرست بیماران',
+  'patients.create':'ثبت بیمار جدید',
+  'patients.edit':'ویرایش اطلاعات بیمار',
+  'appointments.view':'مشاهده نوبت‌ها',
+  'appointments.create':'ثبت نوبت جدید',
+  'appointments.move':'جابه‌جایی نوبت',
+  'appointments.cancel':'لغو نوبت',
+  'messages.view':'مشاهده پیام‌ها و درخواست‌های مشاورهٔ تخصیص‌شده',
+  'reception.queue':'صف پذیرش (پیامک و مشاورهٔ بدون مالک)',
+  'clinical.record':'ثبت جلسه درمانی و اطلاعات بالینی',
+  'files.manage':'مشاهده و مدیریت تصاویر و فایل‌های MRI'
+};
+const STAFF_PWD_MIN = 6;
+const OWNER_PWD_MIN = 12;
+let SEC_STEP = 1;
+let SEC_EDIT = null;
+function hasPerm(p){ return ROLE==='owner' || PERMS.indexOf(p)>=0; }
+function pwdMin(){ return ROLE === 'staff' ? STAFF_PWD_MIN : OWNER_PWD_MIN; }
+function hasAnyPerm(list){
+  return (list||[]).some(p => hasPerm(String(p).trim()));
+}
 
 function toast(msg, ok = true) {
   const t = $('#toast'); t.textContent = msg;
@@ -525,8 +752,9 @@ function hide(id) { $(id).classList.add('hidden'); }
 /** Single fetch helper: every call returns {ok, data, error} — never throws at call sites. */
 async function api(path, opts = {}) {
   const o = Object.assign({ headers: {}, credentials: 'same-origin' }, opts);
-  if (o.body && typeof o.body !== 'string') { o.body = JSON.stringify(o.body); }
-  if (o.body) o.headers['Content-Type'] = 'application/json';
+  const isForm = (typeof FormData !== 'undefined') && o.body instanceof FormData;
+  if (o.body && typeof o.body !== 'string' && !isForm) { o.body = JSON.stringify(o.body); }
+  if (o.body && !isForm) o.headers['Content-Type'] = 'application/json';
   if (CSRF) o.headers['X-CSRF-Token'] = CSRF;
   let res;
   try { res = await fetch(path, o); }
@@ -571,8 +799,6 @@ async function loadMetrics() {
   $('#kShow').textContent  = f.show_rate === null ? '—' : fa(f.show_rate) + '٪';
   $('#kConf').textContent  = fa(o.supporting.attendance_confirmed);
   $('#kDeliv').textContent = fa(o.supporting.booking_delivered);
-  $('#kCall').textContent  = fa(o.vanity.call_click);
-  $('#kIg').textContent    = fa(o.vanity.instagram_click);
   $('#kFunnel').textContent =
     'مسیر: ' + fa(f.patient_registered) + ' ثبت‌نام ← ' +
     fa(f.appointment_booked) + ' رزرو ← ' + fa(o.north_star.value) + ' جلسه‌ی انجام‌شده';
@@ -594,6 +820,7 @@ async function loadBookings() {
   hide('#bLoading');
   if (!r.ok) return errBox('#bError', r.error, loadBookings);
   TOTAL = r.data.total;
+  if (typeof r.data.can_manage_queue === 'boolean') CAN_MANAGE_QUEUE = r.data.can_manage_queue;
   const items = r.data.items || [];
   if (!items.length) { show('#bEmpty'); return; }
   const list = $('#bList'); list.innerHTML = '';
@@ -611,9 +838,19 @@ async function loadBookings() {
     const ts = document.createElement('span');
     ts.textContent = new Date(b.created_at).toLocaleString('fa-IR');
     meta.append(sp, dp, sv, ts);
+    if (b.owner_id == null) {
+      const q = document.createElement('span'); q.className = 'pill p-new';
+      q.textContent = 'صف پذیرش'; meta.appendChild(q);
+    }
     if (b.note) { const n = document.createElement('span'); n.style.opacity = '.85';
                   n.textContent = '«' + b.note + '»'; meta.appendChild(n); }
     const acts = document.createElement('div'); acts.className = 'acts';
+    if (b.owner_id == null && CAN_MANAGE_QUEUE) {
+      const ab = document.createElement('button');
+      ab.className = 'btn sm primary'; ab.textContent = 'تخصیص به کلینیک';
+      ab.onclick = () => assignBooking(b.public_id, ab);
+      acts.appendChild(ab);
+    }
     for (const s of ['contacted', 'scheduled', 'done', 'spam']) {
       if (s === b.status) continue;
       const btn = document.createElement('button');
@@ -656,43 +893,94 @@ function redeliver(id, btn) {
     loadBookings(); loadMetrics();
   });
 }
-
-// ---------- ops ----------
-async function loadOps() {
-  if (ROLE !== 'owner') return;
-  show('#opsCard'); show('#oLoading'); hide('#oError'); hide('#oBody');
-  const [o, c] = await Promise.all([api('/api/admin/ops'), api('/api/admin/costs')]);
-  hide('#oLoading');
-  if (!o.ok) return errBox('#oError', o.error, loadOps);
-  const d = o.data, g = $('#opsGrid'); g.innerHTML = '';
-  const add = (v, l, cls) => { const k = document.createElement('div');
-    k.className = 'kpi ' + (cls || ''); const b = document.createElement('b'); b.textContent = v;
-    const s = document.createElement('span'); s.textContent = l; k.append(b, s); g.appendChild(k); };
-  add(d.breaker.open ? 'باز' : 'بسته', 'قطع‌کننده‌ی سراسری');
-  add(fa(d.cache.hit_rate_pct) + '٪', 'نرخ اصابت کش');
-  add('\u2066' + fa(d.db.size_kb) + ' KB\u2069', 'حجم پایگاه‌داده');
-  add(fa(d.backups.count), 'نسخه‌ی پشتیبان');
-  add(d.notify_provider, 'کانال تحویل');
-  add('\u2066' + fa(Math.round(d.uptime_s / 60)) + ' دقیقه\u2069', 'مدت فعالیت');
-  if (c.ok) for (const [k, v] of Object.entries(c.data.resources)) {
-    const used = '\u2066' + v.spent_usd.toFixed(3) + ' / ' + Number(v.cap_usd).toFixed(2) + ' $\u2069';
-    add(used, v.label + ' — خرج‌شده از سقف ماهانه (' + fa(v.pct) + '٪)',
-        v.pct >= 80 ? 'vanity' : '');
-  }
-  show('#oBody');
+function assignBooking(id, btn) {
+  return withBtn(btn, 'در حال تخصیص…', async () => {
+    const r = await api('/api/admin/bookings/' + id + '/assign', { method: 'POST', body: {} });
+    if (!r.ok) return toast(r.error.message, false);
+    toast('درخواست به کلینیک تخصیص یافت ✓');
+    loadBookings();
+  });
 }
 
+// ---------- ops ----------
+async function loadOps() { return; }
+
 // ---------- session ----------
+function applyTabVisibility(){
+  $$('#tabs .tab').forEach(t=>{
+    const ownerOnly = t.dataset.ownerOnly === '1';
+    const need = t.dataset.need;
+    const needAny = t.dataset.needAny;
+    let ok = true;
+    if (ownerOnly) ok = ROLE === 'owner';
+    else if (needAny) ok = hasAnyPerm(needAny.split(','));
+    else if (need) ok = hasPerm(need);
+    t.classList.toggle('hidden', !ok);
+  });
+}
+function firstVisibleTab(){
+  const t = Array.from($$('#tabs .tab')).find(x => !x.classList.contains('hidden'));
+  // Never fall back to owner-only panes (e.g. ops) for staff with no matching tab.
+  return t ? t.dataset.tab : 'noperm';
+}
+function applyPatientsPaneVisibility(){
+  const canCreate = hasPerm('patients.create');
+  const canView = hasPerm('patients.view');
+  const canFiles = hasPerm('files.manage');
+  if ($('#patCreateCard')) $('#patCreateCard').hidden = !canCreate;
+  // Med-photo field stays visible whenever create is allowed so the feature is
+  // discoverable; without files.manage the control is disabled (not removed).
+  if ($('#pcMedWrap')) $('#pcMedWrap').hidden = !canCreate;
+  const fileEl = $('#pcMedPhoto');
+  if (fileEl) {
+    fileEl.disabled = !canFiles;
+    if (!canFiles) fileEl.value = '';
+  }
+  if ($('#pcMedDenied')) $('#pcMedDenied').hidden = !(canCreate && !canFiles);
+  if ($('#pcMedHint')) $('#pcMedHint').hidden = !!(canCreate && !canFiles);
+  if ($('#pcMedName') && (!canFiles || !(fileEl && fileEl.files && fileEl.files[0]))) {
+    $('#pcMedName').hidden = true;
+    $('#pcMedName').textContent = '';
+  }
+  if ($('#patListCard')) {
+    // Keep card for messaging when create-only; hide search/list guts without view.
+    if ($('#pq')) $('#pq').classList.toggle('hidden', !canView);
+    if ($('#pLoading')) $('#pLoading').classList.toggle('hidden', !canView);
+    if (!canView) {
+      hide('#pList'); hide('#pEmpty'); hide('#pError');
+      if ($('#pNoView')) show('#pNoView');
+    } else if ($('#pNoView')) hide('#pNoView');
+  }
+}
+function syncPermCatalog(catalog){
+  if (!Array.isArray(catalog) || !catalog.length) return;
+  // Replace labels from Backend so edit-secretary checkboxes match server keys exactly.
+  Object.keys(PERM_LABELS).forEach(k => { delete PERM_LABELS[k]; });
+  catalog.forEach(item => {
+    if (item && item.id) PERM_LABELS[item.id] = item.label || item.id;
+  });
+}
 async function boot() {
   const r = await api('/api/admin/me');
   if (!r.ok) { show('#loginView'); hide('#appView'); return; }
   CSRF = r.data.csrf; ROLE = r.data.role;
-  $('#roleBadge').textContent = ROLE === 'owner' ? 'مدیر' : 'کارمند';
+  PERMS = r.data.permissions || [];
+  syncPermCatalog(r.data.permission_catalog);
+  CAN_MANAGE_SEC = !!r.data.can_manage_secretaries;
+  CAN_MANAGE_QUEUE = ROLE === 'owner' || hasPerm('reception.queue');
+  $('#roleBadge').textContent = ROLE === 'owner' ? 'پزشک / مدیر' : (r.data.full_name || 'منشی');
   const h = await api('/api/healthz');
   $('#envBadge').textContent = h.ok ? (h.data.env + ' · ' + h.data.version) : '—';
+  const pmin = pwdMin();
+  if ($('#pwdHint')) $('#pwdHint').textContent = 'برای امنیت، گذرواژه فعلی را وارد کنید. گذرواژه جدید باید حداقل '+fa(pmin)+' نویسه باشد.';
+  if ($('#newPassword')) $('#newPassword').minLength = pmin;
+  if ($('#confirmPassword')) $('#confirmPassword').minLength = pmin;
+  if ($('#remindBtn')) $('#remindBtn').classList.toggle('hidden', ROLE !== 'owner');
   hide('#loginView'); show('#appView');
-  showTab('sched');
-  pollMsgBadge();
+  applyTabVisibility();
+  applyPatientsPaneVisibility();
+  showTab(firstVisibleTab());
+  if (hasPerm('messages.view')) pollMsgBadge();
 }
 
 $('#loginForm').addEventListener('submit', async e => {
@@ -707,29 +995,408 @@ $('#loginForm').addEventListener('submit', async e => {
 boot();
   });
 });
+$('#changePasswordBtn').onclick = () => {
+  $('#passwordForm').reset(); hide('#passwordErr'); $('#passwordDlg').showModal();
+};
+$('#cancelPasswordBtn').onclick = () => $('#passwordDlg').close();
+$('#passwordForm').addEventListener('submit', async e => {
+  e.preventDefault(); hide('#passwordErr');
+  const current = $('#currentPassword').value;
+  const next = $('#newPassword').value;
+  const pmin = pwdMin();
+  if (next.length < pmin) { errBox('#passwordErr', {message:'گذرواژه جدید باید دست‌کم '+pmin+' نویسه داشته باشد.'}); show('#passwordErr'); return; }
+  if (next !== $('#confirmPassword').value) { $('#passwordErr').textContent='تکرار گذرواژه جدید یکسان نیست.'; show('#passwordErr'); return; }
+  await withBtn($('#savePasswordBtn'), 'در حال ذخیره…', async () => {
+    const r = await api('/api/admin/change-password', {method:'POST', body:{current_password:current,new_password:next}});
+    if (!r.ok) { $('#passwordErr').textContent=r.error.message||'تغییر گذرواژه انجام نشد.'; show('#passwordErr'); return; }
+    $('#passwordDlg').close(); toast('گذرواژه با موفقیت تغییر کرد.', true);
+  });
+});
 $('#logoutBtn').onclick = async () => { await api('/api/admin/logout', { method: 'POST' });
   CSRF = ''; location.reload(); };
-$('#refreshBtn').onclick = () => { const t=document.querySelector('.tab.on'); showTab(t?t.dataset.tab:'sched'); };
+$('#refreshBtn').onclick = () => { const t=document.querySelector('.tab.on:not(.hidden)'); showTab(t?t.dataset.tab:firstVisibleTab()); };
 $('#filter').onchange = () => { PAGE = 1; loadBookings(); };
 $('#prevBtn').onclick = () => { if (PAGE > 1) { PAGE--; loadBookings(); } };
 $('#nextBtn').onclick = () => { PAGE++; loadBookings(); };
-$('#breakerBtn').onclick = async () => {
-  const r = await api('/api/admin/breaker/close', { method: 'POST' });
-  toast(r.ok ? 'قطع‌کننده بسته شد' : r.error.message, r.ok); loadOps();
-};
+
 
 // ======================= tabs =======================
 function showTab(name){
+  if (!name) name = firstVisibleTab();
+  const tab = document.querySelector('.tab[data-tab="'+name+'"]');
+  if (name !== 'noperm' && tab && tab.classList.contains('hidden')) name = firstVisibleTab();
+  // Staff must never land on owner-only panes just because no other tab matched.
+  if (name === 'ops' && ROLE !== 'owner') name = firstVisibleTab();
+  if (name === 'secretaries' && ROLE !== 'owner') name = firstVisibleTab();
+  if (name === 'closed' && ROLE !== 'owner') name = firstVisibleTab();
+  if (name === 'feedback' && ROLE !== 'owner') name = firstVisibleTab();
   $$('.tab').forEach(t=>t.classList.toggle('on',t.dataset.tab===name));
   $$('[data-pane]').forEach(p=>p.classList.toggle('hidden',p.dataset.pane!==name));
-  if(name==='sched') loadAppts();
-  if(name==='pts')   loadPatients();
+  if(name==='sched'){
+    if(hasPerm('appointments.view')) loadAppts();
+    else {
+      const list=$('#aList'); if(list){ list.innerHTML=''; hide('#aList'); }
+      hide('#aLoading'); hide('#aError');
+      const empty=$('#aEmpty'); if(empty){ empty.textContent='مجوز مشاهده نوبت‌ها را ندارید.'; show('#aEmpty'); }
+    }
+  }
+  if(name==='closed') loadClosedDays();
+  if(name==='pts'){ applyPatientsPaneVisibility(); if(hasPerm('patients.view')) loadPatients(); }
   if(name==='msg')   loadMessages();
   if(name==='sms')   loadSms();
-  if(name==='req'){ loadMetrics(); loadBookings(); }
+  if(name==='req'){ if(ROLE==='owner') loadMetrics(); loadBookings(); }
+  if(name==='feedback') loadFeedback();
+  if(name==='secretaries'){ loadSecretaries(); loadOrphanSecretaries(); loadOrphanPatients(); }
   if(name==='ops')   loadOps();
 }
 $$('.tab').forEach(t=>t.onclick=()=>showTab(t.dataset.tab));
+
+// ======================= secretaries =======================
+function renderSecPermChecks(box, selected, cls){
+  if(!box) return;
+  box.innerHTML='';
+  const klass = cls || 'sec-perm';
+  const ids = Object.keys(PERM_LABELS);
+  ids.forEach(id=>{
+    const lab=document.createElement('label');
+    lab.style.cssText='display:flex;gap:6px;align-items:flex-start;font-size:.82rem;margin:4px 8px 4px 0;line-height:1.45';
+    lab.dataset.perm = id;
+    const cb=document.createElement('input');
+    cb.type='checkbox'; cb.value=id; cb.className=klass;
+    cb.dataset.perm = id;
+    cb.checked = Array.isArray(selected) ? selected.indexOf(id)>=0 : false;
+    cb.style.width='auto'; cb.style.minHeight='auto'; cb.style.marginTop='3px';
+    lab.append(cb, document.createTextNode(PERM_LABELS[id]));
+    box.appendChild(lab);
+  });
+  if ($('#secEditPermCount') && box.id === 'secEditPerms') {
+    $('#secEditPermCount').textContent = '('+fa(ids.length)+' مورد)';
+  }
+}
+function selectedSecPerms(root, cls){
+  const c = cls || 'sec-perm';
+  return Array.from((root||document).querySelectorAll('.'+c+':checked')).map(x=>x.value);
+}
+function showSecCreateStep(n){
+  SEC_STEP = n;
+  if($('#secStep1')) $('#secStep1').classList.toggle('hidden', n!==1);
+  if($('#secStep2')) $('#secStep2').classList.toggle('hidden', n!==2);
+  if($('#secBackBtn')){ $('#secBackBtn').hidden = n===1; }
+  if($('#secNextBtn')) $('#secNextBtn').classList.toggle('hidden', n!==1);
+  if($('#secCreateBtn')) $('#secCreateBtn').classList.toggle('hidden', n!==2);
+  if($('#secStepLabel')) $('#secStepLabel').textContent = n===1 ? 'مرحله ۱ از ۲ — مشخصات حساب' : 'مرحله ۲ از ۲ — انتخاب مجوزها';
+}
+function fmtSecDate(iso){
+  if(!iso) return '—';
+  try { return new Date(iso).toLocaleString('fa-IR'); } catch(_e){ return iso; }
+}
+async function loadSecretaries(){
+  if(!CAN_MANAGE_SEC) return;
+  showSecCreateStep(1);
+  renderSecPermChecks($('#secPerms'), [], 'sec-perm');
+  const box=$('#secList'); box.innerHTML='<div class="skel" style="height:80px"></div>';
+  const r=await api('/api/admin/secretaries');
+  if(!r.ok){ box.innerHTML='<div class="state error">'+(r.error.message||'خطا')+'</div>'; return; }
+  syncPermCatalog(r.data.permission_catalog);
+  renderSecPermChecks($('#secPerms'), [], 'sec-perm');
+  const items=r.data.items||[];
+  if(!items.length){ box.innerHTML='<div class="state empty">هنوز منشی‌ای ثبت نشده است.</div>'; return; }
+  box.innerHTML='';
+  items.forEach(s=>{
+    const row=document.createElement('div'); row.className='row';
+    const nm=document.createElement('div'); nm.className='nm';
+    nm.textContent=s.full_name;
+    const user=document.createElement('div'); user.className='meta';
+    user.style.gridColumn='1/-1';
+    const u=document.createElement('span'); u.setAttribute('dir','ltr'); u.textContent='@'+s.username;
+    const st=document.createElement('span'); st.className='pill '+(s.is_active?'p-done':'p-new');
+    st.textContent=s.is_active?'فعال':'غیرفعال';
+    const created=document.createElement('span'); created.textContent='ایجاد: '+fmtSecDate(s.created_at);
+    user.append(u, st, created);
+    const caps=document.createElement('div');
+    caps.style.cssText='grid-column:1/-1;font-size:.78rem;color:var(--muted);line-height:1.8';
+    caps.textContent=(s.permissions||[]).map(p=>PERM_LABELS[p]||p).join(' · ') || 'بدون مجوز';
+    const acts=document.createElement('div'); acts.className='acts';
+    const edit=document.createElement('button'); edit.className='btn sm primary'; edit.textContent='ویرایش';
+    edit.onclick=()=>openSecEdit(s);
+    const tog=document.createElement('button'); tog.className='btn sm';
+    tog.textContent=s.is_active?'غیرفعال‌کردن':'فعال‌کردن';
+    tog.onclick=async()=>{
+      const u2=await api('/api/admin/secretaries/'+s.id,{method:'PATCH',body:{is_active:!s.is_active}});
+      if(!u2.ok) return toast(u2.error.message,false);
+      toast('وضعیت به‌روز شد',true); loadSecretaries();
+    };
+    acts.append(edit,tog);
+    row.append(nm,user,caps,acts);
+    box.appendChild(row);
+  });
+}
+function openSecEdit(s){
+  SEC_EDIT = s;
+  $('#secEditTitle').textContent = 'ویرایش منشی';
+  $('#secEditSub').textContent = '@'+s.username;
+  $('#secEditName').value = s.full_name || '';
+  $('#secEditActive').checked = !!s.is_active;
+  $('#secEditPass').value = '';
+  hide('#secEditErr');
+  renderSecPermChecks($('#secEditPerms'), s.permissions||[], 'sec-edit-perm');
+  $('#secEditDlg').showModal();
+}
+if($('#secEditCancelBtn')) $('#secEditCancelBtn').onclick=()=>$('#secEditDlg').close();
+if($('#secEditForm')){
+  $('#secEditForm').addEventListener('submit', async e=>{
+    e.preventDefault(); if(!SEC_EDIT) return;
+    hide('#secEditErr');
+    const name=$('#secEditName').value.trim();
+    if(name.length<3){ errBox('#secEditErr',{message:'نام و نام خانوادگی را کامل وارد کنید.'}); show('#secEditErr'); return; }
+    const pass=$('#secEditPass').value;
+    if(pass && pass.length < STAFF_PWD_MIN){
+      errBox('#secEditErr',{message:'رمز عبور جدید باید دست‌کم '+STAFF_PWD_MIN+' نویسه باشد.'});
+      show('#secEditErr'); return;
+    }
+    await withBtn($('#secEditSaveBtn'),'در حال ذخیره…', async ()=>{
+      const body={
+        full_name:name,
+        is_active:$('#secEditActive').checked,
+        permissions:selectedSecPerms($('#secEditDlg'), 'sec-edit-perm')
+      };
+      const u=await api('/api/admin/secretaries/'+SEC_EDIT.id,{method:'PATCH',body:body});
+      if(!u.ok){ errBox('#secEditErr', u.error); show('#secEditErr'); return; }
+      if(pass){
+        const p=await api('/api/admin/secretaries/'+SEC_EDIT.id+'/password',{method:'POST',body:{password:pass}});
+        if(!p.ok){ errBox('#secEditErr', p.error); show('#secEditErr'); return; }
+      }
+      $('#secEditDlg').close(); toast('منشی به‌روز شد — مجوزها ذخیره شد',true); loadSecretaries();
+    });
+  });
+}
+if($('#secEditDeleteBtn')){
+  $('#secEditDeleteBtn').onclick=async()=>{
+    if(!SEC_EDIT) return;
+    if(!confirm('این منشی حذف شود؟ اگر سابقه داشته باشد فقط غیرفعال می‌شود تا سوابق حفظ گردد.')) return;
+    await withBtn($('#secEditDeleteBtn'),'…', async ()=>{
+      const r=await api('/api/admin/secretaries/'+SEC_EDIT.id,{method:'DELETE'});
+      if(!r.ok){ errBox('#secEditErr', r.error); show('#secEditErr'); return; }
+      $('#secEditDlg').close();
+      toast(r.data.message||'انجام شد',true); loadSecretaries();
+    });
+  };
+}
+function validateSecAccountFields(){
+  const name=($('#secName')?$('#secName').value:'').trim();
+  const user=($('#secUser')?$('#secUser').value:'').trim().toLowerCase();
+  const pass=$('#secPass')?$('#secPass').value:'';
+  if(name.length<3) return {ok:false, message:'نام و نام خانوادگی را کامل وارد کنید (حداقل ۳ نویسه).'};
+  if(user.length<3 || user.length>32) return {ok:false, message:'نام کاربری باید ۳ تا ۳۲ نویسه باشد.'};
+  if(!/^[a-z0-9_]+$/.test(user)){
+    return {ok:false, message:'نام کاربری فقط می‌تواند حروف انگلیسی، رقم و _ باشد (بدون @، فاصله یا حروف فارسی).'};
+  }
+  if(pass.length < STAFF_PWD_MIN){
+    return {ok:false, message:'رمز عبور اولیه باید دست‌کم '+STAFF_PWD_MIN+' نویسه باشد.'};
+  }
+  if(pass.length > 256) return {ok:false, message:'رمز عبور بیش از حد طولانی است.'};
+  return {ok:true, name, user, pass};
+}
+if($('#secNextBtn')){
+  $('#secNextBtn').onclick=()=>{
+    hide('#secFormErr');
+    const v=validateSecAccountFields();
+    if(!v.ok){ errBox('#secFormErr',{message:v.message}); show('#secFormErr'); return; }
+    if($('#secUser')) $('#secUser').value = v.user;
+    showSecCreateStep(2);
+  };
+}
+if($('#secBackBtn')) $('#secBackBtn').onclick=()=>{ hide('#secFormErr'); showSecCreateStep(1); };
+async function loadOrphanSecretaries(){
+  if(!CAN_MANAGE_SEC) return;
+  const box=$('#orphanSecList'); if(!box) return;
+  box.innerHTML='<div class="skel" style="height:48px"></div>';
+  const r=await api('/api/admin/orphan-secretaries');
+  if(!r.ok){ box.innerHTML='<div class="state error">'+(r.error.message||'خطا')+'</div>'; return; }
+  const items=r.data.items||[];
+  if(!items.length){ box.innerHTML='<div class="state empty">منشی بدون مالک وجود ندارد.</div>'; return; }
+  box.innerHTML='';
+  items.forEach(s=>{
+    const row=document.createElement('div'); row.className='row';
+    const nm=document.createElement('div'); nm.className='nm';
+    nm.textContent=s.full_name+' (@'+s.username+')';
+    const acts=document.createElement('div'); acts.className='acts';
+    const btn=document.createElement('button'); btn.className='btn sm primary';
+    btn.textContent='اختصاص به من';
+    btn.onclick=()=>withBtn(btn,'در حال اختصاص…',async()=>{
+      if(!confirm('این منشی به حساب شما اختصاص یابد؟ ورود او پس از این فعال می‌شود.')) return;
+      const u=await api('/api/admin/orphan-secretaries/'+s.id+'/assign',{method:'POST',body:{}});
+      if(!u.ok) return toast(u.error.message,false);
+      toast('منشی اختصاص یافت',true);
+      loadOrphanSecretaries(); loadSecretaries();
+    });
+    acts.appendChild(btn); row.append(nm,acts); box.appendChild(row);
+  });
+}
+async function loadOrphanPatients(){
+  if(!CAN_MANAGE_SEC) return;
+  const box=$('#orphanPatList'); if(!box) return;
+  hide('#orphanPatErr');
+  box.innerHTML='<div class="skel" style="height:48px"></div>';
+  const r=await api('/api/admin/orphan-patients');
+  if(!r.ok){ box.innerHTML='<div class="state error">'+(r.error.message||'خطا')+'</div>'; return; }
+  const items=r.data.items||[];
+  const total=r.data.total||0;
+  const totEl=$('#orphanPatTotal');
+  if(totEl) totEl.textContent='جمع بدون مالک: '+fa(total);
+  if(!items.length){ box.innerHTML='<div class="state empty">بیمار بدون مالک وجود ندارد.</div>'; return; }
+  box.innerHTML='';
+  items.forEach(p=>{
+    const row=document.createElement('div'); row.className='row';
+    const lab=document.createElement('label');
+    lab.style.cssText='display:flex;gap:8px;align-items:center;grid-column:1/-1';
+    const cb=document.createElement('input');
+    cb.type='checkbox'; cb.className='orphan-pat'; cb.value=p.public_id;
+    cb.style.width='auto'; cb.style.minHeight='auto';
+    const nm=document.createElement('span');
+    nm.textContent=p.full_name+' · '+p.phone+' · '+p.public_id;
+    lab.append(cb,nm); row.appendChild(lab); box.appendChild(row);
+  });
+}
+if($('#orphanPatSelectAll')){
+  $('#orphanPatSelectAll').onclick=()=>{
+    $$('.orphan-pat').forEach(cb=>{ cb.checked=true; });
+  };
+}
+if($('#orphanPatAssignBtn')){
+  $('#orphanPatAssignBtn').onclick=async()=>{
+    const ids=Array.from($$('.orphan-pat:checked')).map(x=>x.value);
+    if(!ids.length) return toast('هیچ بیماری انتخاب نشده است',false);
+    if(!confirm(fa(ids.length)+' بیمار انتخاب‌شده به شما اختصاص یابد؟ این کار فقط با تأیید شما انجام می‌شود.')) return;
+    hide('#orphanPatErr');
+    await withBtn($('#orphanPatAssignBtn'),'در حال اختصاص…',async()=>{
+      const r=await api('/api/admin/orphan-patients/assign',{method:'POST',body:{public_ids:ids}});
+      if(!r.ok){ errBox('#orphanPatErr', r.error); show('#orphanPatErr'); return; }
+      toast(fa(r.data.count)+' بیمار اختصاص یافت',true);
+      loadOrphanPatients();
+    });
+  };
+}
+if($('#secForm')){
+  let secCreateBusy=false;
+  $('#secForm').addEventListener('submit', async e=>{
+    e.preventDefault();
+    e.stopPropagation();
+    hide('#secFormErr');
+    // Always re-check account fields before POST (step 1 may be CSS-hidden).
+    const v=validateSecAccountFields();
+    if(!v.ok){
+      errBox('#secFormErr',{message:v.message}); show('#secFormErr');
+      showSecCreateStep(1);
+      return;
+    }
+    if($('#secUser')) $('#secUser').value = v.user;
+    if(SEC_STEP!==2){ showSecCreateStep(2); return; }
+    if(secCreateBusy) return;
+    secCreateBusy=true;
+    await withBtn($('#secCreateBtn'),'در حال ایجاد…', async ()=>{
+      const perms=selectedSecPerms($('#secForm'), 'sec-perm');
+      const r=await api('/api/admin/secretaries',{method:'POST',body:{
+        full_name:v.name,
+        username:v.user,
+        password:v.pass,
+        permissions:perms
+      }});
+      if(!r.ok){
+        errBox('#secFormErr', r.error);
+        show('#secFormErr');
+        // Keep user on step 2 so they see the API error next to Create.
+        showSecCreateStep(2);
+        return;
+      }
+      $('#secForm').reset();
+      showSecCreateStep(1);
+      renderSecPermChecks($('#secPerms'), [], 'sec-perm');
+      toast('منشی «'+v.user+'» ایجاد شد',true);
+      loadSecretaries();
+    });
+    secCreateBusy=false;
+  });
+}
+
+// ======================= feedback moderation =======================
+async function loadFeedback(){
+  show('#fbAdminLoading'); hide('#fbAdminError'); hide('#fbAdminEmpty'); hide('#fbAdminList');
+  const r=await api('/api/admin/feedback');
+  hide('#fbAdminLoading');
+  if(!r.ok)return errBox('#fbAdminError',r.error,loadFeedback);
+  const list=$('#fbAdminList');list.innerHTML='';
+  const items=r.data.items||[];
+  if(!items.length){show('#fbAdminEmpty');return;}
+  const labels={satisfaction:'رضایت‌مندی',suggestion:'پیشنهاد',complaint:'شکایت'};
+  for(const item of items){
+    const card=document.createElement('div');card.className='row';
+    const title=document.createElement('div');title.className='nm';
+    title.textContent=(item.name||'بدون نام')+' — '+(labels[item.category]||item.category);
+    const state=document.createElement('span');state.className='pill '+(item.published?'p-done':'p-new');
+    state.textContent=item.published?'منتشرشده':'در انتظار بررسی';
+    const body=document.createElement('div');body.style.cssText='grid-column:1/-1;white-space:pre-wrap;line-height:1.9';body.textContent=item.body;
+    const meta=document.createElement('div');meta.className='meta';
+    meta.textContent=new Date(item.created_at).toLocaleString('fa-IR')+(item.rating?' · امتیاز: '+fa(item.rating)+' از ۵':'');
+    const acts=document.createElement('div');acts.className='acts';
+    const btn=document.createElement('button');btn.className='btn sm '+(item.published?'':'primary');
+    btn.textContent=item.published?'برداشتن از انتشار':'✓ تأیید و انتشار';
+    btn.onclick=()=>withBtn(btn,'در حال ثبت…',async()=>{
+      const x=await api('/api/admin/feedback/'+item.public_id,{method:'PATCH',body:{published:!item.published}});
+      if(!x.ok)return toast(x.error.message,false);
+      toast(x.data.published?'پیام منتشر شد':'انتشار پیام برداشته شد');loadFeedback();
+    });
+    acts.appendChild(btn);card.append(title,state,body,meta,acts);list.appendChild(card);
+  }
+  show('#fbAdminList');
+}
+
+// ======================= clinic closure dates =======================
+async function loadClosedDays(){
+  show('#closedLoading'); hide('#closedError'); hide('#closedEmpty');
+  const r=await api('/api/admin/closed-days');
+  hide('#closedLoading');
+  if(!r.ok) return errBox('#closedError',r.error,loadClosedDays);
+  const select=$('#closedDate'); select.innerHTML='';
+  const available=(r.data.days||[]).filter(d=>!d.closed);
+  available.forEach(d=>{
+    const o=document.createElement('option'); o.value=d.date; o.textContent=d.label;
+    select.appendChild(o);
+  });
+  $('#closeDayBtn').disabled=!available.length;
+  if(!available.length){
+    const o=document.createElement('option'); o.value=''; o.textContent='روز آزادی برای قفل کردن وجود ندارد';
+    select.appendChild(o);
+  }
+  const list=$('#closedList'); list.innerHTML='';
+  const items=r.data.closed_days||[];
+  if(!items.length){ show('#closedEmpty'); return; }
+  items.forEach(item=>{
+    const row=document.createElement('div'); row.className='row';
+    const name=document.createElement('div'); name.className='nm';
+    name.textContent=item.label+(item.reason?' — '+item.reason:'');
+    const action=document.createElement('div'); action.className='acts';
+    const btn=document.createElement('button'); btn.className='btn sm'; btn.textContent='باز کردن روز';
+    btn.onclick=()=>withBtn(btn,'در حال باز کردن…',async()=>{
+      const x=await api('/api/admin/closed-days/'+encodeURIComponent(item.slot_date),{method:'DELETE'});
+      if(!x.ok)return toast(x.error.message,false);
+      toast('روز دوباره برای نوبت‌دهی باز شد'); loadClosedDays();
+    });
+    action.appendChild(btn); row.append(name,action); list.appendChild(row);
+  });
+}
+$('#closeDayBtn').onclick=async function(){
+  const date=$('#closedDate').value;
+  if(!date)return toast('ابتدا یک روز را انتخاب کنید.',false);
+  await withBtn(this,'در حال قفل کردن…',async()=>{
+    const r=await api('/api/admin/closed-days',{method:'POST',
+      body:{date:date,reason:$('#closedReason').value.trim()}});
+    if(!r.ok)return toast(r.error.message,false);
+    $('#closedReason').value='';
+    toast('روز انتخاب‌شده قفل شد؛ بیماران نمی‌توانند برای آن نوبت بگیرند');
+    loadClosedDays();
+  });
+};
 
 // ======================= appointments =======================
 const AST={booked:'ثبت‌شده',attended:'انجام شد',cancelled:'لغو شد',no_show:'مراجعه نشد'};
@@ -764,7 +1431,8 @@ function apptRow(a){
   when.innerHTML=a.slot_time+'<small>کابین '+fa(a.cabin)+'</small>';
   const who=document.createElement('div');
   const p=a.patient||{};
-  who.innerHTML='<div class="who">'+(p.full_name||'—')+'</div>';
+  const whoName=document.createElement('div'); whoName.className='who';
+  whoName.textContent=p.full_name||'—'; who.appendChild(whoName);
   const ph=document.createElement('a'); ph.href='tel:'+(p.phone||''); ph.setAttribute('dir','ltr');
   ph.textContent=p.phone||''; ph.style.fontSize='.82rem'; who.appendChild(ph);
 
@@ -778,28 +1446,30 @@ function apptRow(a){
   if(a.moved_from){const m=document.createElement('span');m.textContent='جابه‌جا شده از '+a.moved_from;meta.appendChild(m);}
   if(a.note){const n=document.createElement('span');n.style.opacity='.85';n.textContent='«'+a.note+'»';meta.appendChild(n);}
   if(p.ortho_doctor){const o=document.createElement('span');o.textContent='ارتوپد: '+p.ortho_doctor;meta.appendChild(o);}
-  if(p.mri_link){const l=document.createElement('a');l.href=p.mri_link;l.target='_blank';
+  if(hasPerm('files.manage') && p.mri_link){const l=document.createElement('a');l.href=p.mri_link;l.target='_blank';
     l.rel='noopener';l.textContent='لینک MRI';meta.appendChild(l);}
 
   const acts=document.createElement('div'); acts.className='acts';
   const mk=(txt,fn)=>{const b=document.createElement('button');b.className='btn sm';b.textContent=txt;b.onclick=()=>fn(b);return b;};
   if(a.status==='booked'){
-    acts.appendChild(mk('تغییر زمان',b=>openMove(a,b)));
-    acts.appendChild(mk('انجام شد',b=>setApptStatus(a.public_id,'attended',b)));
-    acts.appendChild(mk('مراجعه نشد',b=>setApptStatus(a.public_id,'no_show',b)));
-    acts.appendChild(mk('لغو + پیامک',b=>setApptStatus(a.public_id,'cancelled',b,true)));
-    acts.appendChild(mk('ارسال یادآوری',b=>remindOne(a.public_id,b)));
+    if(hasPerm('appointments.move')) acts.appendChild(mk('تغییر زمان',b=>openMove(a,b)));
+    if(ROLE==='owner'){
+      acts.appendChild(mk('انجام شد',b=>setApptStatus(a.public_id,'attended',b)));
+      acts.appendChild(mk('مراجعه نشد',b=>setApptStatus(a.public_id,'no_show',b)));
+      acts.appendChild(mk('ارسال یادآوری',b=>remindOne(a.public_id,b)));
+    }
+    if(hasPerm('appointments.cancel')) acts.appendChild(mk('لغو + پیامک',b=>setApptStatus(a.public_id,'cancelled',b,true)));
   }
   if(p.public_id){
-    acts.appendChild(mk('🩺 ثبت جلسه درمان',()=>openSession(p,a)));
-    acts.appendChild(mk('ثبت جلسه بعدی',b=>openFollowup(p,b)));
+    if(hasPerm('clinical.record')) acts.appendChild(mk('🩺 ثبت جلسه درمان',()=>openSession(p,a)));
+    if(hasPerm('appointments.create')) acts.appendChild(mk('ثبت جلسه بعدی',b=>openFollowup(p,b)));
   }
   const code=document.createElement('span');
   code.style.cssText='font-size:.7rem;color:var(--muted);direction:ltr;align-self:center';
   code.textContent=a.public_id; acts.appendChild(code);
 
   d.append(when,who,meta);
-  if(p.public_id && (p.mri_file || p.med_photo)){
+  if(hasPerm('files.manage') && p.public_id && (p.mri_file || p.med_photo)){
     const th=document.createElement('div'); th.className='thumbs';
     th.style.gridColumn='1/-1';
     if(p.mri_file) th.appendChild(thumb('/api/admin/patients/'+p.public_id+'/mri',
@@ -818,7 +1488,7 @@ function setApptStatus(id,status,btn,notify){
       body:{status:status,notify:!!notify}});
     if(!r.ok) return toast(r.error.message,false);
     toast(r.data.sms_sent?'ثبت شد و پیامک رفت':'ثبت شد');
-    loadAppts(); loadMetrics();
+    loadAppts(); if(ROLE==='owner') loadMetrics();
   });
 }
 function remindOne(id,btn){
@@ -877,10 +1547,10 @@ async function loadDlgGrid(date){
   const g=$('#dlgGrid'); g.innerHTML='';
   r.data.slots.forEach(s=>{
     const b=document.createElement('button');
-    b.type='button'; b.className='mslot'; b.disabled=s.full;
-    b.innerHTML='<b>'+s.time+'</b><small>'+(s.full?'تکمیل':fa(s.free)+' خالی')+'</small>';
-    b.onclick=()=>{DLG_PICK={date:date,time:s.time};
-      $$('.mslot').forEach(x=>x.classList.toggle('on',x===b));};
+    b.type='button'; b.className='mslot'; b.disabled=!!r.data.closed||s.disabled;
+    b.innerHTML='<b>'+s.time+'</b><small>'+(r.data.closed?'تعطیل':(s.full?'تکمیل':fa(s.free)+' خالی'))+'</small>';
+    if(!b.disabled) b.onclick=()=>{DLG_PICK={date:date,time:s.time};
+      $('.mslot').forEach(x=>x.classList.toggle('on',x===b));};
     g.appendChild(b);
   });
   g.classList.remove('hidden');
@@ -1001,11 +1671,16 @@ function renderChips(){
 }
 
 async function openSession(patient,appt){
+  if(!hasPerm('clinical.record')){ toast('اجازهٔ ثبت جلسه درمانی را ندارید.',false); return; }
   SESS={patient:patient, appt:appt||null, bp:new Map(), tx:new Map()};
   $('#sessSub').textContent=patient.full_name+(appt?(' — '+appt.label+' ساعت '+appt.slot_time):'');
   ['sFind','sPlan','sPainB','sPainA','bpNew','txNew'].forEach(i=>$('#'+i).value='');
   $('#sAttend').checked=!!appt; $('#sNotify').checked=false;
   $('#sessErr').classList.add('hidden');
+  const canCatalogWrite = ROLE==='owner';
+  [['bpCreate','bpNew','bpCat'],['txCreate','txNew']].forEach(ids=>{
+    ids.forEach(id=>{ const el=$('#'+id); if(el) el.classList.toggle('hidden', !canCatalogWrite && (id.endsWith('Create')||id.endsWith('New')||id==='bpCat')); });
+  });
   renderChips();
   sessDlg.showModal();
   if(await loadCatalog()) fillCatalogSelects();
@@ -1110,6 +1785,11 @@ function historyBlock(list){
 
 // ======================= patients =======================
 async function loadPatients(){
+  if(!hasPerm('patients.view')){
+    applyPatientsPaneVisibility();
+    return;
+  }
+  hide('#pNoView');
   show('#pLoading'); hide('#pError'); hide('#pEmpty'); hide('#pList');
   const q=$('#pq').value.trim();
   const r=await api('/api/admin/patients?per_page=50'+(q?'&q='+encodeURIComponent(q):''));
@@ -1120,6 +1800,62 @@ async function loadPatients(){
   const box=$('#pList'); box.innerHTML='';
   items.forEach(p=>box.appendChild(patientCard(p)));
   show('#pList');
+}
+if($('#pcMedPhoto')){
+  $('#pcMedPhoto').addEventListener('change', ()=>{
+    const f = $('#pcMedPhoto').files && $('#pcMedPhoto').files[0];
+    const nm = $('#pcMedName');
+    if(!nm) return;
+    if(f){ nm.textContent = 'فایل انتخاب‌شده: '+f.name; nm.hidden = false; }
+    else { nm.textContent = ''; nm.hidden = true; }
+  });
+}
+if($('#patCreateForm')){
+  $('#patCreateForm').addEventListener('submit', async e=>{
+    e.preventDefault();
+    if(!hasPerm('patients.create')){ toast('مجوز ثبت بیمار را ندارید.',false); return; }
+    hide('#patCreateErr'); hide('#patCreateOk');
+    await withBtn($('#patCreateBtn'),'در حال ثبت…', async ()=>{
+      const fileEl=$('#pcMedPhoto');
+      const file=(fileEl && !fileEl.disabled && fileEl.files && fileEl.files[0]) ? fileEl.files[0] : null;
+      if(file && !hasPerm('files.manage')){
+        errBox('#patCreateErr',{message:'برای آپلود عکس دارو به مجوز مدیریت فایل نیاز است.'});
+        show('#patCreateErr'); return;
+      }
+      let r;
+      if(file){
+        const fd=new FormData();
+        fd.append('full_name',$('#pcName').value.trim());
+        fd.append('phone',$('#pcPhone').value.trim());
+        fd.append('national_id',$('#pcNid').value.trim());
+        fd.append('birth_date',$('#pcBirth').value.trim());
+        fd.append('ortho_doctor',$('#pcOrtho').value.trim());
+        fd.append('mri_link',$('#pcMri').value.trim());
+        fd.append('website','');
+        fd.append('med_photo',file);
+        r=await api('/api/admin/patients',{method:'POST',body:fd});
+      } else {
+        r=await api('/api/admin/patients',{method:'POST',body:{
+          full_name:$('#pcName').value.trim(),
+          phone:$('#pcPhone').value.trim(),
+          national_id:$('#pcNid').value.trim(),
+          birth_date:$('#pcBirth').value.trim(),
+          ortho_doctor:$('#pcOrtho').value.trim(),
+          mri_link:$('#pcMri').value.trim(),
+          website:''
+        }});
+      }
+      if(!r.ok){ errBox('#patCreateErr', r.error); show('#patCreateErr'); return; }
+      $('#patCreateForm').reset();
+      applyPatientsPaneVisibility();
+      const ok=$('#patCreateOk');
+      ok.textContent='بیمار «'+r.data.full_name+'» ثبت شد (کد: '+r.data.public_id+')'
+        +(r.data.med_photo?' — عکس دارو ذخیره شد.':'');
+      show('#patCreateOk');
+      toast('بیمار ثبت شد ✓',true);
+      if(hasPerm('patients.view')) loadPatients();
+    });
+  });
 }
 function patientCard(p){
   const d=document.createElement('details'); d.className='pt';
@@ -1141,35 +1877,45 @@ function patientCard(p){
     dl.append(dt,dd);
   };
   add('کد ملی',p.national_id); add('تاریخ تولد',p.birth_jalali);
-  add('پزشک ارتوپد',p.ortho_doctor); add('لینک MRI',p.mri_link,true);
+  add('پزشک ارتوپد',p.ortho_doctor);
+  if(hasPerm('files.manage')) add('لینک MRI',p.mri_link,true);
   add('ثبت‌نام',new Date(p.created_at).toLocaleString('fa-IR'));
-  if(p.clinical&&p.clinical.sessions){
+  if(hasPerm('clinical.record') && p.clinical&&p.clinical.sessions){
     add('جلسات درمان',fa(p.clinical.sessions)+' جلسه — از '+p.clinical.first+' تا '+p.clinical.last);
     if(p.clinical.body_parts.length) add('نواحی درمان‌شده',p.clinical.body_parts.join('، '));
     if(p.clinical.treatments.length) add('درمان‌های انجام‌شده',p.clinical.treatments.join('، '));
   }
   d.appendChild(dl);
 
-  // --- files: seen, not just linked ---
-  const fh=document.createElement('div');
-  fh.style.cssText='margin-top:14px;font-size:.8rem;color:var(--teal);font-weight:700';
-  fh.textContent='پرونده‌ی تصویری'; d.appendChild(fh);
-  const th=document.createElement('div'); th.className='thumbs';
-  if(p.mri_file) th.appendChild(thumb('/api/admin/patients/'+p.public_id+'/mri',
-                                      'عکس MRI', /\.pdf$/i.test(p.mri_file)));
-  if(p.med_photo) th.appendChild(thumb('/api/admin/patients/'+p.public_id+'/photo',
-                                       'عکس داروها', /\.pdf$/i.test(p.med_photo)));
-  th.appendChild(uploadBtn(p.mri_file?'جایگزینی MRI':'بارگذاری MRI', async (file,el)=>{
-    const old=el.innerHTML; el.innerHTML='<span>در حال ارسال…</span>';
-    const fd=new FormData(); fd.append('mri_file',file);
-    const r=await api('/api/admin/patients/'+p.public_id+'/mri',{method:'POST',body:fd});
-    el.innerHTML=old;
-    if(!r.ok) return toast(r.error.message,false);
-    toast('فایل MRI ذخیره شد ✓'); loadPatients(); loadAppts();
-  }));
-  d.appendChild(th);
+  if(hasPerm('files.manage')){
+    const fh=document.createElement('div');
+    fh.style.cssText='margin-top:14px;font-size:.8rem;color:var(--teal);font-weight:700';
+    fh.textContent='پرونده‌ی تصویری'; d.appendChild(fh);
+    const th=document.createElement('div'); th.className='thumbs';
+    if(p.mri_file) th.appendChild(thumb('/api/admin/patients/'+p.public_id+'/mri',
+                                        'عکس MRI', /\.pdf$/i.test(p.mri_file)));
+    if(p.med_photo) th.appendChild(thumb('/api/admin/patients/'+p.public_id+'/photo',
+                                         'عکس داروها', /\.pdf$/i.test(p.med_photo)));
+    th.appendChild(uploadBtn(p.mri_file?'جایگزینی MRI':'بارگذاری MRI', async (file,el)=>{
+      const old=el.innerHTML; el.innerHTML='<span>در حال ارسال…</span>';
+      const fd=new FormData(); fd.append('mri_file',file);
+      const r=await api('/api/admin/patients/'+p.public_id+'/mri',{method:'POST',body:fd});
+      el.innerHTML=old;
+      if(!r.ok) return toast(r.error.message,false);
+      toast('فایل MRI ذخیره شد ✓'); loadPatients(); loadAppts();
+    }));
+    th.appendChild(uploadBtn(p.med_photo?'جایگزینی عکس دارو':'آپلود عکس دارو', async (file,el)=>{
+      const old=el.innerHTML; el.innerHTML='<span>در حال ارسال…</span>';
+      const fd=new FormData(); fd.append('med_photo',file);
+      const r=await api('/api/admin/patients/'+p.public_id+'/photo',{method:'POST',body:fd});
+      el.innerHTML=old;
+      if(!r.ok) return toast(r.error.message,false);
+      toast('عکس دارو ذخیره شد ✓'); loadPatients(); loadAppts();
+    }));
+    d.appendChild(th);
+  }
 
-  if(p.appointments.length){
+  if(p.appointments && p.appointments.length){
     const h=document.createElement('div');
     h.style.cssText='margin-top:14px;font-size:.8rem;color:var(--teal);font-weight:700';
     h.textContent='نوبت‌ها'; d.appendChild(h);
@@ -1188,28 +1934,35 @@ function patientCard(p){
     });
   }
 
-  // --- treatment history ---
-  const hh=document.createElement('div');
-  hh.style.cssText='margin-top:16px;font-size:.8rem;color:var(--teal);font-weight:700';
-  hh.textContent='تاریخچه‌ی درمان'; d.appendChild(hh);
-  d.appendChild(historyBlock(p.history||[]));
+  if(hasPerm('clinical.record')){
+    const hh=document.createElement('div');
+    hh.style.cssText='margin-top:16px;font-size:.8rem;color:var(--teal);font-weight:700';
+    hh.textContent='تاریخچه‌ی درمان'; d.appendChild(hh);
+    d.appendChild(historyBlock(p.history||[]));
+  }
 
   const acts=document.createElement('div'); acts.className='ptacts';
-  const sb=document.createElement('button'); sb.className='btn sm';
-  sb.textContent='🩺 ثبت جلسه درمان'; sb.onclick=()=>openSession(p,null); acts.appendChild(sb);
-  const fb=document.createElement('button'); fb.className='btn sm';
-  fb.textContent='ثبت جلسه بعدی'; fb.onclick=()=>openFollowup(p); acts.appendChild(fb);
-  const ni=document.createElement('input'); ni.value=p.staff_note||'';
-  ni.placeholder='یادداشت پزشک'; ni.style.cssText='flex:1;min-width:150px;min-height:38px;font-size:.82rem';
-  acts.appendChild(ni);
-  const nb=document.createElement('button'); nb.className='btn sm'; nb.textContent='ذخیره';
-  nb.onclick=()=>withBtn(nb,'…',async()=>{
-    const r=await api('/api/admin/patients/'+p.public_id+'/note',{method:'PATCH',
-      body:{staff_note:ni.value.trim()}});
-    toast(r.ok?'یادداشت ذخیره شد':r.error.message,r.ok);
-  });
-  acts.appendChild(nb);
-  d.appendChild(acts);
+  if(hasPerm('clinical.record')){
+    const sb=document.createElement('button'); sb.className='btn sm';
+    sb.textContent='🩺 ثبت جلسه درمان'; sb.onclick=()=>openSession(p,null); acts.appendChild(sb);
+  }
+  if(hasPerm('appointments.create')){
+    const fb=document.createElement('button'); fb.className='btn sm';
+    fb.textContent='ثبت جلسه بعدی'; fb.onclick=()=>openFollowup(p); acts.appendChild(fb);
+  }
+  if(hasPerm('patients.edit')){
+    const ni=document.createElement('input'); ni.value=p.staff_note||'';
+    ni.placeholder='یادداشت پزشک'; ni.style.cssText='flex:1;min-width:150px;min-height:38px;font-size:.82rem';
+    acts.appendChild(ni);
+    const nb=document.createElement('button'); nb.className='btn sm'; nb.textContent='ذخیره';
+    nb.onclick=()=>withBtn(nb,'…',async()=>{
+      const r=await api('/api/admin/patients/'+p.public_id+'/note',{method:'PATCH',
+        body:{staff_note:ni.value.trim()}});
+      toast(r.ok?'یادداشت ذخیره شد':r.error.message,r.ok);
+    });
+    acts.appendChild(nb);
+  }
+  if(acts.childNodes.length) d.appendChild(acts);
   return d;
 }
 let pqT=null;
@@ -1225,9 +1978,15 @@ async function loadSms(){
   const r=await api('/api/admin/sms?per_page=40');
   hide('#sLoading');
   if(!r.ok) return errBox('#sError',r.error,loadSms);
+  if (typeof r.data.can_manage_queue === 'boolean') CAN_MANAGE_QUEUE = r.data.can_manage_queue;
   $('#smsProv').textContent='کانال: '+r.data.provider;
+  const isOwner = ROLE === 'owner';
+  if ($('#smsOutHead')) $('#smsOutHead').classList.toggle('hidden', !isOwner);
+  if ($('#smsRetry')) $('#smsRetry').classList.toggle('hidden', !isOwner);
   const items=r.data.items||[];
-  if(!items.length){ show('#sEmpty'); }
+  if(!isOwner){
+    hide('#sList'); hide('#sEmpty');
+  } else if(!items.length){ show('#sEmpty'); }
   else{
     const box=$('#sList'); box.innerHTML='';
     items.forEach(m=>{
@@ -1258,11 +2017,42 @@ async function loadSms(){
               ignored:'نامشخص',unknown_phone:'شماره ناشناس'};
     inb.forEach(m=>{
       const d=document.createElement('div'); d.className='smsrow';
-      d.innerHTML='<b dir="ltr">'+m.phone+'</b> — «'+m.body+'» → '+(IH[m.handled]||m.handled);
+      const phone=document.createElement('b'); phone.setAttribute('dir','ltr');
+      phone.textContent=m.phone||'';
+      d.append(phone,
+        document.createTextNode(' — «'),
+        document.createTextNode(m.body||''),
+        document.createTextNode('» → '+(IH[m.handled]||m.handled||'')));
+      if (m.owner_id == null) {
+        const q=document.createElement('span'); q.className='pill p-new';
+        q.style.marginInlineStart='8px'; q.textContent='صف پذیرش';
+        d.appendChild(q);
+      }
+      if (m.owner_id == null && CAN_MANAGE_QUEUE) {
+        const acts=document.createElement('div'); acts.className='acts';
+        acts.style.marginTop='8px';
+        const ab=document.createElement('button');
+        ab.className='btn sm primary'; ab.textContent='تخصیص به بیمار';
+        ab.onclick=()=>assignInbound(m.id, ab);
+        acts.appendChild(ab);
+        d.appendChild(acts);
+      }
       box.appendChild(d);
     });
     show('#sIn'); hide('#sInEmpty');
   } else { hide('#sIn'); show('#sInEmpty'); }
+}
+function assignInbound(id, btn){
+  const pid=prompt('شناسه عمومی بیمار (patient public_id):');
+  if(!pid) return;
+  return withBtn(btn,'در حال تخصیص…',async()=>{
+    const r=await api('/api/admin/sms/inbound/'+id+'/assign',{
+      method:'POST', body:{patient_public_id:pid.trim()}
+    });
+    if(!r.ok) return toast(r.error.message,false);
+    toast('پیامک به بیمار تخصیص یافت ✓');
+    loadSms();
+  });
 }
 $('#smsRetry').onclick=async function(){
   await withBtn(this,'…',async()=>{

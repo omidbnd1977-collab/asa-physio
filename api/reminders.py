@@ -52,14 +52,16 @@ def run_once(lead_min: int | None = None) -> dict[str, int]:
         if not p:
             continue
         patient = p[0]
-        # mark first: a crash must never produce a second text to the same patient
-        repo.update(
+        # claim first: only the winner of the UPDATE may send (crash- and race-safe)
+        claimed = repo.update(
             SYSTEM,
             "appointments",
             {"confirm_sent_at": _now_utc()},
             where="id = ? AND confirm_sent_at IS NULL",
             params=[a["id"]],
         )
+        if claimed == 0:
+            continue
         _, ok = sms.send_now(
             patient["phone"],
             sms.body_confirm(patient["full_name"], scheduling.describe(a)),
@@ -109,12 +111,22 @@ def handle_inbound(phone: str, body: str) -> dict[str, object]:
 
     rows = repo.select(SYSTEM, "patients", where="phone = ?", params=[phone], limit=1)
     if not rows:
+        # Unassigned reception queue (owner_id NULL) until staff links a patient.
         repo.insert(
-            SYSTEM, "sms_inbound", {"phone": phone, "body": body[:300], "handled": "unknown_phone"}
+            SYSTEM,
+            "sms_inbound",
+            {
+                "phone": phone,
+                "body": body[:300],
+                "handled": "unknown_phone",
+                "patient_id": None,
+                "owner_id": None,
+            },
         )
         warn("sms.inbound_unknown_phone", phone=fingerprint(phone))
         return {"matched": False, "reason": "unknown_phone"}
     patient = rows[0]
+    patient_owner = patient.get("owner_id")
 
     now = now_tehran()
     appts = repo.select(
@@ -162,6 +174,8 @@ def handle_inbound(phone: str, body: str) -> dict[str, object]:
             "body": body[:300],
             "appointment_id": target["id"] if target else None,
             "handled": handled,
+            "patient_id": patient["id"],
+            "owner_id": patient_owner,
         },
     )
     info("sms.inbound", handled=handled, has_appointment=bool(target))

@@ -11,6 +11,12 @@ from tests.test_portal import PNG, reg_form
 
 @pytest.fixture()
 def patient(client):
+    from api import auth, repo
+    from api.policies import SYSTEM
+
+    owners = repo.select(SYSTEM, "admin_users", where="role = 'owner' AND is_active = 1", limit=2)
+    if not owners:
+        auth.create_user("t_owner", "a-very-long-test-password", role="owner", full_name="پزشک تست")
     r = client.post(
         "/api/portal/register",
         data=reg_form(),
