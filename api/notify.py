@@ -1,7 +1,9 @@
-"""Delivery of a booking to the clinic — the thing that makes the success toast true.
+"""Delivery of a booking/lead alert to the clinic — what makes the success toast true.
 
-A booking is only reported as delivered once a provider confirmed it. Retries are
-idempotent: the `deliveries` row is unique per (booking, provider).
+Clinic alerts go to ``ADMIN_NOTIFICATION_PHONE`` when ``NOTIFY_PROVIDER=smsir``
+(via the same SMS.ir credentials as patient SMS). They never use the patient's
+number. Retries are idempotent: the ``deliveries`` row is unique per
+(booking, provider).
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ import time
 
 import httpx
 
-from . import repo, tracking
+from . import repo, sms, tracking
 from .config import settings
 from .errors import DependencyFailed
 from .logging_ import info, warn
@@ -36,7 +38,7 @@ def _iso_now() -> str:
 
 def render(booking: dict) -> str:
     return (
-        "🩺 درخواست نوبت جدید — آسا فیزیو\n"
+        "درخواست نوبت جدید — آسا فیزیو\n"
         f"نام: {booking['name']}\n"
         f"تلفن: {booking['phone']}\n"
         f"خدمت: {SERVICE_FA.get(booking['service'], booking['service'])}\n"
@@ -44,6 +46,20 @@ def render(booking: dict) -> str:
         f"کد پیگیری: {booking['public_id']}\n"
         f"زمان: {booking['created_at']}"
     )
+
+
+def render_appointment(*, name: str, phone: str, when: str, code: str) -> str:
+    return (
+        "نوبت جدید — آسا فیزیو\n"
+        f"نام: {name}\n"
+        f"تلفن بیمار: {phone}\n"
+        f"زمان: {when}\n"
+        f"کد پیگیری: {code}"
+    )
+
+
+def _admin_phone() -> str:
+    return sms.normalize_mobile(settings.ADMIN_NOTIFICATION_PHONE or "")
 
 
 def _send_file(booking: dict) -> None:
@@ -66,17 +82,21 @@ def _send_webhook(booking: dict) -> None:
     r.raise_for_status()
 
 
-def _send_telegram(booking: dict) -> None:
-    if not (settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID):
-        raise RuntimeError("telegram credentials are not configured")
-    url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
-    r = httpx.post(
-        url, json={"chat_id": settings.TELEGRAM_CHAT_ID, "text": render(booking)}, timeout=8.0
-    )
-    r.raise_for_status()
+def _send_smsir(booking: dict) -> None:
+    """Notify the clinic manager via SMS.ir (not the patient)."""
+    admin = _admin_phone()
+    if not admin:
+        raise RuntimeError("ADMIN_NOTIFICATION_PHONE is empty")
+    patient = sms.normalize_mobile(str(booking.get("phone") or ""))
+    if patient and admin == patient:
+        raise RuntimeError("ADMIN_NOTIFICATION_PHONE must not equal the patient phone")
+    # Same SMS.ir credentials as patient SMS (SMS_API_KEY + SMS_SENDER line).
+    if not settings.SMS_API_KEY:
+        raise RuntimeError("SMS_API_KEY is empty")
+    sms.send_smsir(admin, render(booking))
 
 
-PROVIDERS = {"file": _send_file, "webhook": _send_webhook, "telegram": _send_telegram}
+PROVIDERS = {"file": _send_file, "webhook": _send_webhook, "smsir": _send_smsir}
 
 
 def deliver(booking: dict, *, attempts: int = 3) -> bool:
@@ -148,6 +168,53 @@ def deliver(booking: dict, *, attempts: int = 3) -> bool:
         provider=provider,
     )
     return False
+
+
+def alert_new_appointment(
+    *,
+    name: str,
+    phone: str,
+    when: str,
+    code: str,
+    appointment_id: int | None = None,
+) -> tuple[int | None, bool]:
+    """One SMS to the clinic manager about a newly booked appointment.
+
+    Used for portal and staff bookings. Uses the SMS queue/retry path with kind
+    ``admin_appointment``, addressed only to ``ADMIN_NOTIFICATION_PHONE``.
+
+    With ``appointment_id``, creation is atomic (``INSERT … ON CONFLICT``) and
+    delivery uses a claim so concurrent callers cannot double-send. Never raises —
+    SMS failures are recorded for retry and must not undo booking.
+    """
+    try:
+        admin = _admin_phone()
+        if not admin:
+            warn("notify.admin_phone_missing", kind="admin_appointment")
+            return None, False
+        patient = sms.normalize_mobile(phone)
+        if patient and admin == patient:
+            warn("notify.admin_phone_is_patient", kind="admin_appointment")
+            return None, False
+
+        body = render_appointment(name=name, phone=phone, when=when, code=code)
+        if appointment_id is not None:
+            mid = sms.ensure_admin_appointment(admin, body, appointment_id)
+            return mid, sms.deliver(mid)
+
+        return sms.send_now(
+            admin,
+            body,
+            "admin_appointment",
+            appointment_id=appointment_id,
+        )
+    except Exception as exc:  # noqa: BLE001 — booking must survive notify failures
+        warn(
+            "notify.admin_appointment_failed",
+            exc_type=type(exc).__name__,
+            appointment_id=appointment_id,
+        )
+        return None, False
 
 
 def retry_pending(limit: int = 20) -> dict[str, int]:

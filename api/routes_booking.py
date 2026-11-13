@@ -419,6 +419,15 @@ async def book(request: Request, payload: dict[str, Any] = Body(default={})) -> 
         patient_id=p["id"],
         appointment_id=appt["id"],
     )
+    from . import notify
+
+    notify.alert_new_appointment(
+        name=p["full_name"],
+        phone=p["phone"],
+        when=when,
+        code=appt["public_id"],
+        appointment_id=appt["id"],
+    )
     metrics.record("appointment_booked")
     messages.system_note(
         p["id"],

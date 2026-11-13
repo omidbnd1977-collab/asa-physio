@@ -85,10 +85,10 @@ class Settings:
     )
 
     # --- booking delivery (what makes the success toast true) ---------------
-    NOTIFY_PROVIDER: str = os.getenv("NOTIFY_PROVIDER", "file")  # file | webhook | telegram
+    # file = dev only; webhook = generic HTTPS sink; smsir = SMS.ir to ADMIN_NOTIFICATION_PHONE
+    NOTIFY_PROVIDER: str = os.getenv("NOTIFY_PROVIDER", "file")  # file | webhook | smsir
     NOTIFY_WEBHOOK: str = os.getenv("NOTIFY_WEBHOOK", "")
-    TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
+    ADMIN_NOTIFICATION_PHONE: str = os.getenv("ADMIN_NOTIFICATION_PHONE", "").strip()
     NOTIFY_FILE: pathlib.Path = pathlib.Path(
         os.getenv("NOTIFY_FILE", str(ROOT / "data" / "outbox.jsonl"))
     )
@@ -133,9 +133,33 @@ class Settings:
         if self.ENV == "production" and self.NOTIFY_PROVIDER == "file":
             # the file sink is a dev stub: refuse to pretend bookings are delivered in prod
             raise RuntimeError("NOTIFY_PROVIDER=file is not allowed in production")
+        if self.ENV == "production" and self.NOTIFY_PROVIDER == "telegram":
+            raise RuntimeError(
+                "NOTIFY_PROVIDER=telegram is removed — use smsir with ADMIN_NOTIFICATION_PHONE"
+            )
+        if (
+            self.ENV == "production"
+            and self.NOTIFY_PROVIDER == "smsir"
+            and not self.ADMIN_NOTIFICATION_PHONE
+        ):
+            raise RuntimeError(
+                "ADMIN_NOTIFICATION_PHONE is required when NOTIFY_PROVIDER=smsir"
+            )
+        if self.ENV == "production" and self.NOTIFY_PROVIDER == "smsir" and (
+            not self.SMS_API_KEY or not self.SMS_SENDER
+        ):
+            raise RuntimeError(
+                "SMS_API_KEY and SMS_SENDER are required when NOTIFY_PROVIDER=smsir"
+            )
         if self.ENV == "production" and self.SMS_PROVIDER == "file":
             # same rule for SMS: never tell a patient we texted them when we did not
             raise RuntimeError("SMS_PROVIDER=file is not allowed in production")
+        if self.ENV == "production" and self.SMS_PROVIDER == "smsir" and (
+            not self.SMS_API_KEY or not self.SMS_SENDER
+        ):
+            raise RuntimeError(
+                "SMS_API_KEY and SMS_SENDER are required when SMS_PROVIDER=smsir"
+            )
         self.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         self.BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         self.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)

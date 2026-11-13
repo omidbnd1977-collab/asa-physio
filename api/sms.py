@@ -19,10 +19,18 @@ from .policies import SYSTEM
 
 RESOURCE = "sms"
 CLINIC = "آسا فیزیو"
+# If a worker dies after claiming (status=sending), another may reclaim after this.
+CLAIM_STALE_SEC = 120
 
 
 def _now() -> str:
     return dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _stale_before() -> str:
+    return (dt.datetime.now(dt.UTC) - dt.timedelta(seconds=CLAIM_STALE_SEC)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -129,24 +137,89 @@ def _send_kavenegar(phone: str, body: str) -> None:
         raise RuntimeError(f"kavenegar status {status}")
 
 
-def _send_smsir(phone: str, body: str) -> None:
+def normalize_mobile(phone: str) -> str:
+    """Normalize Iranian mobiles to ``09xxxxxxxxx`` for SMS.ir bulk payloads."""
+    p = phone.strip().replace(" ", "").replace("-", "")
+    if p.startswith("+98"):
+        p = "0" + p[3:]
+    elif p.startswith("0098"):
+        p = "0" + p[4:]
+    elif p.startswith("98") and len(p) >= 12:
+        p = "0" + p[2:]
+    return p
+
+
+def _smsir_line_number() -> int:
+    raw = (settings.SMS_SENDER or "").strip()
+    if not raw:
+        raise RuntimeError("SMS_SENDER (sms.ir lineNumber) is empty")
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise RuntimeError("SMS_SENDER must be a numeric sms.ir lineNumber") from exc
+
+
+def send_smsir(phone: str, body: str) -> None:
+    """Official SMS.ir REST bulk send: POST https://api.sms.ir/v1/send/bulk
+
+    Auth: ``X-API-KEY`` header. Body: lineNumber (long), messageText, mobiles[].
+    Success when HTTP 200 and JSON ``status == 1``. messageIds entry ``0`` means
+    blacklist; ``null`` means invalid number / oversized text.
+    Docs: https://sms.ir/rest-api/
+    """
     if not settings.SMS_API_KEY:
         raise RuntimeError("SMS_API_KEY is empty")
+    mobile = normalize_mobile(phone)
+    if not mobile:
+        raise RuntimeError("SMS recipient phone is empty")
     r = httpx.post(
         "https://api.sms.ir/v1/send/bulk",
-        headers={"X-API-KEY": settings.SMS_API_KEY, "Accept": "application/json"},
-        json={"lineNumber": settings.SMS_SENDER, "messageText": body, "mobiles": [phone]},
+        headers={
+            "X-API-KEY": settings.SMS_API_KEY,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+        json={
+            "lineNumber": _smsir_line_number(),
+            "messageText": body,
+            "mobiles": [mobile],
+        },
         timeout=10.0,
     )
     r.raise_for_status()
+    try:
+        payload = r.json()
+    except ValueError as exc:
+        raise RuntimeError("sms.ir returned non-JSON body") from exc
+    status = payload.get("status")
+    if status != 1:
+        raise RuntimeError(
+            f"sms.ir status {status}: {payload.get('message') or payload!r}"
+        )
+    data = payload.get("data") or {}
+    ids = data.get("messageIds")
+    if isinstance(ids, list) and ids:
+        first = ids[0]
+        if first == 0:
+            raise RuntimeError("sms.ir rejected recipient (blacklist)")
+        if first is None:
+            raise RuntimeError("sms.ir rejected recipient (invalid number or text)")
 
 
 PROVIDERS = {
     "file": _send_file,
     "webhook": _send_webhook,
     "kavenegar": _send_kavenegar,
-    "smsir": _send_smsir,
+    "smsir": send_smsir,
 }
+
+
+def dispatch(phone: str, body: str) -> None:
+    """Send via the configured ``SMS_PROVIDER`` without queueing a row."""
+    send = PROVIDERS.get(settings.SMS_PROVIDER)
+    if send is None:
+        raise RuntimeError(f"unknown SMS provider {settings.SMS_PROVIDER!r}")
+    send(phone, body)
 
 
 # --------------------------------------------------------------------------
@@ -160,6 +233,7 @@ def queue(
     patient_id: int | None = None,
     appointment_id: int | None = None,
 ) -> int:
+    now = _now()
     return repo.insert(
         SYSTEM,
         "sms_messages",
@@ -170,24 +244,91 @@ def queue(
             "kind": kind,
             "body": body[:600],
             "provider": settings.SMS_PROVIDER,
+            "updated_at": now,
         },
     )
+
+
+def ensure_admin_appointment(
+    phone: str,
+    body: str,
+    appointment_id: int,
+) -> int:
+    """Insert one pending admin_appointment row, or return the existing id.
+
+    Relies on ``idx_sms_admin_appointment_unique`` + ``ON CONFLICT DO NOTHING``.
+    """
+    now = _now()
+    with repo.tx() as conn:
+        conn.execute(
+            "INSERT INTO sms_messages("
+            " patient_id, appointment_id, phone, kind, body, status, provider,"
+            " attempts, last_error, sent_at, created_at, updated_at)"
+            " VALUES (NULL, ?, ?, 'admin_appointment', ?, 'pending', ?, 0, '', NULL, ?, ?)"
+            " ON CONFLICT(appointment_id)"
+            " WHERE kind = 'admin_appointment' AND appointment_id IS NOT NULL"
+            " DO NOTHING",
+            (appointment_id, phone, body[:600], settings.SMS_PROVIDER, now, now),
+        )
+        row = conn.execute(
+            "SELECT id FROM sms_messages"
+            " WHERE appointment_id = ? AND kind = 'admin_appointment'",
+            (appointment_id,),
+        ).fetchone()
+    if not row:
+        raise RuntimeError("admin_appointment row missing after upsert")
+    return int(row["id"])
+
+
+def claim_for_send(message_id: int) -> dict | None:
+    """Atomically take a pending/failed (or stale sending) row for delivery.
+
+    Returns the claimed row, or ``None`` if another worker holds a fresh claim
+    or the message is already ``sent``.
+    """
+    now = _now()
+    stale = _stale_before()
+    with repo.tx() as conn:
+        cur = conn.execute(
+            "UPDATE sms_messages"
+            " SET status = 'sending', updated_at = ?, last_error = ''"
+            " WHERE id = ? AND ("
+            "   status IN ('pending', 'failed')"
+            "   OR (status = 'sending' AND updated_at < ?)"
+            " )",
+            (now, message_id, stale),
+        )
+        if cur.rowcount != 1:
+            return None
+        row = conn.execute(
+            "SELECT * FROM sms_messages WHERE id = ?", (message_id,)
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def deliver(message_id: int, *, attempts: int = 2) -> bool:
     rows = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[message_id], limit=1)
     if not rows:
         return False
-    msg = rows[0]
-    if msg["status"] == "sent":
+    if rows[0]["status"] == "sent":
         return True
+
+    msg = claim_for_send(message_id)
+    if msg is None:
+        # Another worker is sending, or already finished — never send twice.
+        again = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[message_id], limit=1)
+        return bool(again and again[0]["status"] == "sent")
 
     send = PROVIDERS.get(settings.SMS_PROVIDER)
     if send is None:
         repo.update(
             SYSTEM,
             "sms_messages",
-            {"status": "failed", "last_error": f"unknown provider {settings.SMS_PROVIDER!r}"},
+            {
+                "status": "failed",
+                "last_error": f"unknown provider {settings.SMS_PROVIDER!r}",
+                "updated_at": _now(),
+            },
             where="id = ?",
             params=[message_id],
         )
@@ -200,7 +341,7 @@ def deliver(message_id: int, *, attempts: int = 2) -> bool:
         repo.update(
             SYSTEM,
             "sms_messages",
-            {"status": "failed", "last_error": str(exc)[:400]},
+            {"status": "failed", "last_error": str(exc)[:400], "updated_at": _now()},
             where="id = ?",
             params=[message_id],
         )
@@ -223,6 +364,7 @@ def deliver(message_id: int, *, attempts: int = 2) -> bool:
                     "attempts": msg["attempts"] + i + 1,
                     "last_error": "",
                     "provider": settings.SMS_PROVIDER,
+                    "updated_at": _now(),
                 },
                 where="id = ?",
                 params=[message_id],
@@ -245,6 +387,7 @@ def deliver(message_id: int, *, attempts: int = 2) -> bool:
             "status": "failed",
             "attempts": msg["attempts"] + attempts,
             "last_error": last_err,
+            "updated_at": _now(),
         },
         where="id = ?",
         params=[message_id],
@@ -271,10 +414,15 @@ def send_now(
 
 
 def retry_failed(limit: int = 20) -> dict[str, int]:
+    stale = _stale_before()
     rows = repo.select(
         SYSTEM,
         "sms_messages",
-        where="status = 'failed' AND attempts < 10",
+        where=(
+            "(status = 'failed' OR (status = 'sending' AND updated_at < ?))"
+            " AND attempts < 10"
+        ),
+        params=[stale],
         order_by="created_at",
         limit=limit,
     )

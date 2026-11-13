@@ -11,7 +11,7 @@
 #                        `plan` below to `starter` — nothing else needs to move.
 #   APP_ENV staging      Production refuses NOTIFY_PROVIDER=file and SMS_PROVIDER=file
 #                        at import time (api/config.py), and a public preview must
-#                        never page the clinic's real Telegram or text real patients.
+#                        never SMS the clinic manager or text real patients.
 #   BOOTSTRAP_ADMIN_*    Recreates the demo owner after each wipe, so /admin stays
 #                        reachable without shell access. Set both in the dashboard.
 #

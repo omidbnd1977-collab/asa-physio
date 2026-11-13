@@ -377,6 +377,16 @@ async def followup(
             patient_id=patient["id"],
             appointment_id=appt["id"],
         )
+    from . import notify
+
+    # Manager alert is independent of patient-notify toggle; failures never undo the booking.
+    notify.alert_new_appointment(
+        name=patient["full_name"],
+        phone=patient["phone"],
+        when=when,
+        code=appt["public_id"],
+        appointment_id=appt["id"],
+    )
     metrics.record("followup_booked")
     cache.purge("admin:appointments")
     return {

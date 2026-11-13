@@ -1472,14 +1472,18 @@ class TestSms:
 
         monkeypatch.setenv("APP_ENV", "production")
         monkeypatch.setenv("SECRET_KEY", "x" * 40)
-        monkeypatch.setenv("NOTIFY_PROVIDER", "telegram")
+        monkeypatch.setenv("NOTIFY_PROVIDER", "smsir")
+        monkeypatch.setenv("ADMIN_NOTIFICATION_PHONE", "09121111111")
         monkeypatch.setenv("SMS_PROVIDER", "file")
+        monkeypatch.setenv("SMS_API_KEY", "test-key")
+        monkeypatch.setenv("SMS_SENDER", "300000000000")
         import api.config as cfg
 
         with pytest.raises(RuntimeError, match="SMS_PROVIDER=file"):
             importlib.reload(cfg)
         monkeypatch.setenv("APP_ENV", "development")
         monkeypatch.setenv("NOTIFY_PROVIDER", "file")
+        monkeypatch.setenv("SMS_PROVIDER", "file")
         importlib.reload(cfg)
 
 

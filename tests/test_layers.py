@@ -715,11 +715,34 @@ class TestLayer0507Release:
 
         monkeypatch.setenv("APP_ENV", "production")
         monkeypatch.setenv("SECRET_KEY", "")
-        monkeypatch.setenv("NOTIFY_PROVIDER", "telegram")
+        monkeypatch.setenv("NOTIFY_PROVIDER", "smsir")
+        monkeypatch.setenv("ADMIN_NOTIFICATION_PHONE", "09120000000")
+        monkeypatch.setenv("SMS_PROVIDER", "smsir")
+        monkeypatch.setenv("SMS_API_KEY", "test-key")
+        monkeypatch.setenv("SMS_SENDER", "300000000000")
         import api.config as cfg
 
         with pytest.raises(RuntimeError, match="SECRET_KEY"):
             importlib.reload(cfg)
         monkeypatch.setenv("APP_ENV", "development")
         monkeypatch.setenv("NOTIFY_PROVIDER", "file")
+        monkeypatch.setenv("SMS_PROVIDER", "file")
+        importlib.reload(cfg)
+
+    def test_production_refuses_removed_telegram_notify(self, monkeypatch):
+        import importlib
+
+        monkeypatch.setenv("APP_ENV", "production")
+        monkeypatch.setenv("SECRET_KEY", "x" * 40)
+        monkeypatch.setenv("NOTIFY_PROVIDER", "telegram")
+        monkeypatch.setenv("SMS_PROVIDER", "smsir")
+        monkeypatch.setenv("SMS_API_KEY", "test-key")
+        monkeypatch.setenv("SMS_SENDER", "300000000000")
+        import api.config as cfg
+
+        with pytest.raises(RuntimeError, match="telegram"):
+            importlib.reload(cfg)
+        monkeypatch.setenv("APP_ENV", "development")
+        monkeypatch.setenv("NOTIFY_PROVIDER", "file")
+        monkeypatch.setenv("SMS_PROVIDER", "file")
         importlib.reload(cfg)
