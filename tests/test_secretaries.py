@@ -466,3 +466,201 @@ class TestSecretaryUiAndBack:
         html = client.get("/booking/register").text
         assert "fileDraftHint" in html
         assert "regBackBtn" in html
+
+    def test_admin_patient_create_form_and_tab_need_any(self, owner_client):
+        html = owner_client.get("/admin").text
+        assert 'data-tab="pts" data-need-any="patients.view,patients.create,patients.edit"' in html
+        assert "patCreateForm" in html and "patCreateCard" in html
+        assert "data-pane=\"noperm\"" in html
+        assert "firstVisibleTab" in html and "'noperm'" in html
+        assert "applyPatientsPaneVisibility" in html
+
+
+class TestPermissionMatrixApi:
+    """Positive/negative API checks for each staff capability."""
+
+    def _sec(self, owner_client, username: str, caps: list[str]):
+        r = owner_client.post(
+            "/api/admin/secretaries",
+            json={
+                "full_name": f"منشی {username}",
+                "username": username,
+                "password": "abcdef",
+                "permissions": caps,
+            },
+        )
+        assert r.status_code == 201, r.text
+        return r.json()
+
+    def _as(self, client, username: str):
+        client.cookies.clear()
+        login = client.post(
+            "/api/admin/login", json={"username": username, "password": "abcdef"}
+        )
+        assert login.status_code == 200, login.text
+        client.headers["X-CSRF-Token"] = login.json()["csrf"]
+        return login.json()
+
+    def test_create_only_secretary_can_register_patient_not_list(self, owner_client):
+        self._sec(owner_client, "sec_create_only", [perms.PATIENTS_CREATE])
+        self._as(owner_client, "sec_create_only")
+        me = owner_client.get("/api/admin/me").json()
+        assert me["role"] == "staff"
+        assert me["permissions"] == [perms.PATIENTS_CREATE]
+        assert me["can_manage_secretaries"] is False
+        assert owner_client.get("/api/admin/patients").status_code == 403
+        assert owner_client.get("/api/admin/appointments").status_code == 403
+        assert owner_client.get("/api/admin/secretaries").status_code == 403
+        assert owner_client.get("/api/admin/metrics").status_code == 403
+        created = owner_client.post(
+            "/api/admin/patients",
+            json={
+                "full_name": "بیمار منشی فقط ثبت",
+                "national_id": nid(46637089),
+                "birth_date": "1370/05/03",
+                "phone": "09126667788",
+            },
+        )
+        assert created.status_code == 201, created.text
+        assert created.json()["public_id"]
+        # Ownership: patient belongs to clinic owner, not the secretary id.
+        oid = repo.select(
+            SYSTEM, "admin_users", where="username = ?", params=["t_owner"], limit=1
+        )[0]["id"]
+        row = repo.select(
+            SYSTEM,
+            "patients",
+            where="public_id = ?",
+            params=[created.json()["public_id"]],
+            limit=1,
+        )[0]
+        assert row["owner_id"] == oid
+
+    def test_view_only_cannot_create_or_edit(self, owner_client):
+        self._sec(owner_client, "sec_view_only", [perms.PATIENTS_VIEW])
+        # seed a patient as owner
+        _relogin_owner(owner_client)
+        p = owner_client.post(
+            "/api/admin/patients",
+            json={
+                "full_name": "بیمار ویو",
+                "national_id": nid(46737089),
+                "birth_date": "1370/05/03",
+                "phone": "09127778899",
+            },
+        ).json()
+        self._as(owner_client, "sec_view_only")
+        assert owner_client.get("/api/admin/patients").status_code == 200
+        assert owner_client.post(
+            "/api/admin/patients",
+            json={
+                "full_name": "نباید ثبت شود",
+                "national_id": nid(46837089),
+                "birth_date": "1370/05/03",
+                "phone": "09128889900",
+            },
+        ).status_code == 403
+        assert owner_client.patch(
+            f"/api/admin/patients/{p['public_id']}/note",
+            json={"staff_note": "x"},
+        ).status_code == 403
+
+    def test_edit_only_can_note_not_list_without_view(self, owner_client):
+        _relogin_owner(owner_client)
+        p = owner_client.post(
+            "/api/admin/patients",
+            json={
+                "full_name": "بیمار ادیت",
+                "national_id": nid(46937089),
+                "birth_date": "1370/05/03",
+                "phone": "09129990011",
+            },
+        ).json()
+        self._sec(owner_client, "sec_edit_only", [perms.PATIENTS_EDIT])
+        self._as(owner_client, "sec_edit_only")
+        assert owner_client.get("/api/admin/patients").status_code == 403
+        assert owner_client.patch(
+            f"/api/admin/patients/{p['public_id']}/note",
+            json={"staff_note": "یادداشت منشی"},
+        ).status_code == 200
+
+    def test_appointments_perms_positive_negative(self, owner_client):
+        _relogin_owner(owner_client)
+        p = owner_client.post(
+            "/api/admin/patients",
+            json={
+                "full_name": "بیمار نوبت",
+                "national_id": nid(47037089),
+                "birth_date": "1370/05/03",
+                "phone": "09120001122",
+            },
+        ).json()
+        self._sec(owner_client, "sec_appt_view", [perms.APPOINTMENTS_VIEW])
+        self._as(owner_client, "sec_appt_view")
+        assert owner_client.get("/api/admin/appointments").status_code == 200
+        assert owner_client.post(
+            f"/api/admin/patients/{p['public_id']}/followup",
+            json={"slot_date": "2099-01-01", "slot_time": "16:00", "notify": False},
+        ).status_code == 403
+
+        _relogin_owner(owner_client)
+        self._sec(
+            owner_client,
+            "sec_appt_create",
+            [perms.APPOINTMENTS_VIEW, perms.APPOINTMENTS_CREATE, perms.PATIENTS_VIEW],
+        )
+        # create still needs a valid future slot — just assert permission gate opens past 403
+        self._as(owner_client, "sec_appt_create")
+        r = owner_client.post(
+            f"/api/admin/patients/{p['public_id']}/followup",
+            json={"slot_date": "2099-01-01", "slot_time": "16:00", "notify": False},
+        )
+        assert r.status_code != 403
+
+    def test_messages_clinical_files_matrix(self, owner_client):
+        _relogin_owner(owner_client)
+        p = owner_client.post(
+            "/api/admin/patients",
+            json={
+                "full_name": "بیمار ماتریس",
+                "national_id": nid(47137089),
+                "birth_date": "1370/05/03",
+                "phone": "09121112200",
+            },
+        ).json()
+        pid = p["public_id"]
+        self._sec(owner_client, "sec_msg", [perms.MESSAGES_VIEW])
+        self._as(owner_client, "sec_msg")
+        assert owner_client.get("/api/admin/messages").status_code == 200
+        assert owner_client.get(f"/api/admin/patients/{pid}/sessions").status_code == 403
+        assert owner_client.get(f"/api/admin/patients/{pid}/mri").status_code == 403
+
+        _relogin_owner(owner_client)
+        self._sec(
+            owner_client,
+            "sec_clin",
+            [perms.PATIENTS_VIEW, perms.CLINICAL_RECORD],
+        )
+        self._as(owner_client, "sec_clin")
+        assert owner_client.get(f"/api/admin/patients/{pid}/sessions").status_code == 200
+        assert owner_client.get(f"/api/admin/patients/{pid}/mri").status_code == 403
+        assert owner_client.get("/api/admin/catalog").status_code == 200
+
+        _relogin_owner(owner_client)
+        self._sec(
+            owner_client,
+            "sec_files",
+            [perms.PATIENTS_VIEW, perms.FILES_MANAGE],
+        )
+        self._as(owner_client, "sec_files")
+        # No file uploaded → 404 NotFound is fine; must not be 403
+        r = owner_client.get(f"/api/admin/patients/{pid}/mri")
+        assert r.status_code in (404, 200)
+        assert owner_client.get(f"/api/admin/patients/{pid}/sessions").status_code == 403
+
+    def test_create_only_ui_not_ops_fallback(self, owner_client):
+        """Regression: patients.create alone must not land on doctor ops pane."""
+        html = owner_client.get("/admin").text
+        assert "return t ? t.dataset.tab : 'noperm'" in html or "return t ? t.dataset.tab : \"noperm\"" in html or "'noperm'" in html
+        assert "if (name === 'ops' && ROLE !== 'owner')" in html
+        assert 'data-need-any="patients.view,patients.create,patients.edit"' in html

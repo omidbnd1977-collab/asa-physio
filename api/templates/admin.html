@@ -259,9 +259,9 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
     </header>
 
     <div class="tabs" id="tabs">
-      <button class="tab on" data-tab="sched" data-need="appointments.view">🗓 نوبت‌ها</button>
+      <button class="tab on" data-tab="sched" data-need-any="appointments.view,appointments.create,appointments.move,appointments.cancel">🗓 نوبت‌ها</button>
       <button class="tab" data-tab="closed" data-owner-only="1">🔒 تعطیلات</button>
-      <button class="tab" data-tab="pts" data-need="patients.view">👤 بیماران</button>
+      <button class="tab" data-tab="pts" data-need-any="patients.view,patients.create,patients.edit">👤 بیماران</button>
       <button class="tab" data-tab="msg" data-need="messages.view">💬 پیام‌ها<span id="msgTabBadge" class="hidden"></span></button>
       <button class="tab" data-tab="sms" data-need-any="reception.queue,messages.view">✉️ پیامک‌ها</button>
       <button class="tab" data-tab="req" data-need-any="messages.view,reception.queue">📨 درخواست‌های سایت</button>
@@ -321,7 +321,36 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
 
     <!-- ============ TAB: patients ============ -->
     <section data-pane="pts" class="hidden">
-      <div class="card">
+      <div class="card" id="patCreateCard" hidden>
+        <h2>ثبت بیمار جدید</h2>
+        <p class="muted" style="margin-bottom:12px">بیمار به کلینیک شما اختصاص می‌یابد. فقط فیلدهای لازم را وارد کنید.</p>
+        <form id="patCreateForm" style="display:grid;gap:10px;max-width:560px">
+          <div style="display:grid;gap:10px;grid-template-columns:1fr 1fr">
+            <div><label for="pcName">نام و نام خانوادگی</label>
+              <input id="pcName" required minlength="3" maxlength="80" autocomplete="name"></div>
+            <div><label for="pcPhone">موبایل</label>
+              <input id="pcPhone" required minlength="10" maxlength="20" inputmode="tel" dir="ltr" autocomplete="tel"></div>
+          </div>
+          <div style="display:grid;gap:10px;grid-template-columns:1fr 1fr">
+            <div><label for="pcNid">کد ملی</label>
+              <input id="pcNid" required minlength="10" maxlength="10" inputmode="numeric" dir="ltr"></div>
+            <div><label for="pcBirth">تاریخ تولد (جلالی، مثل ۱۳۷۰/۰۵/۰۳)</label>
+              <input id="pcBirth" required maxlength="12" placeholder="۱۳۷۰/۰۵/۰۳" dir="ltr"></div>
+          </div>
+          <div style="display:grid;gap:10px;grid-template-columns:1fr 1fr">
+            <div><label for="pcOrtho">پزشک ارتوپد <span class="muted">(اختیاری)</span></label>
+              <input id="pcOrtho" maxlength="80"></div>
+            <div><label for="pcMri">لینک MRI <span class="muted">(اختیاری)</span></label>
+              <input id="pcMri" maxlength="500" dir="ltr" placeholder="https://"></div>
+          </div>
+          <div class="mrow">
+            <button class="btn primary" type="submit" id="patCreateBtn">ثبت بیمار</button>
+          </div>
+          <div id="patCreateErr" class="state error hidden"></div>
+          <div id="patCreateOk" class="state empty hidden" style="border-color:rgba(45,212,191,.35)"></div>
+        </form>
+      </div>
+      <div class="card" id="patListCard" style="margin-top:16px">
         <h2>👤 پرونده‌ی بیماران
           <input id="pq" placeholder="جست‌وجوی نام، تلفن یا کد ملی"
                  style="width:auto;flex:1;min-width:160px;min-height:36px;padding:7px 11px;font-size:.8rem">
@@ -329,10 +358,21 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
         <div id="pLoading"><div class="skel"></div><div class="skel"></div></div>
         <div id="pEmpty" class="state empty hidden">
           هنوز بیماری ثبت‌نام نکرده است.
-          <span class="sub">ثبت‌نام از مسیر «رزرو نوبت» در سایت انجام می‌شود.</span>
+          <span class="sub">ثبت‌نام از مسیر «رزرو نوبت» در سایت یا فرم بالا انجام می‌شود.</span>
         </div>
         <div id="pError" class="state error hidden"></div>
         <div id="pList" class="hidden"></div>
+        <div id="pNoView" class="state empty hidden">
+          مجوز مشاهده فهرست بیماران را ندارید.
+          <span class="sub">اگر مجوز «ثبت بیمار جدید» دارید، از فرم بالا استفاده کنید.</span>
+        </div>
+      </div>
+    </section>
+
+    <section data-pane="noperm" class="hidden">
+      <div class="card">
+        <h2>دسترسی فعالی برای شما تنظیم نشده است</h2>
+        <p class="muted">از پزشک بخواهید مجوزهای لازم (مثلاً مشاهده بیماران یا ثبت بیمار) را برای حساب شما فعال کند.</p>
       </div>
     </section>
 
@@ -867,7 +907,22 @@ function applyTabVisibility(){
 }
 function firstVisibleTab(){
   const t = Array.from($$('#tabs .tab')).find(x => !x.classList.contains('hidden'));
-  return t ? t.dataset.tab : 'ops';
+  // Never fall back to owner-only panes (e.g. ops) for staff with no matching tab.
+  return t ? t.dataset.tab : 'noperm';
+}
+function applyPatientsPaneVisibility(){
+  const canCreate = hasPerm('patients.create');
+  const canView = hasPerm('patients.view');
+  if ($('#patCreateCard')) $('#patCreateCard').hidden = !canCreate;
+  if ($('#patListCard')) {
+    // Keep card for messaging when create-only; hide search/list guts without view.
+    if ($('#pq')) $('#pq').classList.toggle('hidden', !canView);
+    if ($('#pLoading')) $('#pLoading').classList.toggle('hidden', !canView);
+    if (!canView) {
+      hide('#pList'); hide('#pEmpty'); hide('#pError');
+      if ($('#pNoView')) show('#pNoView');
+    } else if ($('#pNoView')) hide('#pNoView');
+  }
 }
 async function boot() {
   const r = await api('/api/admin/me');
@@ -921,7 +976,7 @@ $('#passwordForm').addEventListener('submit', async e => {
 });
 $('#logoutBtn').onclick = async () => { await api('/api/admin/logout', { method: 'POST' });
   CSRF = ''; location.reload(); };
-$('#refreshBtn').onclick = () => { const t=document.querySelector('.tab.on'); showTab(t?t.dataset.tab:'sched'); };
+$('#refreshBtn').onclick = () => { const t=document.querySelector('.tab.on:not(.hidden)'); showTab(t?t.dataset.tab:firstVisibleTab()); };
 $('#filter').onchange = () => { PAGE = 1; loadBookings(); };
 $('#prevBtn').onclick = () => { if (PAGE > 1) { PAGE--; loadBookings(); } };
 $('#nextBtn').onclick = () => { PAGE++; loadBookings(); };
@@ -929,13 +984,26 @@ $('#nextBtn').onclick = () => { PAGE++; loadBookings(); };
 
 // ======================= tabs =======================
 function showTab(name){
+  if (!name) name = firstVisibleTab();
   const tab = document.querySelector('.tab[data-tab="'+name+'"]');
-  if (tab && tab.classList.contains('hidden')) name = firstVisibleTab();
+  if (name !== 'noperm' && tab && tab.classList.contains('hidden')) name = firstVisibleTab();
+  // Staff must never land on owner-only panes just because no other tab matched.
+  if (name === 'ops' && ROLE !== 'owner') name = firstVisibleTab();
+  if (name === 'secretaries' && ROLE !== 'owner') name = firstVisibleTab();
+  if (name === 'closed' && ROLE !== 'owner') name = firstVisibleTab();
+  if (name === 'feedback' && ROLE !== 'owner') name = firstVisibleTab();
   $$('.tab').forEach(t=>t.classList.toggle('on',t.dataset.tab===name));
   $$('[data-pane]').forEach(p=>p.classList.toggle('hidden',p.dataset.pane!==name));
-  if(name==='sched') loadAppts();
+  if(name==='sched'){
+    if(hasPerm('appointments.view')) loadAppts();
+    else {
+      const list=$('#aList'); if(list){ list.innerHTML=''; hide('#aList'); }
+      hide('#aLoading'); hide('#aError');
+      const empty=$('#aEmpty'); if(empty){ empty.textContent='مجوز مشاهده نوبت‌ها را ندارید.'; show('#aEmpty'); }
+    }
+  }
   if(name==='closed') loadClosedDays();
-  if(name==='pts')   loadPatients();
+  if(name==='pts'){ applyPatientsPaneVisibility(); if(hasPerm('patients.view')) loadPatients(); }
   if(name==='msg')   loadMessages();
   if(name==='sms')   loadSms();
   if(name==='req'){ if(ROLE==='owner') loadMetrics(); loadBookings(); }
@@ -1651,6 +1719,11 @@ function historyBlock(list){
 
 // ======================= patients =======================
 async function loadPatients(){
+  if(!hasPerm('patients.view')){
+    applyPatientsPaneVisibility();
+    return;
+  }
+  hide('#pNoView');
   show('#pLoading'); hide('#pError'); hide('#pEmpty'); hide('#pList');
   const q=$('#pq').value.trim();
   const r=await api('/api/admin/patients?per_page=50'+(q?'&q='+encodeURIComponent(q):''));
@@ -1661,6 +1734,32 @@ async function loadPatients(){
   const box=$('#pList'); box.innerHTML='';
   items.forEach(p=>box.appendChild(patientCard(p)));
   show('#pList');
+}
+if($('#patCreateForm')){
+  $('#patCreateForm').addEventListener('submit', async e=>{
+    e.preventDefault();
+    if(!hasPerm('patients.create')){ toast('مجوز ثبت بیمار را ندارید.',false); return; }
+    hide('#patCreateErr'); hide('#patCreateOk');
+    await withBtn($('#patCreateBtn'),'در حال ثبت…', async ()=>{
+      const body={
+        full_name:$('#pcName').value.trim(),
+        phone:$('#pcPhone').value.trim(),
+        national_id:$('#pcNid').value.trim(),
+        birth_date:$('#pcBirth').value.trim(),
+        ortho_doctor:$('#pcOrtho').value.trim(),
+        mri_link:$('#pcMri').value.trim(),
+        website:''
+      };
+      const r=await api('/api/admin/patients',{method:'POST',body:body});
+      if(!r.ok){ errBox('#patCreateErr', r.error); show('#patCreateErr'); return; }
+      $('#patCreateForm').reset();
+      const ok=$('#patCreateOk');
+      ok.textContent='بیمار «'+r.data.full_name+'» ثبت شد (کد: '+r.data.public_id+').';
+      show('#patCreateOk');
+      toast('بیمار ثبت شد ✓',true);
+      if(hasPerm('patients.view')) loadPatients();
+    });
+  });
 }
 function patientCard(p){
   const d=document.createElement('details'); d.className='pt';
