@@ -343,6 +343,12 @@ dialog::backdrop{background:rgba(2,8,18,.78);backdrop-filter:blur(3px)}
             <div><label for="pcMri">لینک MRI <span class="muted">(اختیاری)</span></label>
               <input id="pcMri" maxlength="500" dir="ltr" placeholder="https://"></div>
           </div>
+          <div id="pcMedWrap" hidden>
+            <label for="pcMedPhoto">آپلود عکس داروی مصرفی <span class="muted">(اختیاری)</span></label>
+            <input id="pcMedPhoto" type="file" accept="image/jpeg,image/png,image/webp,application/pdf"
+                   style="padding:8px">
+            <p class="muted" style="font-size:.75rem;margin-top:4px">JPG، PNG، WEBP یا PDF — حداکثر ۲ مگابایت. فقط با مجوز مدیریت فایل.</p>
+          </div>
           <div class="mrow">
             <button class="btn primary" type="submit" id="patCreateBtn">ثبت بیمار</button>
           </div>
@@ -740,8 +746,9 @@ function hide(id) { $(id).classList.add('hidden'); }
 /** Single fetch helper: every call returns {ok, data, error} — never throws at call sites. */
 async function api(path, opts = {}) {
   const o = Object.assign({ headers: {}, credentials: 'same-origin' }, opts);
-  if (o.body && typeof o.body !== 'string') { o.body = JSON.stringify(o.body); }
-  if (o.body) o.headers['Content-Type'] = 'application/json';
+  const isForm = (typeof FormData !== 'undefined') && o.body instanceof FormData;
+  if (o.body && typeof o.body !== 'string' && !isForm) { o.body = JSON.stringify(o.body); }
+  if (o.body && !isForm) o.headers['Content-Type'] = 'application/json';
   if (CSRF) o.headers['X-CSRF-Token'] = CSRF;
   let res;
   try { res = await fetch(path, o); }
@@ -913,7 +920,10 @@ function firstVisibleTab(){
 function applyPatientsPaneVisibility(){
   const canCreate = hasPerm('patients.create');
   const canView = hasPerm('patients.view');
+  const canFiles = hasPerm('files.manage');
   if ($('#patCreateCard')) $('#patCreateCard').hidden = !canCreate;
+  if ($('#pcMedWrap')) $('#pcMedWrap').hidden = !(canCreate && canFiles);
+  if ($('#pcMedPhoto') && !canFiles) $('#pcMedPhoto').value = '';
   if ($('#patListCard')) {
     // Keep card for messaging when create-only; hide search/list guts without view.
     if ($('#pq')) $('#pq').classList.toggle('hidden', !canView);
@@ -924,11 +934,20 @@ function applyPatientsPaneVisibility(){
     } else if ($('#pNoView')) hide('#pNoView');
   }
 }
+function syncPermCatalog(catalog){
+  if (!Array.isArray(catalog) || !catalog.length) return;
+  // Replace labels from Backend so edit-secretary checkboxes match server keys exactly.
+  Object.keys(PERM_LABELS).forEach(k => { delete PERM_LABELS[k]; });
+  catalog.forEach(item => {
+    if (item && item.id) PERM_LABELS[item.id] = item.label || item.id;
+  });
+}
 async function boot() {
   const r = await api('/api/admin/me');
   if (!r.ok) { show('#loginView'); hide('#appView'); return; }
   CSRF = r.data.csrf; ROLE = r.data.role;
   PERMS = r.data.permissions || [];
+  syncPermCatalog(r.data.permission_catalog);
   CAN_MANAGE_SEC = !!r.data.can_manage_secretaries;
   CAN_MANAGE_QUEUE = ROLE === 'owner' || hasPerm('reception.queue');
   $('#roleBadge').textContent = ROLE === 'owner' ? 'پزشک / مدیر' : (r.data.full_name || 'منشی');
@@ -1053,6 +1072,8 @@ async function loadSecretaries(){
   const box=$('#secList'); box.innerHTML='<div class="skel" style="height:80px"></div>';
   const r=await api('/api/admin/secretaries');
   if(!r.ok){ box.innerHTML='<div class="state error">'+(r.error.message||'خطا')+'</div>'; return; }
+  syncPermCatalog(r.data.permission_catalog);
+  renderSecPermChecks($('#secPerms'), [], 'sec-perm');
   const items=r.data.items||[];
   if(!items.length){ box.innerHTML='<div class="state empty">هنوز منشی‌ای ثبت نشده است.</div>'; return; }
   box.innerHTML='';
@@ -1741,20 +1762,41 @@ if($('#patCreateForm')){
     if(!hasPerm('patients.create')){ toast('مجوز ثبت بیمار را ندارید.',false); return; }
     hide('#patCreateErr'); hide('#patCreateOk');
     await withBtn($('#patCreateBtn'),'در حال ثبت…', async ()=>{
-      const body={
-        full_name:$('#pcName').value.trim(),
-        phone:$('#pcPhone').value.trim(),
-        national_id:$('#pcNid').value.trim(),
-        birth_date:$('#pcBirth').value.trim(),
-        ortho_doctor:$('#pcOrtho').value.trim(),
-        mri_link:$('#pcMri').value.trim(),
-        website:''
-      };
-      const r=await api('/api/admin/patients',{method:'POST',body:body});
+      const fileEl=$('#pcMedPhoto');
+      const file=(fileEl && fileEl.files && fileEl.files[0]) ? fileEl.files[0] : null;
+      if(file && !hasPerm('files.manage')){
+        errBox('#patCreateErr',{message:'برای آپلود عکس دارو به مجوز مدیریت فایل نیاز است.'});
+        show('#patCreateErr'); return;
+      }
+      let r;
+      if(file){
+        const fd=new FormData();
+        fd.append('full_name',$('#pcName').value.trim());
+        fd.append('phone',$('#pcPhone').value.trim());
+        fd.append('national_id',$('#pcNid').value.trim());
+        fd.append('birth_date',$('#pcBirth').value.trim());
+        fd.append('ortho_doctor',$('#pcOrtho').value.trim());
+        fd.append('mri_link',$('#pcMri').value.trim());
+        fd.append('website','');
+        fd.append('med_photo',file);
+        r=await api('/api/admin/patients',{method:'POST',body:fd});
+      } else {
+        r=await api('/api/admin/patients',{method:'POST',body:{
+          full_name:$('#pcName').value.trim(),
+          phone:$('#pcPhone').value.trim(),
+          national_id:$('#pcNid').value.trim(),
+          birth_date:$('#pcBirth').value.trim(),
+          ortho_doctor:$('#pcOrtho').value.trim(),
+          mri_link:$('#pcMri').value.trim(),
+          website:''
+        }});
+      }
       if(!r.ok){ errBox('#patCreateErr', r.error); show('#patCreateErr'); return; }
       $('#patCreateForm').reset();
+      applyPatientsPaneVisibility();
       const ok=$('#patCreateOk');
-      ok.textContent='بیمار «'+r.data.full_name+'» ثبت شد (کد: '+r.data.public_id+').';
+      ok.textContent='بیمار «'+r.data.full_name+'» ثبت شد (کد: '+r.data.public_id+')'
+        +(r.data.med_photo?' — عکس دارو ذخیره شد.':'');
       show('#patCreateOk');
       toast('بیمار ثبت شد ✓',true);
       if(hasPerm('patients.view')) loadPatients();
@@ -1807,6 +1849,14 @@ function patientCard(p){
       el.innerHTML=old;
       if(!r.ok) return toast(r.error.message,false);
       toast('فایل MRI ذخیره شد ✓'); loadPatients(); loadAppts();
+    }));
+    th.appendChild(uploadBtn(p.med_photo?'جایگزینی عکس دارو':'آپلود عکس دارو', async (file,el)=>{
+      const old=el.innerHTML; el.innerHTML='<span>در حال ارسال…</span>';
+      const fd=new FormData(); fd.append('med_photo',file);
+      const r=await api('/api/admin/patients/'+p.public_id+'/photo',{method:'POST',body:fd});
+      el.innerHTML=old;
+      if(!r.ok) return toast(r.error.message,false);
+      toast('عکس دارو ذخیره شد ✓'); loadPatients(); loadAppts();
     }));
     d.appendChild(th);
   }

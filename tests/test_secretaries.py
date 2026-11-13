@@ -664,3 +664,333 @@ class TestPermissionMatrixApi:
         assert "return t ? t.dataset.tab : 'noperm'" in html or "return t ? t.dataset.tab : \"noperm\"" in html or "'noperm'" in html
         assert "if (name === 'ops' && ROLE !== 'owner')" in html
         assert 'data-need-any="patients.view,patients.create,patients.edit"' in html
+
+    def test_permission_catalog_matches_backend_all(self, owner_client):
+        me = owner_client.get("/api/admin/me").json()
+        cat = me["permission_catalog"]
+        assert [c["id"] for c in cat] == list(perms.ALL)
+        for c in cat:
+            assert c["label"] == perms.LABELS_FA[c["id"]]
+        listed = owner_client.get("/api/admin/secretaries").json()["permission_catalog"]
+        assert [c["id"] for c in listed] == list(perms.ALL)
+
+    def test_move_and_cancel_independent(self, owner_client):
+        from tests.test_portal import tomorrow
+
+        _relogin_owner(owner_client)
+        p = owner_client.post(
+            "/api/admin/patients",
+            json={
+                "full_name": "بیمار جابجایی",
+                "national_id": nid(47237089),
+                "birth_date": "1370/05/03",
+                "phone": "09123334455",
+            },
+        ).json()
+        book = owner_client.post(
+            f"/api/admin/patients/{p['public_id']}/followup",
+            json={"slot_date": tomorrow(), "slot_time": "16:00", "notify": False},
+        )
+        assert book.status_code == 201, book.text
+        code = book.json()["code"]
+
+        self._sec(owner_client, "sec_no_move", [perms.APPOINTMENTS_VIEW])
+        self._as(owner_client, "sec_no_move")
+        assert (
+            owner_client.patch(
+                f"/api/admin/appointments/{code}/move",
+                json={"slot_date": tomorrow(), "slot_time": "20:30", "notify": False},
+            ).status_code
+            == 403
+        )
+        assert (
+            owner_client.patch(
+                f"/api/admin/appointments/{code}/status",
+                json={"status": "cancelled"},
+            ).status_code
+            == 403
+        )
+
+        _relogin_owner(owner_client)
+        self._sec(
+            owner_client,
+            "sec_mover",
+            [perms.APPOINTMENTS_VIEW, perms.APPOINTMENTS_MOVE],
+        )
+        self._as(owner_client, "sec_mover")
+        moved = owner_client.patch(
+            f"/api/admin/appointments/{code}/move",
+            json={"slot_date": tomorrow(), "slot_time": "20:30", "notify": False},
+        )
+        assert moved.status_code == 200, moved.text
+        code = moved.json()["code"]
+        assert (
+            owner_client.patch(
+                f"/api/admin/appointments/{code}/status",
+                json={"status": "cancelled"},
+            ).status_code
+            == 403
+        )
+
+        _relogin_owner(owner_client)
+        self._sec(
+            owner_client,
+            "sec_cancel",
+            [perms.APPOINTMENTS_VIEW, perms.APPOINTMENTS_CANCEL],
+        )
+        self._as(owner_client, "sec_cancel")
+        assert (
+            owner_client.patch(
+                f"/api/admin/appointments/{code}/status",
+                json={"status": "cancelled"},
+            ).status_code
+            == 200
+        )
+
+    def test_reception_queue_independent_of_messages(self, owner_client):
+        self._sec(owner_client, "sec_msg_only", [perms.MESSAGES_VIEW])
+        self._as(owner_client, "sec_msg_only")
+        assert owner_client.get("/api/admin/messages").status_code == 200
+        sms = owner_client.get("/api/admin/sms")
+        assert sms.status_code == 200
+        # Can list assigned bookings but cannot manage the unowned reception queue.
+        bookings = owner_client.get("/api/admin/bookings")
+        assert bookings.status_code == 200
+        assert bookings.json().get("can_manage_queue") is False
+
+        _relogin_owner(owner_client)
+        self._sec(owner_client, "sec_queue", [perms.RECEPTION_QUEUE])
+        self._as(owner_client, "sec_queue")
+        assert owner_client.get("/api/admin/sms").status_code == 200
+        assert owner_client.get("/api/admin/bookings").status_code == 200
+        assert owner_client.get("/api/admin/bookings").json().get("can_manage_queue") is True
+        assert owner_client.get("/api/admin/messages").status_code == 403
+        assert owner_client.get("/api/admin/patients").status_code == 403
+
+    def test_revoke_each_cap_takes_effect_on_live_session(self, owner_client):
+        caps = [
+            perms.PATIENTS_VIEW,
+            perms.PATIENTS_CREATE,
+            perms.APPOINTMENTS_VIEW,
+            perms.MESSAGES_VIEW,
+            perms.CLINICAL_RECORD,
+            perms.FILES_MANAGE,
+        ]
+        sec = self._sec(owner_client, "sec_revoke_live", caps)
+        self._as(owner_client, "sec_revoke_live")
+        assert owner_client.get("/api/admin/patients").status_code == 200
+        assert owner_client.get("/api/admin/appointments").status_code == 200
+        assert owner_client.get("/api/admin/messages").status_code == 200
+
+        # Strip all but appointments.view while session cookie stays valid.
+        auth.replace_permissions(sec["id"], [perms.APPOINTMENTS_VIEW])
+        assert owner_client.get("/api/admin/patients").status_code == 403
+        assert owner_client.get("/api/admin/messages").status_code == 403
+        assert owner_client.post(
+            "/api/admin/patients",
+            json={
+                "full_name": "نباید",
+                "national_id": nid(47337089),
+                "birth_date": "1370/05/03",
+                "phone": "09124445566",
+            },
+        ).status_code == 403
+        assert owner_client.get("/api/admin/appointments").status_code == 200
+
+
+class TestStaffMedPhoto:
+    """Optional medication photo on staff patient create + files.manage gate."""
+
+    def _sec(self, owner_client, username: str, caps: list[str]):
+        r = owner_client.post(
+            "/api/admin/secretaries",
+            json={
+                "full_name": f"منشی {username}",
+                "username": username,
+                "password": "abcdef",
+                "permissions": caps,
+            },
+        )
+        assert r.status_code == 201, r.text
+        return r.json()
+
+    def _as(self, client, username: str):
+        client.cookies.clear()
+        login = client.post(
+            "/api/admin/login", json={"username": username, "password": "abcdef"}
+        )
+        assert login.status_code == 200, login.text
+        client.headers["X-CSRF-Token"] = login.json()["csrf"]
+
+    def test_create_without_photo_ok(self, owner_client):
+        self._sec(owner_client, "sec_nophoto", [perms.PATIENTS_CREATE])
+        self._as(owner_client, "sec_nophoto")
+        r = owner_client.post(
+            "/api/admin/patients",
+            json={
+                "full_name": "بدون عکس",
+                "national_id": nid(47437089),
+                "birth_date": "1370/05/03",
+                "phone": "09125556677",
+            },
+        )
+        assert r.status_code == 201, r.text
+        assert r.json()["med_photo"] is False
+
+    def test_create_with_photo_requires_files_manage(self, owner_client):
+        import io
+
+        from tests.test_portal import PNG
+
+        self._sec(owner_client, "sec_create_nofil", [perms.PATIENTS_CREATE])
+        self._as(owner_client, "sec_create_nofil")
+        r = owner_client.post(
+            "/api/admin/patients",
+            data={
+                "full_name": "با عکس بدون مجوز",
+                "national_id": nid(47537089),
+                "birth_date": "1370/05/03",
+                "phone": "09126667700",
+            },
+            files={"med_photo": ("user-evil-name.png", io.BytesIO(PNG), "image/png")},
+        )
+        assert r.status_code == 403
+
+    def test_create_with_photo_and_files_manage(self, owner_client):
+        import io
+
+        from api.config import settings
+        from tests.test_portal import PNG
+
+        self._sec(
+            owner_client,
+            "sec_create_fil",
+            [perms.PATIENTS_CREATE, perms.PATIENTS_VIEW, perms.FILES_MANAGE],
+        )
+        self._as(owner_client, "sec_create_fil")
+        r = owner_client.post(
+            "/api/admin/patients",
+            data={
+                "full_name": "با عکس دارو",
+                "national_id": nid(47637089),
+                "birth_date": "1370/05/03",
+                "phone": "09127778800",
+            },
+            files={"med_photo": ("user-evil-name.png", io.BytesIO(PNG), "image/png")},
+        )
+        assert r.status_code == 201, r.text
+        body = r.json()
+        assert body["med_photo"] is True
+        pid = body["public_id"]
+        row = repo.select(
+            SYSTEM, "patients", where="public_id = ?", params=[pid], limit=1
+        )[0]
+        stored = row["med_photo"]
+        assert stored
+        assert "user-evil-name" not in stored
+        assert "/" not in stored and "\\" not in stored
+        assert (settings.UPLOAD_DIR / stored).is_file()
+
+        view = owner_client.get(f"/api/admin/patients/{pid}/photo")
+        assert view.status_code == 200
+        assert view.content.startswith(b"\x89PNG")
+
+        listed = owner_client.get("/api/admin/patients").json()["items"]
+        match = next(x for x in listed if x["public_id"] == pid)
+        assert match["med_photo"] == stored
+
+    def test_photo_get_post_403_without_files_manage(self, owner_client):
+        import io
+
+        from tests.test_portal import PNG
+
+        _relogin_owner(owner_client)
+        created = owner_client.post(
+            "/api/admin/patients",
+            data={
+                "full_name": "عکس مالک",
+                "national_id": nid(47737089),
+                "birth_date": "1370/05/03",
+                "phone": "09128889911",
+            },
+            files={"med_photo": ("m.png", io.BytesIO(PNG), "image/png")},
+        )
+        assert created.status_code == 201, created.text
+        pid = created.json()["public_id"]
+
+        self._sec(owner_client, "sec_nofile_view", [perms.PATIENTS_VIEW])
+        self._as(owner_client, "sec_nofile_view")
+        assert owner_client.get(f"/api/admin/patients/{pid}/photo").status_code == 403
+        assert (
+            owner_client.post(
+                f"/api/admin/patients/{pid}/photo",
+                files={"med_photo": ("m.png", io.BytesIO(PNG), "image/png")},
+            ).status_code
+            == 403
+        )
+        items = owner_client.get("/api/admin/patients").json()["items"]
+        match = next(x for x in items if x["public_id"] == pid)
+        assert match["med_photo"] is None
+
+    def test_revoke_files_manage_blocks_prior_photo_access(self, owner_client):
+        import io
+
+        from tests.test_portal import PNG
+
+        sec = self._sec(
+            owner_client,
+            "sec_fil_revoke",
+            [perms.PATIENTS_VIEW, perms.FILES_MANAGE],
+        )
+        _relogin_owner(owner_client)
+        created = owner_client.post(
+            "/api/admin/patients",
+            data={
+                "full_name": "لغو فایل",
+                "national_id": nid(47837089),
+                "birth_date": "1370/05/03",
+                "phone": "09129990022",
+            },
+            files={"med_photo": ("m.png", io.BytesIO(PNG), "image/png")},
+        )
+        pid = created.json()["public_id"]
+        self._as(owner_client, "sec_fil_revoke")
+        assert owner_client.get(f"/api/admin/patients/{pid}/photo").status_code == 200
+        auth.replace_permissions(sec["id"], [perms.PATIENTS_VIEW])
+        assert owner_client.get(f"/api/admin/patients/{pid}/photo").status_code == 403
+
+    def test_upload_photo_endpoint_with_files_manage(self, owner_client):
+        import io
+
+        from tests.test_portal import PNG
+
+        _relogin_owner(owner_client)
+        p = owner_client.post(
+            "/api/admin/patients",
+            json={
+                "full_name": "آپلود بعدی",
+                "national_id": nid(47937089),
+                "birth_date": "1370/05/03",
+                "phone": "09120001133",
+            },
+        ).json()
+        self._sec(
+            owner_client,
+            "sec_fil_up",
+            [perms.PATIENTS_VIEW, perms.FILES_MANAGE],
+        )
+        self._as(owner_client, "sec_fil_up")
+        r = owner_client.post(
+            f"/api/admin/patients/{p['public_id']}/photo",
+            files={"med_photo": ("later.png", io.BytesIO(PNG), "image/png")},
+        )
+        assert r.status_code == 201, r.text
+        assert owner_client.get(f"/api/admin/patients/{p['public_id']}/photo").status_code == 200
+
+    def test_admin_ui_has_med_photo_field(self, owner_client):
+        html = owner_client.get("/admin").text
+        assert "pcMedPhoto" in html
+        assert "آپلود عکس داروی مصرفی" in html
+        assert "pcMedWrap" in html
+        assert "syncPermCatalog" in html
+        assert "/patients/'+p.public_id+'/photo" in html or '/patients/\'+p.public_id+\'/photo' in html

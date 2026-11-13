@@ -691,6 +691,34 @@ async def patient_photo(public_id: str, request: Request) -> Response:
     )
 
 
+@router.post("/patients/{public_id}/photo", status_code=201)
+async def upload_med_photo(
+    public_id: str, request: Request, med_photo: UploadFile = File(...)
+) -> dict[str, Any]:
+    """Attach/replace a medication photo. Requires files.manage (independent of patients.edit)."""
+    actor = need(staff(request), perms.FILES_MANAGE)
+    csrf(request, actor)
+    patient = ownership.get_owned_patient(actor, public_id)
+    name = patients.save_upload(med_photo, prefix=f"med-{public_id[:6]}")
+    if not name:
+        raise BadRequest("فایلی دریافت نشد.", fields={"med_photo": "فایل خالی است."})
+    repo.update(
+        SYSTEM,
+        "patients",
+        {"med_photo": name, "updated_at": _now()},
+        where="id = ?",
+        params=[patient["id"]],
+    )
+    audit.record(
+        actor,
+        "patient.med_photo_uploaded",
+        "patient",
+        patient["public_id"],
+        after={"file": name},
+    )
+    return {"ok": True, "file": name}
+
+
 # --------------------------------------------------------------------------
 # clinical catalogues  (extensible: type a missing entry once and it stays)
 # --------------------------------------------------------------------------
@@ -1043,18 +1071,58 @@ async def reply_to_patient(
 # staff patient create (secretary with patients.create)
 # --------------------------------------------------------------------------
 @router.post("/patients", status_code=201)
-async def create_patient(
-    request: Request, payload: dict[str, Any] = Body(default={})
-) -> dict[str, Any]:
-    """Register a patient from the staff panel. No patient session is opened."""
+async def create_patient(request: Request) -> dict[str, Any]:
+    """Register a patient from the staff panel. No patient session is opened.
+
+    Accepts JSON or multipart/form-data. An optional med_photo upload requires
+    files.manage in addition to patients.create; omitting the file is always OK.
+    """
     actor = need(staff(request), perms.PATIENTS_CREATE)
     csrf(request, actor)
     oid = ownership.clinic_owner_id(actor)
     if oid is None:
         raise Forbidden("حساب شما به هیچ کلینیکی متصل نیست.")
-    data = schemas.PatientRegisterIn.model_validate({**payload, "website": ""})
+
+    ctype = (request.headers.get("content-type") or "").lower()
+    med_name = ""
+    if "multipart/form-data" in ctype:
+        form = await request.form()
+        payload = {
+            "full_name": str(form.get("full_name") or ""),
+            "national_id": str(form.get("national_id") or ""),
+            "birth_date": str(form.get("birth_date") or ""),
+            "phone": str(form.get("phone") or ""),
+            "mri_link": str(form.get("mri_link") or ""),
+            "ortho_doctor": str(form.get("ortho_doctor") or ""),
+            "website": "",
+        }
+        upload = form.get("med_photo")
+        has_file = (
+            upload is not None
+            and hasattr(upload, "filename")
+            and bool(getattr(upload, "filename", None))
+        )
+        if has_file:
+            need(actor, perms.FILES_MANAGE)
+            med_name = patients.save_upload(upload, prefix="med-new")  # type: ignore[arg-type]
+            if not med_name:
+                raise BadRequest(
+                    "فایل عکس دارو معتبر نیست.",
+                    fields={"med_photo": "فایل دریافت نشد یا خالی است."},
+                )
+    else:
+        raw = await request.json()
+        if not isinstance(raw, dict):
+            raise BadRequest("بدنهٔ درخواست نامعتبر است.")
+        payload = {**raw, "website": ""}
+
+    data = schemas.PatientRegisterIn.model_validate(payload)
     ip = request.client.host if request.client else ""
-    patient = patients.register(data.model_dump(), med_photo="", ip=ip, owner_id=oid)
+    # Store under a content-hash name (never the client filename). Prefix is opaque.
+    patient = patients.register(
+        data.model_dump(), med_photo=med_name, ip=ip, owner_id=oid
+    )
+
     audit.record(
         actor,
         "patient.created_by_staff",
@@ -1064,6 +1132,7 @@ async def create_patient(
             "full_name": patient["full_name"],
             "phone": patient["phone"],
             "owner_id": oid,
+            "has_med_photo": bool(med_name),
         },
     )
     return {
@@ -1071,6 +1140,7 @@ async def create_patient(
         "public_id": patient["public_id"],
         "full_name": patient["full_name"],
         "phone": patient["phone"],
+        "med_photo": bool(med_name),
     }
 
 

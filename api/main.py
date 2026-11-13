@@ -609,6 +609,9 @@ async def me(request: Request) -> dict[str, Any]:
         "user_id": actor.user_id,
         "full_name": full_name,
         "permissions": caps,
+        "permission_catalog": [
+            {"id": p, "label": perms.LABELS_FA[p]} for p in perms.ALL
+        ],
         "can_manage_secretaries": actor.role == "owner",
         "csrf": auth.csrf_token(actor.session_id or ""),
     }
@@ -655,7 +658,17 @@ async def list_bookings(
         params = [*vparams, status]
 
     scope_key = ownership.clinic_owner_id(actor) or 0
-    key = f"admin:bookings:{scope_key}:{actor.role}:{status}:{page}:{per_page}"
+    # Staff visibility differs by capability (assigned-only vs reception queue).
+    vis_scope = (
+        "owner"
+        if actor.role == "owner"
+        else (
+            "queue"
+            if ownership.can_manage_reception_queue(actor)
+            else ("msgs" if actor.can(perms.MESSAGES_VIEW) else "none")
+        )
+    )
+    key = f"admin:bookings:{scope_key}:{vis_scope}:{status}:{page}:{per_page}"
 
     def build() -> dict[str, Any]:
         rows = repo.select(
