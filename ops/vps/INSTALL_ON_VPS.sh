@@ -65,7 +65,15 @@ for line in envf.read_text(encoding="utf-8", errors="replace").splitlines():
             raw = raw[1:-1]
         break
 
-if raw is None or raw == "":
+# Key present but empty → hard stop (do not silently fall back to default).
+if raw is not None and raw == "":
+    print(
+        "FATAL: DB_PATH is present in .env.production but empty — refusing to continue",
+        file=sys.stderr,
+    )
+    sys.exit(6)
+
+if raw is None:
     candidate = (app / "data" / "asa.db").resolve()
 else:
     p = Path(raw)
@@ -248,6 +256,21 @@ require_cert_policy_before_nginx() {
   exit 1
 }
 
+# Record whether asa-physio.service was enabled before this install mutates it.
+record_systemd_enable_state() {
+  local state_file="${RUN_BACKUP_DIR}/asa-physio.service.enabled.state"
+  local st="missing"
+  if [ -f "$UNIT_PATH" ]; then
+    st="$(systemctl is-enabled asa-physio.service 2>/dev/null || true)"
+    [ -n "$st" ] || st="disabled"
+  else
+    st="missing"
+  fi
+  printf '%s' "$st" | sudo tee "$state_file" >/dev/null
+  protect_file "$state_file"
+  echo "systemd enable state recorded: $st (contents of unit not printed)"
+}
+
 write_restore_notes() {
   # Must run only after resolve_db_path_from_env; every DB path in RESTORE uses DB_FILE.
   if [ -z "${DB_FILE:-}" ]; then
@@ -280,6 +303,7 @@ Artifacts:
   ${RUN_BACKUP_DIR}/asa.db.was_missing          (only if DB was absent before install)
   ${RUN_BACKUP_DIR}/asa.db.pre-migrate          (only if DB existed; SQLite Backup API)
   ${RUN_BACKUP_DIR}/asa-physio.service.prev     (or .prev.missing)
+  ${RUN_BACKUP_DIR}/asa-physio.service.enabled.state   (enabled|disabled|missing|…)
   ${RUN_BACKUP_DIR}/nginx-asa-physio.prev       (or .prev.missing)
   ${RUN_BACKUP_DIR}/nginx-asa-physio.enabled.kind / .link / .prev
   ${RUN_BACKUP_DIR}/nginx-default.enabled.kind / .link / .prev
@@ -292,8 +316,17 @@ FULL MANUAL ROLLBACK (run as asaadmin with sudo)
 # 0) stop app (releases SQLite locks)
 sudo systemctl stop asa-physio || true
 
-# 1) restore code tree
+# 1) restore code tree WITHOUT mixing install leftovers into the old tree:
+#    quarantine the current APP_ROOT first (no silent delete), then extract backup.
+TREE_Q=${RUN_BACKUP_DIR}/quarantine-tree-before-restore
+sudo mkdir -p "\$TREE_Q"
+sudo chmod 700 "\$TREE_Q"
+if [ -e ${APP_ROOT} ]; then
+  sudo mv ${APP_ROOT} "\$TREE_Q/asa-physio.pre-restore-\$(date -u +%Y%m%d-%H%M%S)"
+  echo "Current project tree moved to quarantine (not silently deleted)."
+fi
 sudo tar -xzf ${RUN_BACKUP_DIR}/asa-physio-tree.tar.gz -C /opt
+echo "Pre-install tree extracted from asa-physio-tree.tar.gz"
 
 # 2) DATABASE rollback — read state file first
 #    cat ${DB_STATE_FILE}
@@ -347,6 +380,24 @@ elif [ -f ${RUN_BACKUP_DIR}/asa-physio.service.prev.missing ]; then
 fi
 sudo systemctl daemon-reload
 
+# 4b) restore exact prior enable state (and remove enable link if unit was missing)
+_en=\$(sudo cat ${RUN_BACKUP_DIR}/asa-physio.service.enabled.state 2>/dev/null || echo missing)
+case "\$_en" in
+  enabled|enabled-runtime)
+    if [ -f ${UNIT_PATH} ]; then
+      sudo systemctl enable asa-physio.service
+    fi
+    ;;
+  disabled)
+    sudo systemctl disable asa-physio.service 2>/dev/null || true
+    ;;
+  missing|not-found|*)
+    # Unit did not exist (or unknown): do not leave an enable symlink behind.
+    sudo systemctl disable asa-physio.service 2>/dev/null || true
+    sudo rm -f /etc/systemd/system/multi-user.target.wants/asa-physio.service
+    ;;
+esac
+
 # 5) restore runtime-overrides.env
 if [ -f ${RUN_BACKUP_DIR}/runtime-overrides.env.prev ]; then
   sudo mkdir -p ${OVERRIDE_DIR}
@@ -396,7 +447,7 @@ esac
 
 sudo nginx -t && sudo systemctl reload nginx
 
-# 9) optionally start previous app unit
+# 9) optionally start previous app unit (only if unit file exists again)
 if [ -f ${UNIT_PATH} ]; then
   sudo systemctl start asa-physio || true
 fi
@@ -412,6 +463,14 @@ EOF
   fi
   if ! grep -Fq "asa.db.pre-migrate ${DB_FILE}" "$RESTORE_NOTES"; then
     echo "FATAL: RESTORE.txt restore-copy target is not validated DB_FILE"
+    exit 1
+  fi
+  if ! grep -Fq "quarantine-tree-before-restore" "$RESTORE_NOTES"; then
+    echo "FATAL: RESTORE.txt missing tree quarantine step"
+    exit 1
+  fi
+  if ! grep -Fq "asa-physio.service.enabled.state" "$RESTORE_NOTES"; then
+    echo "FATAL: RESTORE.txt missing systemd enable-state restore"
     exit 1
   fi
   protect_file "$RESTORE_NOTES"
@@ -441,9 +500,10 @@ require_cert_policy_before_nginx
 echo "=== resolve DB_PATH from .env.production (before backup/migrate) ==="
 resolve_db_path_from_env || exit 1
 
-echo "=== verify prior backup (checksum only) ==="
-if [ -f "$BACKUP_TAR" ]; then
-  echo "$BACKUP_SHA256  $BACKUP_TAR" | sha256sum -c -
+echo "=== verify prior backup (checksum only, via root; no backup contents printed) ==="
+if sudo test -f "$BACKUP_TAR"; then
+  # sha256sum -c reads the archive for hashing only; it does not dump file contents.
+  printf '%s  %s\n' "$BACKUP_SHA256" "$BACKUP_TAR" | sudo sha256sum -c -
 else
   echo "WARN: prior backup tar not found: $BACKUP_TAR"
 fi
@@ -474,6 +534,7 @@ else
   protect_file "${RUN_BACKUP_DIR}/asa-physio.service.prev.missing"
   echo "systemd unit backup: none existed"
 fi
+record_systemd_enable_state
 
 if [ -f "$NGINX_AVAILABLE" ]; then
   sudo cp -a "$NGINX_AVAILABLE" "${RUN_BACKUP_DIR}/nginx-asa-physio.prev"
@@ -707,8 +768,13 @@ else
 fi
 
 echo "=== smoke via Host (HTTP) ==="
+# Do NOT use `curl … || echo 000` inside the same substitution: on connect failure
+# curl already prints http_code 000 and a failed exit would append another 000 → 000000.
 for host in asa-physio.ir www.asa-physio.ir; do
-  code=$(curl -sS -o /dev/null -w "%{http_code}" -H "Host: $host" "http://127.0.0.1/" || echo 000)
+  code="$(curl -sS -o /dev/null -w "%{http_code}" --connect-timeout 5 -H "Host: $host" "http://127.0.0.1/" || true)"
+  case "$code" in
+    ""|*[!0-9]* ) code="000" ;;
+  esac
   echo "$host -> $code"
 done
 
