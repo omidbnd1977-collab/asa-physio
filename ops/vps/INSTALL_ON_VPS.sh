@@ -241,54 +241,143 @@ record_db_pre_state_and_backup() {
   record_owner_pre_state
 }
 
-# Print only an integer: how many admin_users rows have role=owner.
-# Never prints usernames, hashes, or passwords.
-count_owner_accounts() {
+# Probe owner presence without printing secrets.
+# Always returns 0 after setting OWNER_PROBE_STATUS (callers must hard-fail on
+# unreadable). Status values:
+#   db_absent     — DB file does not exist yet (COUNT=0)
+#   table_absent  — DB readable but admin_users missing (COUNT=0)
+#   ok            — admin_users readable; COUNT is exact role=owner rows
+#   unreadable    — sqlite open/query failed (COUNT empty) — NEVER treat as zero owners
+probe_owner_state() {
   local db="${1:-$DB_FILE}"
+  local out=""
+  local rc=0
+  local parse_ok=1
+
+  OWNER_PROBE_STATUS=""
+  OWNER_PROBE_COUNT=""
+
   if [ -z "$db" ] || [ ! -f "$db" ]; then
-    echo 0
+    OWNER_PROBE_STATUS="db_absent"
+    OWNER_PROBE_COUNT=0
     return 0
   fi
-  DB_FILE="$db" python3 - <<'PY'
+
+  set +e
+  out="$(
+    DB_FILE="$db" python3 - <<'PY'
 import os
 import sqlite3
+import sys
 from pathlib import Path
 
 db = Path(os.environ["DB_FILE"])
-con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
 try:
-    tables = {
-        r[0]
-        for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    }
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=30.0)
+except sqlite3.Error as e:
+    print(f"sqlite_open_failed:{type(e).__name__}", file=sys.stderr)
+    sys.exit(2)
+
+try:
+    try:
+        tables = {
+            r[0]
+            for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+    except sqlite3.Error as e:
+        print(f"sqlite_schema_query_failed:{type(e).__name__}", file=sys.stderr)
+        sys.exit(2)
+
     if "admin_users" not in tables:
-        print(0)
-    else:
+        print("table_absent 0")
+        sys.exit(0)
+
+    try:
         n = con.execute(
             "SELECT COUNT(*) FROM admin_users WHERE role = 'owner'"
         ).fetchone()[0]
-        print(int(n))
+    except sqlite3.Error as e:
+        print(f"sqlite_owner_count_failed:{type(e).__name__}", file=sys.stderr)
+        sys.exit(2)
+
+    print(f"ok {int(n)}")
 finally:
     con.close()
 PY
+  )"
+  rc=$?
+  set -e
+
+  if [ "$rc" -ne 0 ]; then
+    OWNER_PROBE_STATUS="unreadable"
+    OWNER_PROBE_COUNT=""
+    echo "FATAL: DB/query unreadable while probing owners (sqlite error). Install stopped." >&2
+    return 0
+  fi
+
+  # Expect: "<status> <count>" — no secrets.
+  OWNER_PROBE_STATUS="${out%% *}"
+  OWNER_PROBE_COUNT="${out#* }"
+  case "$OWNER_PROBE_STATUS" in
+    table_absent|ok)
+      case "$OWNER_PROBE_COUNT" in
+        ''|*[!0-9]*) parse_ok=0 ;;
+      esac
+      ;;
+    *) parse_ok=0 ;;
+  esac
+  if [ "$parse_ok" -ne 1 ]; then
+    OWNER_PROBE_STATUS="unreadable"
+    OWNER_PROBE_COUNT=""
+    echo "FATAL: owner probe returned invalid status/count. Install stopped." >&2
+    return 0
+  fi
+  return 0
+}
+
+# Abort install when probe could not read the DB (distinct from zero owners).
+require_owner_probe_readable() {
+  local where="$1"
+  if [ "$OWNER_PROBE_STATUS" = "unreadable" ]; then
+    echo "FATAL: owner probe unreadable (${where}) — not treating as zero owners. Install stopped; success NOT claimed."
+    exit 1
+  fi
 }
 
 record_owner_pre_state() {
-  local n
-  n="$(count_owner_accounts)" || n=0
-  if [ ! -f "$DB_FILE" ]; then
-    OWNER_EXISTED_BEFORE="no"
-    echo "owner probe (pre-change): DB absent — no owner yet"
-  elif [ "$n" -gt 0 ]; then
-    OWNER_EXISTED_BEFORE="yes"
-    echo "owner probe (pre-change): owner present (count=${n}; credentials will not be changed)"
-  else
-    OWNER_EXISTED_BEFORE="no"
-    echo "owner probe (pre-change): DB present but no role=owner account"
-  fi
+  probe_owner_state
+  require_owner_probe_readable "pre-change"
+
+  case "$OWNER_PROBE_STATUS" in
+    db_absent)
+      OWNER_EXISTED_BEFORE="no"
+      echo "owner probe (pre-change): DB absent — no owner yet"
+      ;;
+    table_absent)
+      OWNER_EXISTED_BEFORE="no"
+      echo "owner probe (pre-change): DB present but admin_users table absent"
+      ;;
+    ok)
+      if [ "$OWNER_PROBE_COUNT" -gt 0 ]; then
+        OWNER_EXISTED_BEFORE="yes"
+        echo "owner probe (pre-change): owner present (count=${OWNER_PROBE_COUNT}; credentials will not be changed)"
+      else
+        OWNER_EXISTED_BEFORE="no"
+        echo "owner probe (pre-change): admin_users present with zero role=owner"
+      fi
+      ;;
+    *)
+      echo "FATAL: unexpected owner probe status=${OWNER_PROBE_STATUS}"
+      exit 1
+      ;;
+  esac
+
   {
     echo "owner_existed_before_install=${OWNER_EXISTED_BEFORE}"
-    echo "owner_count_before_install=${n}"
+    echo "owner_probe_status=${OWNER_PROBE_STATUS}"
+    echo "owner_count_before_install=${OWNER_PROBE_COUNT}"
   } | sudo tee "${RUN_BACKUP_DIR}/owner.prestate" >/dev/null
   protect_file "${RUN_BACKUP_DIR}/owner.prestate"
 }
@@ -356,21 +445,41 @@ prompt_initial_owner_credentials() {
 
 # After migrate, before systemd start: ensure at least one role=owner exists.
 # Existing owners are never modified. Failure aborts install (no success claim).
+# DB/query errors must abort — never treated as "zero owners".
 ensure_initial_owner_before_service() {
-  local n
   local seed_rc=0
   local seed_out
   local seed_err
 
-  n="$(count_owner_accounts)" || n=0
-  if [ "$n" -gt 0 ]; then
-    echo "owner ensure: already present (count=${n}) — credentials unchanged"
+  echo "owner ensure: verifying DB + admin_users queryable after migrate"
+  probe_owner_state
+  require_owner_probe_readable "after migrate"
+
+  case "$OWNER_PROBE_STATUS" in
+    db_absent)
+      echo "FATAL: DB file missing after migrate — cannot seed owner. Install stopped; success NOT claimed."
+      exit 1
+      ;;
+    table_absent)
+      echo "FATAL: admin_users table missing after migrate — cannot seed owner. Install stopped; success NOT claimed."
+      exit 1
+      ;;
+    ok)
+      ;;
+    *)
+      echo "FATAL: unexpected owner probe status=${OWNER_PROBE_STATUS} after migrate"
+      exit 1
+      ;;
+  esac
+
+  if [ "$OWNER_PROBE_COUNT" -gt 0 ]; then
+    echo "owner ensure: already present (count=${OWNER_PROBE_COUNT}) — credentials unchanged"
     printf 'skipped_existing\n' | sudo tee "${RUN_BACKUP_DIR}/owner.seed.state" >/dev/null
     protect_file "${RUN_BACKUP_DIR}/owner.seed.state"
     return 0
   fi
 
-  echo "owner ensure: no role=owner — creating initial admin is mandatory before service start"
+  echo "owner ensure: admin_users OK with zero owners — creating initial admin is mandatory before service start"
   prompt_initial_owner_credentials
 
   if [ -z "${_SEED_PASS:-}" ] || [ -z "${_SEED_USER:-}" ]; then
@@ -413,9 +522,10 @@ ensure_initial_owner_before_service() {
   fi
   rm -f "$seed_out" "$seed_err"
 
-  n="$(count_owner_accounts)" || n=0
-  if [ "$n" -lt 1 ]; then
-    echo "FATAL: after ops.seed still no role=owner (username may already exist as non-owner)."
+  probe_owner_state
+  require_owner_probe_readable "after ops.seed"
+  if [ "$OWNER_PROBE_STATUS" != "ok" ] || [ "$OWNER_PROBE_COUNT" -lt 1 ]; then
+    echo "FATAL: after ops.seed still no role=owner (status=${OWNER_PROBE_STATUS} count=${OWNER_PROBE_COUNT:-?})."
     echo "Install stopped; success NOT claimed. Existing accounts were not modified."
     _SEED_USER=""
     exit 1
