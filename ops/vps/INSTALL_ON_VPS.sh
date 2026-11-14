@@ -14,6 +14,14 @@
 # or print secrets (including admin passwords). Forward-only migrations. One uvicorn worker.
 # Initial owner: if no role=owner exists after migrate, requires interactive (or env)
 # ADMIN_USER/ADMIN_PASSWORD and runs `python3 -m ops.seed` BEFORE systemd start.
+#
+# Password channel limitation (ops.seed): ADMIN_PASSWORD is read only from the
+# process environment — stdin/FD is NOT supported without changing application
+# code. Absolute secrecy of the password in RAM/environ is NOT claimed.
+#
+# HTTPS: unless CERTBOT_SKIP_HTTPS=1, failed DNS/certbot/HTTPS probe ends the
+# installer with non-zero status (partial install; success is NOT claimed).
+# DB is never auto-rolled-back after migrate (migration compatibility risk).
 set -euo pipefail
 
 TARGET_SHA="9987b78de68c383c14206fbc6274923a7a604f44"
@@ -32,10 +40,21 @@ NGINX_DEFAULT_ENABLED="/etc/nginx/sites-enabled/default"
 # Set in preflight from .env.production DB_PATH (validated under APP_ROOT). Never print .env secrets.
 DB_FILE=""
 HTTPS_OK=0
+CERTBOT_TIMER_OK=0
+CERTBOT_RENEW_DRY_RUN_OK=0
 # yes|no — whether any role=owner existed before install mutations (DB probe).
 OWNER_EXISTED_BEFORE=""
 RESTORE_NOTES="${RUN_BACKUP_DIR}/RESTORE.txt"
 DB_STATE_FILE="${RUN_BACKUP_DIR}/asa.db.state"
+INCOMPLETE_MARKER="${RUN_BACKUP_DIR}/INSTALL_INCOMPLETE"
+COMPLETE_MARKER="${RUN_BACKUP_DIR}/INSTALL_COMPLETE"
+PHASE_FILE="${RUN_BACKUP_DIR}/install.phase"
+# preflight → backups_verified → mutating → migrated → seeded → service → nginx → certbot → done
+INSTALL_PHASE="preflight"
+# success | partial_http_only | failed_https | failed_smoke | failed_other
+INSTALL_OUTCOME="failed_other"
+NON_DB_ROLLBACK_ATTEMPTED=0
+NON_DB_ROLLBACK_VERIFIED=0
 
 umask 077
 
@@ -136,6 +155,195 @@ protect_dir() {
   sudo mkdir -p "$d"
   sudo chown root:root "$d"
   sudo chmod 700 "$d"
+}
+
+set_install_phase() {
+  INSTALL_PHASE="$1"
+  if sudo test -d "$RUN_BACKUP_DIR" 2>/dev/null; then
+    printf '%s\n' "$INSTALL_PHASE" | sudo tee "$PHASE_FILE" >/dev/null
+    protect_file "$PHASE_FILE" || true
+  fi
+  echo "install phase: $INSTALL_PHASE"
+}
+
+mark_install_incomplete() {
+  printf 'incomplete phase=%s ts=%s\n' "$INSTALL_PHASE" "$TS" | sudo tee "$INCOMPLETE_MARKER" >/dev/null
+  protect_file "$INCOMPLETE_MARKER"
+}
+
+mark_install_complete() {
+  sudo rm -f "$INCOMPLETE_MARKER"
+  printf 'complete outcome=%s ts=%s\n' "$INSTALL_OUTCOME" "$TS" | sudo tee "$COMPLETE_MARKER" >/dev/null
+  protect_file "$COMPLETE_MARKER"
+}
+
+# Write SHA-256 sidecar and verify immediately. Does not print file contents.
+sha256_record_and_verify() {
+  local f="$1"
+  local sumfile="${f}.sha256"
+  if ! sudo test -f "$f"; then
+    echo "FATAL: cannot checksum missing file: $f"
+    exit 1
+  fi
+  sudo sha256sum "$f" | sudo tee "$sumfile" >/dev/null
+  protect_file "$sumfile"
+  if ! sudo sha256sum -c "$sumfile"; then
+    echo "FATAL: SHA-256 verification failed for $f — no further mutations"
+    exit 1
+  fi
+  echo "SHA-256 OK: $f (sidecar ${sumfile}; digest not echoed again)"
+}
+
+# Verify an existing sidecar without rewriting it.
+sha256_verify_existing() {
+  local f="$1"
+  local sumfile="${f}.sha256"
+  if ! sudo test -f "$f" || ! sudo test -f "$sumfile"; then
+    echo "FATAL: missing file or .sha256 sidecar: $f"
+    exit 1
+  fi
+  sudo sha256sum -c "$sumfile"
+  echo "SHA-256 re-check OK: $f"
+}
+
+warn_previous_incomplete_runs() {
+  local d
+  local found=0
+  # Re-run must NOT delete or alter other bootstrap-* directories.
+  shopt -s nullglob
+  for d in "${BACKUP_ROOT}"/bootstrap-*; do
+    [ -d "$d" ] || continue
+    [ "$d" = "$RUN_BACKUP_DIR" ] && continue
+    if sudo test -f "${d}/INSTALL_INCOMPLETE"; then
+      echo "NOTE: previous incomplete install left intact: $d"
+      found=1
+    fi
+  done
+  shopt -u nullglob
+  if [ "$found" = 0 ]; then
+    echo "No previous INSTALL_INCOMPLETE markers found (or none readable)."
+  fi
+  echo "This run backup dir (new, not overwriting others): $RUN_BACKUP_DIR"
+}
+
+print_manual_restore_and_continue_hints() {
+  echo "----- SAFE NEXT STEPS (operator) -----"
+  echo "Partial/failed install — SUCCESS IS NOT CLAIMED."
+  echo "Backups for THIS run: ${RUN_BACKUP_DIR}"
+  if sudo test -f "$RESTORE_NOTES"; then
+    echo "Manual FULL restore procedure: ${RESTORE_NOTES}"
+    echo "  (paths only — do not cat env.production.bak)"
+  else
+    echo "RESTORE.txt not available yet (failure before backups completed)."
+  fi
+  echo "DB was NOT auto-rolled-back after migrate (migration compatibility risk)."
+  echo "To continue later: fix DNS/cert/policy, then re-run this script"
+  echo "  (creates a NEW bootstrap-* dir; previous backups stay intact)."
+  echo "-------------------------------------"
+}
+
+# Restore nginx / systemd unit / enable-state / overrides only.
+# NEVER touches DB or APP_ROOT tree. NEVER claims rollback success unless verified.
+safe_non_db_rollback_attempt() {
+  local ok=1
+  NON_DB_ROLLBACK_ATTEMPTED=1
+  NON_DB_ROLLBACK_VERIFIED=0
+  echo "=== safe non-DB rollback attempt (DB/tree NOT touched) ==="
+
+  if ! sudo test -d "$RUN_BACKUP_DIR"; then
+    echo "No RUN_BACKUP_DIR — nothing to roll back non-DB."
+    return 0
+  fi
+
+  # systemd unit
+  if sudo test -f "${RUN_BACKUP_DIR}/asa-physio.service.prev"; then
+    sudo cp -a "${RUN_BACKUP_DIR}/asa-physio.service.prev" "$UNIT_PATH" || ok=0
+  elif sudo test -f "${RUN_BACKUP_DIR}/asa-physio.service.prev.missing"; then
+    sudo rm -f "$UNIT_PATH" || ok=0
+  fi
+  sudo systemctl daemon-reload || ok=0
+
+  if sudo test -f "${RUN_BACKUP_DIR}/asa-physio.service.enabled.state"; then
+    _en="$(sudo cat "${RUN_BACKUP_DIR}/asa-physio.service.enabled.state" 2>/dev/null || echo missing)"
+    case "$_en" in
+      enabled|enabled-runtime)
+        if [ -f "$UNIT_PATH" ]; then sudo systemctl enable asa-physio.service || ok=0; fi
+        ;;
+      disabled)
+        sudo systemctl disable asa-physio.service 2>/dev/null || true
+        ;;
+      *)
+        sudo systemctl disable asa-physio.service 2>/dev/null || true
+        sudo rm -f /etc/systemd/system/multi-user.target.wants/asa-physio.service || true
+        ;;
+    esac
+  fi
+
+  # overrides
+  if sudo test -f "${RUN_BACKUP_DIR}/runtime-overrides.env.prev"; then
+    sudo mkdir -p "$OVERRIDE_DIR"
+    sudo cp -a "${RUN_BACKUP_DIR}/runtime-overrides.env.prev" "$OVERRIDE_ENV" || ok=0
+    sudo chmod 600 "$OVERRIDE_ENV" || true
+  elif sudo test -f "${RUN_BACKUP_DIR}/runtime-overrides.env.prev.missing"; then
+    sudo rm -f "$OVERRIDE_ENV" || true
+  fi
+
+  # nginx available
+  if sudo test -f "${RUN_BACKUP_DIR}/nginx-asa-physio.prev"; then
+    sudo cp -a "${RUN_BACKUP_DIR}/nginx-asa-physio.prev" "$NGINX_AVAILABLE" || ok=0
+  elif sudo test -f "${RUN_BACKUP_DIR}/nginx-asa-physio.prev.missing"; then
+    sudo rm -f "$NGINX_AVAILABLE" || true
+  fi
+
+  # nginx enabled asa-physio
+  if sudo test -f "${RUN_BACKUP_DIR}/nginx-asa-physio.enabled.kind"; then
+    _kind="$(sudo cat "${RUN_BACKUP_DIR}/nginx-asa-physio.enabled.kind" 2>/dev/null || echo missing)"
+    case "$_kind" in
+      symlink)
+        _link="$(sudo cat "${RUN_BACKUP_DIR}/nginx-asa-physio.enabled.link")"
+        sudo ln -sfn "$_link" "$NGINX_ENABLED" || ok=0
+        ;;
+      file)
+        sudo cp -a "${RUN_BACKUP_DIR}/nginx-asa-physio.enabled.prev" "$NGINX_ENABLED" || ok=0
+        ;;
+      *)
+        sudo rm -f "$NGINX_ENABLED" || true
+        ;;
+    esac
+  fi
+
+  # nginx default enabled
+  if sudo test -f "${RUN_BACKUP_DIR}/nginx-default.enabled.kind"; then
+    _kind="$(sudo cat "${RUN_BACKUP_DIR}/nginx-default.enabled.kind" 2>/dev/null || echo missing)"
+    case "$_kind" in
+      symlink)
+        _link="$(sudo cat "${RUN_BACKUP_DIR}/nginx-default.enabled.link")"
+        sudo ln -sfn "$_link" "$NGINX_DEFAULT_ENABLED" || ok=0
+        ;;
+      file)
+        sudo cp -a "${RUN_BACKUP_DIR}/nginx-default.enabled.prev" "$NGINX_DEFAULT_ENABLED" || ok=0
+        ;;
+      *)
+        sudo rm -f "$NGINX_DEFAULT_ENABLED" || true
+        ;;
+    esac
+  fi
+
+  if sudo nginx -t 2>/dev/null; then
+    sudo systemctl reload nginx || ok=0
+  else
+    echo "WARN: nginx -t failed after non-DB rollback attempt — operator must fix."
+    ok=0
+  fi
+
+  if [ "$ok" = 1 ]; then
+    NON_DB_ROLLBACK_VERIFIED=1
+    echo "NON_DB_ROLLBACK: files restored and nginx -t OK (NOT a full install rollback; DB/tree untouched)."
+  else
+    NON_DB_ROLLBACK_VERIFIED=0
+    echo "NON_DB_ROLLBACK: attempted but NOT verified successful. Do NOT treat as rolled back."
+  fi
+  echo "Full DB/tree restore remains MANUAL via RESTORE.txt — success of that path is NOT claimed here."
 }
 
 backup_enabled_path() {
@@ -601,10 +809,13 @@ DB_STATE_FILE=${DB_STATE_FILE}
 
 Artifacts:
   ${RUN_BACKUP_DIR}/asa-physio-tree.tar.gz
+  ${RUN_BACKUP_DIR}/asa-physio-tree.tar.gz.sha256
   ${RUN_BACKUP_DIR}/env.production.bak
+  ${RUN_BACKUP_DIR}/env.production.bak.sha256
   ${RUN_BACKUP_DIR}/asa.db.state
   ${RUN_BACKUP_DIR}/asa.db.was_missing          (only if DB was absent before install)
   ${RUN_BACKUP_DIR}/asa.db.pre-migrate          (only if DB existed; SQLite Backup API)
+  ${RUN_BACKUP_DIR}/asa.db.pre-migrate.sha256   (only if DB existed)
   ${RUN_BACKUP_DIR}/owner.prestate              (owner_existed_before / count; no secrets)
   ${RUN_BACKUP_DIR}/owner.seed.state             (skipped_existing|seeded_ok; no secrets)
   ${RUN_BACKUP_DIR}/asa-physio.service.prev     (or .prev.missing)
@@ -613,6 +824,7 @@ Artifacts:
   ${RUN_BACKUP_DIR}/nginx-asa-physio.enabled.kind / .link / .prev
   ${RUN_BACKUP_DIR}/nginx-default.enabled.kind / .link / .prev
   ${RUN_BACKUP_DIR}/runtime-overrides.env.prev  (or .prev.missing)
+  ${RUN_BACKUP_DIR}/INSTALL_INCOMPLETE / INSTALL_COMPLETE / install.phase
 
 ================================================================
 FULL MANUAL ROLLBACK (run as asaadmin with sudo)
@@ -630,8 +842,28 @@ if [ -e ${APP_ROOT} ]; then
   sudo mv ${APP_ROOT} "\$TREE_Q/asa-physio.pre-restore-\$(date -u +%Y%m%d-%H%M%S)"
   echo "Current project tree moved to quarantine (not silently deleted)."
 fi
+# Verify tree backup checksum before extract (optional but recommended)
+if [ -f ${RUN_BACKUP_DIR}/asa-physio-tree.tar.gz.sha256 ]; then
+  sudo sha256sum -c ${RUN_BACKUP_DIR}/asa-physio-tree.tar.gz.sha256
+fi
 sudo tar -xzf ${RUN_BACKUP_DIR}/asa-physio-tree.tar.gz -C /opt
 echo "Pre-install tree extracted from asa-physio-tree.tar.gz"
+
+# 1b) rebuild .venv (excluded from tree tar) from restored requirements.txt
+cd ${APP_ROOT}
+echo "Python for venv rebuild: \$(python3 --version 2>&1)"
+if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; then
+  echo "WARNING: python3 is older than 3.10 — confirm project compatibility before pip install."
+fi
+rm -rf ${APP_ROOT}/.venv
+python3 -m venv ${APP_ROOT}/.venv
+# shellcheck disable=SC1091
+source ${APP_ROOT}/.venv/bin/activate
+pip install -U pip
+pip install -r ${APP_ROOT}/requirements.txt
+python -c "import fastapi, uvicorn; print('venv_ok', fastapi.__version__)"
+deactivate || true
+echo "venv rebuilt from restored requirements.txt (operator must confirm app starts)."
 
 # 2) DATABASE rollback — read state file first
 #    cat ${DB_STATE_FILE}
@@ -654,6 +886,9 @@ fi
 # 2b) If db_existed_before_install=yes: restore Backup API snapshot, then drop WAL/SHM
 #     so SQLite does not replay a mismatched journal against the restored main file.
 if [ -f ${RUN_BACKUP_DIR}/asa.db.pre-migrate ]; then
+  if [ -f ${RUN_BACKUP_DIR}/asa.db.pre-migrate.sha256 ]; then
+    sudo sha256sum -c ${RUN_BACKUP_DIR}/asa.db.pre-migrate.sha256
+  fi
   QDIR=${RUN_BACKUP_DIR}/quarantine-db-before-restore
   sudo mkdir -p "\$QDIR"
   sudo chmod 700 "\$QDIR"
@@ -668,6 +903,7 @@ if [ -f ${RUN_BACKUP_DIR}/asa.db.pre-migrate ]; then
   # Ensure no stale wal/shm remain next to restored main
   sudo rm -f ${DB_FILE}-wal ${DB_FILE}-shm
   echo "DB restored from Backup API snapshot; wal/shm cleared after quarantine of prior files."
+  echo "NOTE: DB restore is MANUAL — installer never auto-claims this succeeded."
 fi
 
 # 3) restore .env.production if needed (do not cat the bak file)
@@ -756,6 +992,12 @@ sudo nginx -t && sudo systemctl reload nginx
 if [ -f ${UNIT_PATH} ]; then
   sudo systemctl start asa-physio || true
 fi
+
+# 10) Verify manually — do NOT claim rollback success until health checks pass:
+#   curl -fsS http://127.0.0.1:8080/api/healthz
+#   curl -fsS http://127.0.0.1:8080/api/readyz
+#   sudo nginx -t
+echo "RESTORE procedure finished issuing commands — SUCCESS NOT CLAIMED until operator verifies."
 EOF
   # Sanity before chmod 600: RESTORE must embed validated DB_FILE (and wal/shm siblings).
   if ! grep -Fq "DB_FILE=${DB_FILE}" "$RESTORE_NOTES"; then
@@ -778,21 +1020,91 @@ EOF
     echo "FATAL: RESTORE.txt missing systemd enable-state restore"
     exit 1
   fi
+  if ! grep -Fq "rebuild .venv" "$RESTORE_NOTES" && ! grep -Fq "venv rebuilt" "$RESTORE_NOTES"; then
+    if ! grep -Fq "python3 -m venv" "$RESTORE_NOTES"; then
+      echo "FATAL: RESTORE.txt missing venv rebuild steps"
+      exit 1
+    fi
+  fi
   protect_file "$RESTORE_NOTES"
+}
+
+ensure_certbot_timer_and_dry_run() {
+  CERTBOT_TIMER_OK=0
+  CERTBOT_RENEW_DRY_RUN_OK=0
+  echo "=== certbot.timer (auto-renew) + renew dry-run ==="
+  if ! systemctl list-unit-files --type=timer 2>/dev/null | grep -q '^certbot\.timer'; then
+    if ! systemctl cat certbot.timer >/dev/null 2>&1; then
+      echo "FATAL: certbot.timer unit not found — cannot confirm automatic TLS renewal"
+      return 1
+    fi
+  fi
+  sudo systemctl enable certbot.timer
+  sudo systemctl start certbot.timer
+  if systemctl is-enabled certbot.timer >/dev/null 2>&1; then
+    echo "certbot.timer: enabled"
+  else
+    echo "FATAL: certbot.timer failed to enable"
+    return 1
+  fi
+  # timer "active" means waiting/running schedule
+  if systemctl is-active certbot.timer >/dev/null 2>&1; then
+    echo "certbot.timer: active"
+    CERTBOT_TIMER_OK=1
+  else
+    echo "FATAL: certbot.timer is not active after enable/start"
+    return 1
+  fi
+  if sudo certbot renew --dry-run; then
+    CERTBOT_RENEW_DRY_RUN_OK=1
+    echo "certbot renew --dry-run: OK"
+  else
+    echo "FATAL: certbot renew --dry-run failed"
+    return 1
+  fi
+  return 0
+}
+
+fail_partial_install() {
+  local reason="$1"
+  INSTALL_OUTCOME="$reason"
+  echo "FATAL: $reason — install is PARTIAL/FAILED; success NOT claimed."
+  mark_install_incomplete || true
+  case "$INSTALL_PHASE" in
+    service|nginx|certbot|seeded|migrated)
+      # Never auto-restore DB/tree; optional non-DB restore only.
+      safe_non_db_rollback_attempt || true
+      ;;
+  esac
+  print_manual_restore_and_continue_hints
+  if [ "$NON_DB_ROLLBACK_ATTEMPTED" = 1 ] && [ "$NON_DB_ROLLBACK_VERIFIED" != 1 ]; then
+    echo "Non-DB rollback was attempted but NOT verified — do not assume services are restored."
+  fi
+  exit 1
 }
 
 on_err() {
   local ec=$?
-  echo "ERROR: installer failed (exit ${ec}). No success claimed."
+  INSTALL_OUTCOME="failed_other"
+  echo "ERROR: installer failed (exit ${ec}) at phase=${INSTALL_PHASE}. No success claimed."
   echo "Backups (if any) are under: ${RUN_BACKUP_DIR}"
-  if sudo test -f "$RESTORE_NOTES"; then
-    echo "See RESTORE.txt in that directory (paths only; do not print env contents)."
+  mark_install_incomplete || true
+  # Auto DB/tree rollback is intentionally NOT performed (migration compatibility).
+  case "$INSTALL_PHASE" in
+    service|nginx|certbot|seeded|migrated)
+      safe_non_db_rollback_attempt || true
+      ;;
+  esac
+  print_manual_restore_and_continue_hints
+  if [ "$NON_DB_ROLLBACK_ATTEMPTED" = 1 ] && [ "$NON_DB_ROLLBACK_VERIFIED" != 1 ]; then
+    echo "Non-DB rollback was attempted but NOT verified — do not assume services are restored."
   fi
   exit "$ec"
 }
 trap on_err ERR
 
 echo "=== preflight ==="
+set_install_phase "preflight"
 [ -d "$APP_ROOT" ] || { echo "missing $APP_ROOT"; exit 1; }
 cd "$APP_ROOT"
 [ -f "$APP_ROOT/.env.production" ] || { echo "FATAL: .env.production missing"; exit 1; }
@@ -813,9 +1125,11 @@ else
   echo "WARN: prior backup tar not found: $BACKUP_TAR"
 fi
 
-echo "=== create run backup directory ==="
+echo "=== create run backup directory (never overwrites other bootstrap-* runs) ==="
 protect_dir "$BACKUP_ROOT"
 protect_dir "$RUN_BACKUP_DIR"
+warn_previous_incomplete_runs
+mark_install_incomplete
 
 echo "=== new safety backups (before any mutate) ==="
 sudo tar -czf "${RUN_BACKUP_DIR}/asa-physio-tree.tar.gz" \
@@ -823,12 +1137,17 @@ sudo tar -czf "${RUN_BACKUP_DIR}/asa-physio-tree.tar.gz" \
   --exclude='__pycache__' \
   -C /opt asa-physio
 protect_file "${RUN_BACKUP_DIR}/asa-physio-tree.tar.gz"
+sha256_record_and_verify "${RUN_BACKUP_DIR}/asa-physio-tree.tar.gz"
 
 sudo cp -a "$APP_ROOT/.env.production" "${RUN_BACKUP_DIR}/env.production.bak"
 protect_file "${RUN_BACKUP_DIR}/env.production.bak"
+sha256_record_and_verify "${RUN_BACKUP_DIR}/env.production.bak"
 
 mkdir -p "$APP_ROOT/data/uploads" "$APP_ROOT/data/backups"
 record_db_pre_state_and_backup
+if sudo test -f "${RUN_BACKUP_DIR}/asa.db.pre-migrate"; then
+  sha256_record_and_verify "${RUN_BACKUP_DIR}/asa.db.pre-migrate"
+fi
 
 if [ -f "$UNIT_PATH" ]; then
   sudo cp -a "$UNIT_PATH" "${RUN_BACKUP_DIR}/asa-physio.service.prev"
@@ -867,6 +1186,15 @@ fi
 write_restore_notes
 echo "RESTORE.txt written (executable rollback commands; no secrets)"
 
+echo "=== re-verify this-run backup SHA-256 before ANY mutate ==="
+sha256_verify_existing "${RUN_BACKUP_DIR}/asa-physio-tree.tar.gz"
+sha256_verify_existing "${RUN_BACKUP_DIR}/env.production.bak"
+if sudo test -f "${RUN_BACKUP_DIR}/asa.db.pre-migrate"; then
+  sha256_verify_existing "${RUN_BACKUP_DIR}/asa.db.pre-migrate"
+fi
+set_install_phase "backups_verified"
+echo "Backups verified — mutations may proceed."
+
 echo "=== git status before pin (no push) ==="
 git remote -v || true
 git status --short --branch || true
@@ -883,6 +1211,7 @@ if [ -n "$untracked" ]; then
 fi
 
 echo "=== git pin to exact SHA (no force-push) ==="
+set_install_phase "mutating"
 git fetch origin
 git rev-parse --verify "${TARGET_SHA}^{commit}" >/dev/null
 git checkout -B main "$TARGET_SHA"
@@ -890,10 +1219,15 @@ test "$(git rev-parse HEAD)" = "$TARGET_SHA"
 echo "HEAD pinned to ${TARGET_SHA}"
 
 echo "=== venv ==="
+if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; then
+  echo "WARNING: python3 < 3.10 — confirm runtime compatibility with this release."
+fi
+echo "python3: $(python3 --version 2>&1)"
 [ -x "$APP_ROOT/.venv/bin/python" ] || python3 -m venv "$APP_ROOT/.venv"
 # shellcheck disable=SC1091
 source "$APP_ROOT/.venv/bin/activate"
 pip install -q -r requirements.txt
+python -c "import fastapi, uvicorn; print('deps_ok')"
 
 echo "=== migrate (forward-only; preserve DB + uploads) ==="
 set -a
@@ -919,11 +1253,15 @@ print("migrations:", ",".join(applied))
 print("tables:", ",".join(tables))
 con.close()
 PY
+set_install_phase "migrated"
+echo "NOTE: after migrate, DB auto-rollback is disabled (compatibility risk). Use RESTORE.txt manually if needed."
 
 echo "=== initial owner (ops.seed; before systemd start) ==="
 # Mandatory if no role=owner after migrate. Does not modify .env.production.
 # Existing owners are left unchanged. Failure aborts before service start.
+# Password via ADMIN_PASSWORD env only (ops.seed limitation — not absolute secrecy).
 ensure_initial_owner_before_service
+set_install_phase "seeded"
 
 echo "=== SMS sink override file (loaded AFTER .env.production) ==="
 sudo mkdir -p "$OVERRIDE_DIR"
@@ -973,12 +1311,19 @@ UNIT
 sudo systemctl daemon-reload
 sudo systemctl enable asa-physio.service
 sudo systemctl restart asa-physio.service
+set_install_phase "service"
 sleep 2
-curl -fsS "http://127.0.0.1:8080/api/healthz"
+if ! curl -fsS "http://127.0.0.1:8080/api/healthz"; then
+  fail_partial_install "failed_smoke_healthz"
+fi
 echo
-READY_JSON="$(curl -fsS "http://127.0.0.1:8080/api/readyz")"
+READY_JSON="$(curl -fsS "http://127.0.0.1:8080/api/readyz")" || fail_partial_install "failed_smoke_readyz"
 echo "$READY_JSON"
-curl -fsS -o /dev/null -w "index %{http_code}\n" "http://127.0.0.1:8080/"
+IDX_CODE="$(curl -sS -o /dev/null -w "%{http_code}" --connect-timeout 5 "http://127.0.0.1:8080/" || true)"
+case "$IDX_CODE" in
+  200|301|302|303|307|308) echo "index ${IDX_CODE}" ;;
+  *) fail_partial_install "failed_smoke_index_http_${IDX_CODE:-000}" ;;
+esac
 
 echo "=== verify effective SMS/notify/reminder env in running process ==="
 PID="$(systemctl show -p MainPID --value asa-physio)"
@@ -1036,48 +1381,55 @@ if [ -e "$NGINX_DEFAULT_ENABLED" ] || [ -L "$NGINX_DEFAULT_ENABLED" ]; then
 fi
 sudo nginx -t
 sudo systemctl reload nginx
+set_install_phase "nginx"
 
-echo "=== DNS gate + Certbot (both hostnames required) ==="
+echo "=== DNS gate + Certbot (both hostnames required unless SKIP) ==="
+set_install_phase "certbot"
 if [ "${CERTBOT_SKIP_HTTPS:-}" = "1" ]; then
   HTTPS_OK=0
-  echo "SKIP certbot by explicit CERTBOT_SKIP_HTTPS=1. HTTPS is NOT successful."
+  INSTALL_OUTCOME="partial_http_only"
+  echo "SKIP certbot by explicit CERTBOT_SKIP_HTTPS=1."
+  echo "PARTIAL INSTALL: HTTP-only by operator choice — full Production HTTPS success is NOT claimed."
+  print_manual_restore_and_continue_hints
 else
   APEX_OK=0
   WWW_OK=0
   getent hosts asa-physio.ir >/dev/null && APEX_OK=1 || echo "missing DNS: asa-physio.ir"
   getent hosts www.asa-physio.ir >/dev/null && WWW_OK=1 || echo "missing DNS: www.asa-physio.ir"
 
-  if [ "$APEX_OK" = 1 ] && [ "$WWW_OK" = 1 ]; then
-    CERTBOT_ARGS=(--nginx -d asa-physio.ir -d www.asa-physio.ir --non-interactive --agree-tos --redirect)
-    if [ -n "${CERTBOT_EMAIL:-}" ]; then
-      CERTBOT_ARGS+=(--email "${CERTBOT_EMAIL}")
-    elif [ "${CERTBOT_NO_EMAIL:-}" = "1" ]; then
-      CERTBOT_ARGS+=(--register-unsafely-without-email)
-      echo "WARNING: using --register-unsafely-without-email (explicit CERTBOT_NO_EMAIL=1)"
-    else
-      echo "FATAL: internal error — cert policy gate should have stopped earlier"
-      exit 1
-    fi
-    if sudo certbot "${CERTBOT_ARGS[@]}"; then
-      if curl -fsS -o /dev/null --connect-timeout 10 "https://asa-physio.ir/" \
-        && curl -fsS -o /dev/null --connect-timeout 10 "https://www.asa-physio.ir/"; then
-        HTTPS_OK=1
-        echo "HTTPS check: OK for asa-physio.ir and www.asa-physio.ir"
-      else
-        HTTPS_OK=0
-        echo "HTTPS check: FAIL — certbot may have run but live HTTPS probe failed (NOT success)"
-      fi
-    else
-      HTTPS_OK=0
-      echo "Certbot: FAIL — HTTPS is NOT successful. HTTP site may still work."
-    fi
+  if [ "$APEX_OK" != 1 ] || [ "$WWW_OK" != 1 ]; then
+    fail_partial_install "failed_https_dns"
+  fi
+
+  CERTBOT_ARGS=(--nginx -d asa-physio.ir -d www.asa-physio.ir --non-interactive --agree-tos --redirect)
+  if [ -n "${CERTBOT_EMAIL:-}" ]; then
+    CERTBOT_ARGS+=(--email "${CERTBOT_EMAIL}")
+  elif [ "${CERTBOT_NO_EMAIL:-}" = "1" ]; then
+    CERTBOT_ARGS+=(--register-unsafely-without-email)
+    echo "WARNING: using --register-unsafely-without-email (explicit CERTBOT_NO_EMAIL=1)"
   else
-    HTTPS_OK=0
-    echo "SKIP certbot: both A records required. HTTPS is NOT successful."
+    echo "FATAL: internal error — cert policy gate should have stopped earlier"
+    exit 1
+  fi
+
+  if ! sudo certbot "${CERTBOT_ARGS[@]}"; then
+    fail_partial_install "failed_https_certbot"
+  fi
+
+  if curl -fsS -o /dev/null --connect-timeout 10 "https://asa-physio.ir/" \
+    && curl -fsS -o /dev/null --connect-timeout 10 "https://www.asa-physio.ir/"; then
+    HTTPS_OK=1
+    echo "HTTPS check: OK for asa-physio.ir and www.asa-physio.ir"
+  else
+    fail_partial_install "failed_https_probe"
+  fi
+
+  if ! ensure_certbot_timer_and_dry_run; then
+    fail_partial_install "failed_https_renew_timer"
   fi
 fi
 
-echo "=== smoke via Host (HTTP) ==="
+echo "=== smoke via Host (HTTP) — failures are fatal ==="
 # Do NOT use `curl … || echo 000` inside the same substitution: on connect failure
 # curl already prints http_code 000 and a failed exit would append another 000 → 000000.
 for host in asa-physio.ir www.asa-physio.ir; do
@@ -1086,16 +1438,31 @@ for host in asa-physio.ir www.asa-physio.ir; do
     ""|*[!0-9]* ) code="000" ;;
   esac
   echo "$host -> $code"
+  case "$code" in
+    200|301|302|303|307|308) ;;
+    *) fail_partial_install "failed_smoke_http_host_${host}_${code}" ;;
+  esac
 done
+
+if [ "${CERTBOT_SKIP_HTTPS:-}" != "1" ]; then
+  echo "=== smoke HTTPS domains — failures are fatal ==="
+  for url in "https://asa-physio.ir/" "https://www.asa-physio.ir/"; do
+    if ! curl -fsS -o /dev/null --connect-timeout 10 "$url"; then
+      fail_partial_install "failed_smoke_https"
+    fi
+    echo "OK $url"
+  done
+fi
 
 echo "=== summary ==="
 echo "TARGET_SHA=$TARGET_SHA"
 echo "RUN_BACKUP_DIR=$RUN_BACKUP_DIR"
 echo "OVERRIDE_ENV=$OVERRIDE_ENV (mode 600)"
+echo "INSTALL_PHASE=$INSTALL_PHASE"
 if [ -f "${RUN_BACKUP_DIR}/asa.db.was_missing" ]; then
   echo "DB_PRESTATE=missing (explicitly recorded)"
 elif [ -f "${RUN_BACKUP_DIR}/asa.db.pre-migrate" ]; then
-  echo "DB_PRESTATE=present (Backup API snapshot kept)"
+  echo "DB_PRESTATE=present (Backup API snapshot kept + sha256)"
 else
   echo "DB_PRESTATE=unknown (unexpected)"
 fi
@@ -1105,13 +1472,29 @@ if [ -f "${RUN_BACKUP_DIR}/owner.seed.state" ]; then
 else
   echo "OWNER_SEED_STATE=missing"
 fi
-echo "HTTPS_OK=$HTTPS_OK  (1=both domains probed OK; 0=not successful)"
-if [ "$HTTPS_OK" != 1 ]; then
-  echo "RESULT: install steps finished, but HTTPS is NOT reported as success."
-else
-  echo "RESULT: HTTP app + HTTPS both domains OK; SMS sink verified in process env."
-fi
+echo "HTTPS_OK=$HTTPS_OK  (1=both domains probed OK; 0=not full HTTPS success)"
+echo "CERTBOT_TIMER_OK=$CERTBOT_TIMER_OK CERTBOT_RENEW_DRY_RUN_OK=$CERTBOT_RENEW_DRY_RUN_OK"
+echo "NON_DB_ROLLBACK_ATTEMPTED=$NON_DB_ROLLBACK_ATTEMPTED NON_DB_ROLLBACK_VERIFIED=$NON_DB_ROLLBACK_VERIFIED"
 echo "Real SMS blocked via post-.env EnvironmentFile sink; REMINDER_BACKGROUND=0 verified."
 echo ".env.production was NOT modified or printed."
-echo "Admin password was never written to logs, RESTORE.txt, or process argv."
+echo "Admin password was not written to logs, RESTORE.txt, or process argv."
+echo "LIMITATION: ops.seed still receives ADMIN_PASSWORD via child environment (not FD/stdin)."
+
+if [ "${CERTBOT_SKIP_HTTPS:-}" = "1" ]; then
+  INSTALL_OUTCOME="partial_http_only"
+  set_install_phase "done_partial"
+  mark_install_incomplete
+  echo "RESULT: PARTIAL — HTTP-only (CERTBOT_SKIP_HTTPS=1). Production HTTPS success NOT claimed."
+  print_manual_restore_and_continue_hints
+  exit 2
+fi
+
+if [ "$HTTPS_OK" != 1 ] || [ "$CERTBOT_TIMER_OK" != 1 ] || [ "$CERTBOT_RENEW_DRY_RUN_OK" != 1 ]; then
+  fail_partial_install "failed_https_final_gate"
+fi
+
+INSTALL_OUTCOME="success"
+set_install_phase "done"
+mark_install_complete
+echo "RESULT: HTTP app + HTTPS both domains OK; certbot.timer + renew dry-run OK; SMS sink verified."
 echo "Await operator confirmation before any further production changes."
