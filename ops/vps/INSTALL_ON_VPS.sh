@@ -11,7 +11,9 @@
 #   export CERTBOT_NO_EMAIL=1                  # explicit: certbot --register-unsafely-without-email
 #
 # Does NOT: force-push, overwrite .env.production, send real SMS, change DNS,
-# or print secrets. Forward-only migrations. One uvicorn worker.
+# or print secrets (including admin passwords). Forward-only migrations. One uvicorn worker.
+# Initial owner: if no role=owner exists after migrate, requires interactive (or env)
+# ADMIN_USER/ADMIN_PASSWORD and runs `python3 -m ops.seed` BEFORE systemd start.
 set -euo pipefail
 
 TARGET_SHA="9987b78de68c383c14206fbc6274923a7a604f44"
@@ -30,6 +32,8 @@ NGINX_DEFAULT_ENABLED="/etc/nginx/sites-enabled/default"
 # Set in preflight from .env.production DB_PATH (validated under APP_ROOT). Never print .env secrets.
 DB_FILE=""
 HTTPS_OK=0
+# yes|no — whether any role=owner existed before install mutations (DB probe).
+OWNER_EXISTED_BEFORE=""
 RESTORE_NOTES="${RUN_BACKUP_DIR}/RESTORE.txt"
 DB_STATE_FILE="${RUN_BACKUP_DIR}/asa.db.state"
 
@@ -232,6 +236,195 @@ record_db_pre_state_and_backup() {
     protect_file "${RUN_BACKUP_DIR}/asa.db.was_missing"
     echo "DB absent before install: recorded explicitly (asa.db.was_missing + asa.db.state)"
   fi
+
+  # Probe owner presence BEFORE migrate/git/service mutations (no secrets printed).
+  record_owner_pre_state
+}
+
+# Print only an integer: how many admin_users rows have role=owner.
+# Never prints usernames, hashes, or passwords.
+count_owner_accounts() {
+  local db="${1:-$DB_FILE}"
+  if [ -z "$db" ] || [ ! -f "$db" ]; then
+    echo 0
+    return 0
+  fi
+  DB_FILE="$db" python3 - <<'PY'
+import os
+import sqlite3
+from pathlib import Path
+
+db = Path(os.environ["DB_FILE"])
+con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+try:
+    tables = {
+        r[0]
+        for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    if "admin_users" not in tables:
+        print(0)
+    else:
+        n = con.execute(
+            "SELECT COUNT(*) FROM admin_users WHERE role = 'owner'"
+        ).fetchone()[0]
+        print(int(n))
+finally:
+    con.close()
+PY
+}
+
+record_owner_pre_state() {
+  local n
+  n="$(count_owner_accounts)" || n=0
+  if [ ! -f "$DB_FILE" ]; then
+    OWNER_EXISTED_BEFORE="no"
+    echo "owner probe (pre-change): DB absent — no owner yet"
+  elif [ "$n" -gt 0 ]; then
+    OWNER_EXISTED_BEFORE="yes"
+    echo "owner probe (pre-change): owner present (count=${n}; credentials will not be changed)"
+  else
+    OWNER_EXISTED_BEFORE="no"
+    echo "owner probe (pre-change): DB present but no role=owner account"
+  fi
+  {
+    echo "owner_existed_before_install=${OWNER_EXISTED_BEFORE}"
+    echo "owner_count_before_install=${n}"
+  } | sudo tee "${RUN_BACKUP_DIR}/owner.prestate" >/dev/null
+  protect_file "${RUN_BACKUP_DIR}/owner.prestate"
+}
+
+# Collect username + password for ops.seed without echoing the password.
+# Prefers existing ADMIN_USER/ADMIN_PASSWORD from the operator shell (not printed).
+# Does NOT read or write .env.production.
+prompt_initial_owner_credentials() {
+  local user_default="${ADMIN_USER:-owner}"
+  local user=""
+  local p1=""
+  local p2=""
+
+  _SEED_USER=""
+  _SEED_PASS=""
+
+  if [ -n "${ADMIN_PASSWORD:-}" ]; then
+    _SEED_USER="${ADMIN_USER:-owner}"
+    _SEED_PASS="${ADMIN_PASSWORD}"
+    echo "Using ADMIN_USER/ADMIN_PASSWORD from environment (values not printed)."
+    return 0
+  fi
+
+  if [ ! -t 0 ]; then
+    echo "FATAL: no role=owner and ADMIN_PASSWORD unset; cannot prompt on non-TTY"
+    echo "Export ADMIN_USER/ADMIN_PASSWORD for this shell only, then re-run. .env.production untouched."
+    exit 1
+  fi
+
+  echo "Initial owner creation required via python -m ops.seed (before service start)."
+  echo ".env.production will NOT be modified; password will not be logged."
+  read -r -p "Admin username [${user_default}]: " user || true
+  user="${user:-$user_default}"
+  if [ "${#user}" -lt 3 ] || [ "${#user}" -gt 32 ]; then
+    echo "FATAL: username must be between 3 and 32 characters"
+    exit 1
+  fi
+
+  while true; do
+    # -s: do not echo password to the terminal
+    read -r -s -p "Admin password (min 12 chars, hidden): " p1 || true
+    printf '\n' >&2
+    read -r -s -p "Confirm password: " p2 || true
+    printf '\n' >&2
+    if [ -z "$p1" ]; then
+      echo "Password empty — try again." >&2
+      continue
+    fi
+    if [ "${#p1}" -lt 12 ]; then
+      echo "Password too short (min 12) — try again." >&2
+      continue
+    fi
+    if [ "$p1" != "$p2" ]; then
+      echo "Passwords do not match — try again." >&2
+      continue
+    fi
+    break
+  done
+  _SEED_USER="$user"
+  _SEED_PASS="$p1"
+  user=""
+  p1=""
+  p2=""
+}
+
+# After migrate, before systemd start: ensure at least one role=owner exists.
+# Existing owners are never modified. Failure aborts install (no success claim).
+ensure_initial_owner_before_service() {
+  local n
+  local seed_rc=0
+  local seed_out
+  local seed_err
+
+  n="$(count_owner_accounts)" || n=0
+  if [ "$n" -gt 0 ]; then
+    echo "owner ensure: already present (count=${n}) — credentials unchanged"
+    printf 'skipped_existing\n' | sudo tee "${RUN_BACKUP_DIR}/owner.seed.state" >/dev/null
+    protect_file "${RUN_BACKUP_DIR}/owner.seed.state"
+    return 0
+  fi
+
+  echo "owner ensure: no role=owner — creating initial admin is mandatory before service start"
+  prompt_initial_owner_credentials
+
+  if [ -z "${_SEED_PASS:-}" ] || [ -z "${_SEED_USER:-}" ]; then
+    echo "FATAL: empty seed credentials — install stopped; success NOT claimed."
+    _SEED_PASS=""
+    _SEED_USER=""
+    exit 1
+  fi
+
+  seed_out="$(mktemp)"
+  seed_err="$(mktemp)"
+  # Password only via environment for this child (project path: python -m ops.seed).
+  # Never place the password on the command line / argv.
+  set +e
+  ADMIN_USER="${_SEED_USER}" ADMIN_PASSWORD="${_SEED_PASS}" \
+    python3 -m ops.seed >"$seed_out" 2>"$seed_err"
+  seed_rc=$?
+  set -e
+
+  # Wipe secrets from this shell immediately (do not leave in env or locals).
+  _SEED_PASS=""
+  unset ADMIN_PASSWORD 2>/dev/null || true
+
+  if grep -Fq "generated password" "$seed_out" 2>/dev/null; then
+    echo "FATAL: ops.seed emitted a generated password — ADMIN_PASSWORD was not applied"
+    rm -f "$seed_out" "$seed_err"
+    _SEED_USER=""
+    exit 1
+  fi
+  # Safe status lines only (username may appear; never password).
+  if [ -s "$seed_out" ]; then
+    grep -E "^(created owner|user .+ already exists)" "$seed_out" || true
+  fi
+
+  if [ "$seed_rc" -ne 0 ]; then
+    echo "FATAL: ops.seed failed (exit ${seed_rc}). Install stopped; success NOT claimed."
+    rm -f "$seed_out" "$seed_err"
+    _SEED_USER=""
+    exit 1
+  fi
+  rm -f "$seed_out" "$seed_err"
+
+  n="$(count_owner_accounts)" || n=0
+  if [ "$n" -lt 1 ]; then
+    echo "FATAL: after ops.seed still no role=owner (username may already exist as non-owner)."
+    echo "Install stopped; success NOT claimed. Existing accounts were not modified."
+    _SEED_USER=""
+    exit 1
+  fi
+
+  echo "owner ensure: OK via ops.seed (password not written to logs/reports)"
+  printf 'seeded_ok\n' | sudo tee "${RUN_BACKUP_DIR}/owner.seed.state" >/dev/null
+  protect_file "${RUN_BACKUP_DIR}/owner.seed.state"
+  _SEED_USER=""
 }
 
 require_cert_policy_before_nginx() {
@@ -302,6 +495,8 @@ Artifacts:
   ${RUN_BACKUP_DIR}/asa.db.state
   ${RUN_BACKUP_DIR}/asa.db.was_missing          (only if DB was absent before install)
   ${RUN_BACKUP_DIR}/asa.db.pre-migrate          (only if DB existed; SQLite Backup API)
+  ${RUN_BACKUP_DIR}/owner.prestate              (owner_existed_before / count; no secrets)
+  ${RUN_BACKUP_DIR}/owner.seed.state             (skipped_existing|seeded_ok; no secrets)
   ${RUN_BACKUP_DIR}/asa-physio.service.prev     (or .prev.missing)
   ${RUN_BACKUP_DIR}/asa-physio.service.enabled.state   (enabled|disabled|missing|…)
   ${RUN_BACKUP_DIR}/nginx-asa-physio.prev       (or .prev.missing)
@@ -615,6 +810,11 @@ print("tables:", ",".join(tables))
 con.close()
 PY
 
+echo "=== initial owner (ops.seed; before systemd start) ==="
+# Mandatory if no role=owner after migrate. Does not modify .env.production.
+# Existing owners are left unchanged. Failure aborts before service start.
+ensure_initial_owner_before_service
+
 echo "=== SMS sink override file (loaded AFTER .env.production) ==="
 sudo mkdir -p "$OVERRIDE_DIR"
 sudo chown root:root "$OVERRIDE_DIR"
@@ -789,6 +989,12 @@ elif [ -f "${RUN_BACKUP_DIR}/asa.db.pre-migrate" ]; then
 else
   echo "DB_PRESTATE=unknown (unexpected)"
 fi
+echo "OWNER_EXISTED_BEFORE=${OWNER_EXISTED_BEFORE:-unknown}"
+if [ -f "${RUN_BACKUP_DIR}/owner.seed.state" ]; then
+  echo "OWNER_SEED_STATE=$(sudo cat "${RUN_BACKUP_DIR}/owner.seed.state")"
+else
+  echo "OWNER_SEED_STATE=missing"
+fi
 echo "HTTPS_OK=$HTTPS_OK  (1=both domains probed OK; 0=not successful)"
 if [ "$HTTPS_OK" != 1 ]; then
   echo "RESULT: install steps finished, but HTTPS is NOT reported as success."
@@ -797,4 +1003,5 @@ else
 fi
 echo "Real SMS blocked via post-.env EnvironmentFile sink; REMINDER_BACKGROUND=0 verified."
 echo ".env.production was NOT modified or printed."
+echo "Admin password was never written to logs, RESTORE.txt, or process argv."
 echo "Await operator confirmation before any further production changes."
