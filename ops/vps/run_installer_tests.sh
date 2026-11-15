@@ -8,6 +8,7 @@ export PATH="/usr/bin:/bin:/usr/local/bin:${PATH:-}"
 bash -n "$DIR/INSTALL_ON_VPS.sh"
 echo "PASS: bash -n INSTALL_ON_VPS.sh"
 
+bash "$DIR/test_backup_dir_exclusive.sh"
 bash "$DIR/test_restore_notes_root_only.sh"
 bash "$DIR/test_healthz_poll_wait.sh"
 

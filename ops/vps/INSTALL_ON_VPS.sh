@@ -238,6 +238,26 @@ protect_dir() {
   sudo chmod 700 "$d"
 }
 
+# Create THIS run's bootstrap dir only if the path is free.
+# Never reuse, delete, or mix into an existing bootstrap-* directory.
+create_exclusive_run_backup_dir() {
+  local d="$1"
+  if sudo test -e "$d"; then
+    echo "FATAL: run backup directory already exists: $d"
+    echo "Refusing to reuse or overwrite a previous run's backups."
+    echo "Wait at least one second and re-run so a new bootstrap-<timestamp> path is chosen."
+    exit 1
+  fi
+  # Create leaf only (no recursive mkdir); fail if path appears between check and create.
+  if ! sudo mkdir "$d"; then
+    echo "FATAL: could not create exclusive run backup directory: $d"
+    echo "No existing backups were modified."
+    exit 1
+  fi
+  sudo chown root:root "$d"
+  sudo chmod 700 "$d"
+}
+
 set_install_phase() {
   INSTALL_PHASE="$1"
   if sudo test -d "$RUN_BACKUP_DIR" 2>/dev/null; then
@@ -1579,7 +1599,7 @@ fi
 
 echo "=== create run backup directory (never overwrites other bootstrap-* runs) ==="
 protect_dir "$BACKUP_ROOT"
-protect_dir "$RUN_BACKUP_DIR"
+create_exclusive_run_backup_dir "$RUN_BACKUP_DIR"
 warn_previous_incomplete_runs
 mark_install_incomplete
 
