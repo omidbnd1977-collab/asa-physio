@@ -336,14 +336,30 @@ safe_non_db_rollback_attempt() {
     return 0
   fi
 
-  # systemd unit
+  # Stop first so a later start reloads EnvironmentFile from restored overrides.
+  sudo systemctl stop asa-physio.service 2>/dev/null || true
+
+  # 1) systemd unit file
   if sudo test -f "${RUN_BACKUP_DIR}/asa-physio.service.prev"; then
     sudo cp -a "${RUN_BACKUP_DIR}/asa-physio.service.prev" "$UNIT_PATH" || ok=0
   elif sudo test -f "${RUN_BACKUP_DIR}/asa-physio.service.prev.missing"; then
     sudo rm -f "$UNIT_PATH" || ok=0
   fi
+
+  # 2) runtime-overrides.env BEFORE any service start (EnvironmentFile must be in place)
+  # MARKER: overrides-before-service-start
+  if sudo test -f "${RUN_BACKUP_DIR}/runtime-overrides.env.prev"; then
+    sudo mkdir -p "$OVERRIDE_DIR"
+    sudo cp -a "${RUN_BACKUP_DIR}/runtime-overrides.env.prev" "$OVERRIDE_ENV" || ok=0
+    sudo chmod 600 "$OVERRIDE_ENV" || true
+  elif sudo test -f "${RUN_BACKUP_DIR}/runtime-overrides.env.prev.missing"; then
+    sudo rm -f "$OVERRIDE_ENV" || true
+  fi
+
+  # 3) reload unit definitions after unit + overrides are on disk
   sudo systemctl daemon-reload || ok=0
 
+  # 4) enabled/disabled (does not start the service)
   if sudo test -f "${RUN_BACKUP_DIR}/asa-physio.service.enabled.state"; then
     _en="$(sudo cat "${RUN_BACKUP_DIR}/asa-physio.service.enabled.state" 2>/dev/null || echo missing)"
     case "$_en" in
@@ -360,7 +376,8 @@ safe_non_db_rollback_attempt() {
     esac
   fi
 
-  # Active/inactive: restore exact prior runtime state (do NOT start merely because unit exists).
+  # 5) active/inactive ONLY after overrides restored (do NOT start merely because unit exists).
+  # MARKER: service-start-after-overrides
   if sudo test -f "${RUN_BACKUP_DIR}/asa-physio.service.active.state"; then
     _act="$(sudo cat "${RUN_BACKUP_DIR}/asa-physio.service.active.state" 2>/dev/null || echo inactive)"
     case "$_act" in
@@ -377,21 +394,11 @@ safe_non_db_rollback_attempt() {
         ;;
     esac
   else
-    # No recorded active state: prefer stop over speculative start.
     sudo systemctl stop asa-physio.service 2>/dev/null || true
   fi
 
-  # certbot.timer prior enabled/active (separate verification flag)
+  # 6) certbot.timer prior enabled/active (separate verification; independent of app start order)
   restore_certbot_timer_prior_state || ok=0
-
-  # overrides
-  if sudo test -f "${RUN_BACKUP_DIR}/runtime-overrides.env.prev"; then
-    sudo mkdir -p "$OVERRIDE_DIR"
-    sudo cp -a "${RUN_BACKUP_DIR}/runtime-overrides.env.prev" "$OVERRIDE_ENV" || ok=0
-    sudo chmod 600 "$OVERRIDE_ENV" || true
-  elif sudo test -f "${RUN_BACKUP_DIR}/runtime-overrides.env.prev.missing"; then
-    sudo rm -f "$OVERRIDE_ENV" || true
-  fi
 
   # nginx available
   if sudo test -f "${RUN_BACKUP_DIR}/nginx-asa-physio.prev"; then
@@ -1136,15 +1143,28 @@ if [ -f ${RUN_BACKUP_DIR}/env.production.bak ]; then
   sudo chmod 600 ${APP_ROOT}/.env.production
 fi
 
-# 4) restore systemd unit
+# 4) restore systemd unit (do NOT start yet — overrides must be restored first)
 if [ -f ${RUN_BACKUP_DIR}/asa-physio.service.prev ]; then
   sudo cp -a ${RUN_BACKUP_DIR}/asa-physio.service.prev ${UNIT_PATH}
 elif [ -f ${RUN_BACKUP_DIR}/asa-physio.service.prev.missing ]; then
   sudo rm -f ${UNIT_PATH}
 fi
+
+# 5) restore runtime-overrides.env BEFORE any service start (EnvironmentFile order)
+# MARKER: overrides-before-service-start
+if [ -f ${RUN_BACKUP_DIR}/runtime-overrides.env.prev ]; then
+  sudo mkdir -p ${OVERRIDE_DIR}
+  sudo cp -a ${RUN_BACKUP_DIR}/runtime-overrides.env.prev ${OVERRIDE_ENV}
+  sudo chown root:root ${OVERRIDE_ENV}
+  sudo chmod 600 ${OVERRIDE_ENV}
+elif [ -f ${RUN_BACKUP_DIR}/runtime-overrides.env.prev.missing ]; then
+  sudo rm -f ${OVERRIDE_ENV}
+fi
+
+# 5b) reload unit definitions after unit + overrides are on disk
 sudo systemctl daemon-reload
 
-# 4b) restore exact prior enable state (and remove enable link if unit was missing)
+# 5c) restore exact prior enable state (does not start the service)
 _en=\$(sudo cat ${RUN_BACKUP_DIR}/asa-physio.service.enabled.state 2>/dev/null || echo missing)
 case "\$_en" in
   enabled|enabled-runtime)
@@ -1162,7 +1182,9 @@ case "\$_en" in
     ;;
 esac
 
-# 4c) restore exact prior active/inactive — NEVER start only because the unit file exists
+# 5d) apply prior active/inactive ONLY after overrides restored —
+#     NEVER start only because the unit file exists.
+# MARKER: service-start-after-overrides
 _act=\$(sudo cat ${RUN_BACKUP_DIR}/asa-physio.service.active.state 2>/dev/null || echo inactive)
 case "\$_act" in
   active|activating|reloading)
@@ -1178,7 +1200,7 @@ case "\$_act" in
     ;;
 esac
 
-# 4d) restore prior certbot.timer enabled/active (verify manually afterward)
+# 5e) restore prior certbot.timer enabled/active (verify manually afterward)
 if [ -f ${RUN_BACKUP_DIR}/certbot.timer.enabled.state ]; then
   _ct_en=\$(sudo cat ${RUN_BACKUP_DIR}/certbot.timer.enabled.state)
   _ct_act=\$(sudo cat ${RUN_BACKUP_DIR}/certbot.timer.active.state 2>/dev/null || echo inactive)
@@ -1198,16 +1220,6 @@ if [ -f ${RUN_BACKUP_DIR}/certbot.timer.enabled.state ]; then
   else
     echo "certbot.timer unit missing — cannot restore prior timer state."
   fi
-fi
-
-# 5) restore runtime-overrides.env
-if [ -f ${RUN_BACKUP_DIR}/runtime-overrides.env.prev ]; then
-  sudo mkdir -p ${OVERRIDE_DIR}
-  sudo cp -a ${RUN_BACKUP_DIR}/runtime-overrides.env.prev ${OVERRIDE_ENV}
-  sudo chown root:root ${OVERRIDE_ENV}
-  sudo chmod 600 ${OVERRIDE_ENV}
-elif [ -f ${RUN_BACKUP_DIR}/runtime-overrides.env.prev.missing ]; then
-  sudo rm -f ${OVERRIDE_ENV}
 fi
 
 # 6) restore nginx sites-available
@@ -1249,7 +1261,7 @@ esac
 
 sudo nginx -t && sudo systemctl reload nginx
 
-# 9) active/inactive already handled in 4c — do not start merely because unit exists
+# 9) active/inactive applied in 5d after overrides — do not start merely because unit exists
 
 # 10) Verify manually — do NOT claim rollback success until health checks pass:
 #   curl -fsS http://127.0.0.1:8080/api/healthz
@@ -1301,6 +1313,13 @@ EOF
   if ! grep -Fq "NEVER start only because the unit file exists" "$RESTORE_NOTES" \
     && ! grep -Fq "do not start merely because unit exists" "$RESTORE_NOTES"; then
     echo "FATAL: RESTORE.txt missing active-state start guard wording"
+    exit 1
+  fi
+  # Order: overrides restore marker must appear before service-start marker.
+  _ov_line="$(grep -n 'MARKER: overrides-before-service-start' "$RESTORE_NOTES" | head -n1 | cut -d: -f1 || true)"
+  _st_line="$(grep -n 'MARKER: service-start-after-overrides' "$RESTORE_NOTES" | head -n1 | cut -d: -f1 || true)"
+  if [ -z "${_ov_line:-}" ] || [ -z "${_st_line:-}" ] || [ "$_ov_line" -ge "$_st_line" ]; then
+    echo "FATAL: RESTORE.txt must restore runtime-overrides.env before starting the service"
     exit 1
   fi
   if ! grep -Fq "rebuild .venv" "$RESTORE_NOTES" && ! grep -Fq "venv rebuilt" "$RESTORE_NOTES"; then
