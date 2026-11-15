@@ -1371,25 +1371,62 @@ ensure_certbot_timer_and_dry_run() {
   return 0
 }
 
+# Optional hooks for tests (fake clock / sleep). Production uses date + sleep.
+_asa_healthz_now() { date +%s; }
+_asa_healthz_sleep() { sleep "$1"; }
+
 # Poll local uvicorn health until ready (startup can exceed a fixed sleep).
+# Deadline is wall-clock elapsed time (default 60s), not iteration count.
+# Poll cadence ~1s; each curl is capped so the loop cannot overrun the deadline.
 # Usage: wait_for_local_healthz [url] [max_seconds]
 # Returns 0 when curl -fsS succeeds; 1 on timeout. Does not roll back.
 wait_for_local_healthz() {
   local url="${1:-http://127.0.0.1:8080/api/healthz}"
   local max_sec="${2:-60}"
-  local i=0
-  echo "Waiting for ${url} (poll 1s, up to ${max_sec}s)..."
-  while [ "$i" -lt "$max_sec" ]; do
-    if curl -fsS --connect-timeout 1 --max-time 2 "$url" >/dev/null 2>&1; then
-      echo "healthz OK after ${i}s"
+  local start now deadline remaining mt sl
+  local curl_cap=1
+
+  start="$(_asa_healthz_now)"
+  deadline=$((start + max_sec))
+  echo "Waiting for ${url} (poll 1s, up to ${max_sec}s wall clock)..."
+
+  while true; do
+    now="$(_asa_healthz_now)"
+    remaining=$((deadline - now))
+    if [ "$remaining" -le 0 ]; then
+      break
+    fi
+
+    mt="$curl_cap"
+    if [ "$mt" -gt "$remaining" ]; then
+      mt="$remaining"
+    fi
+    if [ "$mt" -lt 1 ]; then
+      mt=1
+    fi
+
+    if curl -fsS --connect-timeout "$mt" --max-time "$mt" "$url" >/dev/null 2>&1; then
+      now="$(_asa_healthz_now)"
+      echo "healthz OK after $((now - start))s"
       # Show body once for the install log (no secrets on this endpoint).
-      curl -fsS --connect-timeout 1 --max-time 2 "$url" || true
+      curl -fsS --connect-timeout "$mt" --max-time "$mt" "$url" || true
       echo
       return 0
     fi
-    i=$((i + 1))
-    sleep 1
+
+    now="$(_asa_healthz_now)"
+    remaining=$((deadline - now))
+    if [ "$remaining" -le 0 ]; then
+      break
+    fi
+
+    sl=1
+    if [ "$sl" -gt "$remaining" ]; then
+      sl="$remaining"
+    fi
+    _asa_healthz_sleep "$sl"
   done
+
   echo "FATAL: ${url} not ready within ${max_sec}s"
   return 1
 }
