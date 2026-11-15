@@ -1371,6 +1371,42 @@ ensure_certbot_timer_and_dry_run() {
   return 0
 }
 
+# Poll local uvicorn health until ready (startup can exceed a fixed sleep).
+# Usage: wait_for_local_healthz [url] [max_seconds]
+# Returns 0 when curl -fsS succeeds; 1 on timeout. Does not roll back.
+wait_for_local_healthz() {
+  local url="${1:-http://127.0.0.1:8080/api/healthz}"
+  local max_sec="${2:-60}"
+  local i=0
+  echo "Waiting for ${url} (poll 1s, up to ${max_sec}s)..."
+  while [ "$i" -lt "$max_sec" ]; do
+    if curl -fsS --connect-timeout 1 --max-time 2 "$url" >/dev/null 2>&1; then
+      echo "healthz OK after ${i}s"
+      # Show body once for the install log (no secrets on this endpoint).
+      curl -fsS --connect-timeout 1 --max-time 2 "$url" || true
+      echo
+      return 0
+    fi
+    i=$((i + 1))
+    sleep 1
+  done
+  echo "FATAL: ${url} not ready within ${max_sec}s"
+  return 1
+}
+
+# Emit systemd/journal diagnostics before rollback (no secrets / no env dump).
+report_service_smoke_diagnostics() {
+  echo "=== diagnostics before rollback (asa-physio.service) ==="
+  systemctl status asa-physio.service --no-pager -l 2>&1 || true
+  systemctl show asa-physio.service \
+    -p MainPID -p ActiveState -p SubState -p Result -p ExecMainStatus -p NRestarts 2>&1 || true
+  echo "MainPID=$(systemctl show -p MainPID --value asa-physio.service 2>/dev/null || echo unknown)"
+  # Recent logs only; do not cat EnvironmentFile / .env.
+  if command -v journalctl >/dev/null 2>&1; then
+    sudo journalctl -u asa-physio.service -n 80 --no-pager 2>&1 || true
+  fi
+}
+
 fail_partial_install() {
   local reason="$1"
   # exit does not re-enter ERR, but clear trap anyway to avoid any nested set -e surprises.
@@ -1661,11 +1697,11 @@ sudo systemctl daemon-reload
 sudo systemctl enable asa-physio.service
 sudo systemctl restart asa-physio.service
 set_install_phase "service"
-sleep 2
-if ! curl -fsS "http://127.0.0.1:8080/api/healthz"; then
+# Uvicorn often needs >2s after systemd start; poll healthz instead of a fixed sleep.
+if ! wait_for_local_healthz "http://127.0.0.1:8080/api/healthz" 60; then
+  report_service_smoke_diagnostics
   fail_partial_install "failed_smoke_healthz"
 fi
-echo
 READY_JSON="$(curl -fsS "http://127.0.0.1:8080/api/readyz")" || fail_partial_install "failed_smoke_readyz"
 echo "$READY_JSON"
 IDX_CODE="$(curl -sS -o /dev/null -w "%{http_code}" --connect-timeout 5 "http://127.0.0.1:8080/" || true)"
