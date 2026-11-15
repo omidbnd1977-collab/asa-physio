@@ -1020,6 +1020,7 @@ RUN_BACKUP_DIR=${RUN_BACKUP_DIR}
 OVERRIDE_ENV=${OVERRIDE_ENV}
 APP_ROOT=${APP_ROOT}
 DB_FILE=${DB_FILE}
+UPLOAD_DIR=${UPLOAD_DIR_VALIDATED}
 UNIT_PATH=${UNIT_PATH}
 NGINX_AVAILABLE=${NGINX_AVAILABLE}
 NGINX_ENABLED=${NGINX_ENABLED}
@@ -1028,6 +1029,7 @@ DB_STATE_FILE=${DB_STATE_FILE}
 
 Artifacts:
   ${RUN_BACKUP_DIR}/asa-physio-tree.tar.gz
+      (full APP_ROOT tree excluding .venv/__pycache__ only; includes UPLOAD_DIR=${UPLOAD_DIR_VALIDATED})
   ${RUN_BACKUP_DIR}/asa-physio-tree.tar.gz.sha256
   ${RUN_BACKUP_DIR}/env.production.bak
   ${RUN_BACKUP_DIR}/env.production.bak.sha256
@@ -1068,7 +1070,7 @@ if [ -f ${RUN_BACKUP_DIR}/asa-physio-tree.tar.gz.sha256 ]; then
   sudo sha256sum -c ${RUN_BACKUP_DIR}/asa-physio-tree.tar.gz.sha256
 fi
 sudo tar -xzf ${RUN_BACKUP_DIR}/asa-physio-tree.tar.gz -C /opt
-echo "Pre-install tree extracted from asa-physio-tree.tar.gz"
+echo "Pre-install tree extracted from asa-physio-tree.tar.gz (includes UPLOAD_DIR=${UPLOAD_DIR_VALIDATED} when under APP_ROOT)"
 
 # 1b) rebuild .venv (excluded from tree tar) from restored requirements.txt
 cd ${APP_ROOT}
@@ -1272,6 +1274,18 @@ EOF
     echo "FATAL: RESTORE.txt missing tree quarantine step"
     exit 1
   fi
+  if [ -z "${UPLOAD_DIR_VALIDATED:-}" ]; then
+    echo "FATAL: write_restore_notes requires non-empty UPLOAD_DIR_VALIDATED"
+    exit 1
+  fi
+  if ! grep -Fq "UPLOAD_DIR=${UPLOAD_DIR_VALIDATED}" "$RESTORE_NOTES"; then
+    echo "FATAL: RESTORE.txt missing validated UPLOAD_DIR=${UPLOAD_DIR_VALIDATED}"
+    exit 1
+  fi
+  if ! grep -Fq "includes UPLOAD_DIR=${UPLOAD_DIR_VALIDATED}" "$RESTORE_NOTES"; then
+    echo "FATAL: RESTORE.txt missing tree-tar UPLOAD_DIR coverage note"
+    exit 1
+  fi
   if ! grep -Fq "asa-physio.service.enabled.state" "$RESTORE_NOTES"; then
     echo "FATAL: RESTORE.txt missing systemd enable-state restore"
     exit 1
@@ -1422,6 +1436,7 @@ warn_previous_incomplete_runs
 mark_install_incomplete
 
 echo "=== new safety backups (before any mutate) ==="
+echo "Tree tar will include UPLOAD_DIR=${UPLOAD_DIR_VALIDATED} (validated under APP_ROOT; .venv excluded)"
 sudo tar -czf "${RUN_BACKUP_DIR}/asa-physio-tree.tar.gz" \
   --exclude='.venv' \
   --exclude='__pycache__' \
@@ -1680,8 +1695,12 @@ sudo ln -sfn "$NGINX_AVAILABLE" "$NGINX_ENABLED"
 if [ -e "$NGINX_DEFAULT_ENABLED" ] || [ -L "$NGINX_DEFAULT_ENABLED" ]; then
   sudo rm -f "$NGINX_DEFAULT_ENABLED"
 fi
-sudo nginx -t
-sudo systemctl reload nginx
+if ! sudo nginx -t; then
+  fail_partial_install "failed_nginx_config_test"
+fi
+if ! sudo systemctl reload nginx; then
+  fail_partial_install "failed_nginx_reload"
+fi
 set_install_phase "nginx"
 
 echo "=== DNS gate + Certbot (both hostnames required unless SKIP) ==="
