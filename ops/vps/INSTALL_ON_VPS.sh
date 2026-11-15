@@ -1371,59 +1371,87 @@ ensure_certbot_timer_and_dry_run() {
   return 0
 }
 
-# Optional hooks for tests (fake clock / sleep). Production uses date + sleep.
-_asa_healthz_now() { date +%s; }
+# Monotonic-ish wall clock in nanoseconds (Ubuntu: date +%s%N). Overridable in tests.
+_asa_healthz_now_ns() {
+  local raw
+  raw="$(date +%s%N 2>/dev/null || true)"
+  if [[ "$raw" =~ ^[0-9]+$ ]] && [ "${#raw}" -ge 13 ]; then
+    printf '%s\n' "$raw"
+    return 0
+  fi
+  # Fallback when %N unsupported (e.g. some non-GNU date): second resolution as ns.
+  printf '%s000000000\n' "$(date +%s)"
+}
+
+# Sleep helper (seconds, may be fractional). Overridable in tests.
 _asa_healthz_sleep() { sleep "$1"; }
 
+# Format nanoseconds budget as curl --max-time / --connect-timeout (seconds, 3dp).
+_asa_healthz_ns_to_curl_s() {
+  awk -v ns="$1" 'BEGIN {
+    if (ns < 1000000) { printf "0.001"; exit }
+    printf "%.3f", ns / 1e9
+  }'
+}
+
 # Poll local uvicorn health until ready (startup can exceed a fixed sleep).
-# Deadline is wall-clock elapsed time (default 60s), not iteration count.
-# Poll cadence ~1s; each curl is capped so the loop cannot overrun the deadline.
+# Deadline is high-resolution wall clock (default 60s), not iteration count.
+# Each curl budget is derived from remaining time (capped ~1s); no second body fetch.
 # Usage: wait_for_local_healthz [url] [max_seconds]
-# Returns 0 when curl -fsS succeeds; 1 on timeout. Does not roll back.
+# Returns 0 when curl succeeds before deadline; 1 on timeout. Does not roll back.
 wait_for_local_healthz() {
   local url="${1:-http://127.0.0.1:8080/api/healthz}"
   local max_sec="${2:-60}"
-  local start now deadline remaining mt sl
-  local curl_cap=1
+  local start_ns now_ns deadline_ns remaining_ns budget_ns poll_ns body elapsed_ns
+  local mt sl
+  local curl_cap_ns=1000000000
+  local min_curl_ns=1000000
 
-  start="$(_asa_healthz_now)"
-  deadline=$((start + max_sec))
+  start_ns="$(_asa_healthz_now_ns)"
+  deadline_ns=$((start_ns + max_sec * 1000000000))
   echo "Waiting for ${url} (poll 1s, up to ${max_sec}s wall clock)..."
 
   while true; do
-    now="$(_asa_healthz_now)"
-    remaining=$((deadline - now))
-    if [ "$remaining" -le 0 ]; then
+    now_ns="$(_asa_healthz_now_ns)"
+    remaining_ns=$((deadline_ns - now_ns))
+    if [ "$remaining_ns" -le 0 ]; then
+      break
+    fi
+    if [ "$remaining_ns" -lt "$min_curl_ns" ]; then
       break
     fi
 
-    mt="$curl_cap"
-    if [ "$mt" -gt "$remaining" ]; then
-      mt="$remaining"
+    budget_ns="$curl_cap_ns"
+    if [ "$budget_ns" -gt "$remaining_ns" ]; then
+      budget_ns="$remaining_ns"
     fi
-    if [ "$mt" -lt 1 ]; then
-      mt=1
-    fi
+    mt="$(_asa_healthz_ns_to_curl_s "$budget_ns")"
 
-    if curl -fsS --connect-timeout "$mt" --max-time "$mt" "$url" >/dev/null 2>&1; then
-      now="$(_asa_healthz_now)"
-      echo "healthz OK after $((now - start))s"
-      # Show body once for the install log (no secrets on this endpoint).
-      curl -fsS --connect-timeout "$mt" --max-time "$mt" "$url" || true
-      echo
+    body=""
+    if body="$(curl -fsS --connect-timeout "$mt" --max-time "$mt" "$url" 2>/dev/null)"; then
+      now_ns="$(_asa_healthz_now_ns)"
+      if [ "$now_ns" -gt "$deadline_ns" ]; then
+        echo "FATAL: ${url} responded after ${max_sec}s deadline"
+        return 1
+      fi
+      elapsed_ns=$((now_ns - start_ns))
+      echo "healthz OK after $(awk -v ns="$elapsed_ns" 'BEGIN{printf "%.3f", ns/1e9}')s"
+      # Body from the same request (no second curl that could overrun the deadline).
+      printf '%s\n' "$body"
       return 0
     fi
 
-    now="$(_asa_healthz_now)"
-    remaining=$((deadline - now))
-    if [ "$remaining" -le 0 ]; then
+    now_ns="$(_asa_healthz_now_ns)"
+    remaining_ns=$((deadline_ns - now_ns))
+    if [ "$remaining_ns" -le 0 ]; then
       break
     fi
 
-    sl=1
-    if [ "$sl" -gt "$remaining" ]; then
-      sl="$remaining"
+    poll_ns=1000000000
+    if [ "$poll_ns" -gt "$remaining_ns" ]; then
+      poll_ns="$remaining_ns"
     fi
+    sl="$(awk -v ns="$poll_ns" 'BEGIN{printf "%.3f", ns/1e9}')"
     _asa_healthz_sleep "$sl"
   done
 
