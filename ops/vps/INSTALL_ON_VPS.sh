@@ -1563,7 +1563,15 @@ set +a
 # Force validated paths so migrate/backup/rollback stay on the same DB/uploads tree.
 export DB_PATH="$DB_FILE"
 export UPLOAD_DIR="$UPLOAD_DIR_VALIDATED"
+# Bind safe sinks IMMEDIATELY after sourcing .env so migrate/seed/shell never use
+# production SMS.ir credentials even before runtime-overrides.env exists.
+# Values are non-secret sink URLs; do not print other env contents.
 export REMINDER_BACKGROUND=0
+export SMS_PROVIDER=webhook
+export SMS_WEBHOOK=http://127.0.0.1:9/asa-sms-sink
+export NOTIFY_PROVIDER=webhook
+export NOTIFY_WEBHOOK=http://127.0.0.1:9/asa-notify-sink
+echo "install-shell SMS/notify/reminder sinks bound (webhook + REMINDER_BACKGROUND=0; no SMS.ir)."
 # Re-check after source: reject any attempt to escape APP_ROOT via sourced env.
 case "$UPLOAD_DIR" in
   "$APP_ROOT"/*) ;;
@@ -1618,7 +1626,9 @@ sudo grep -E '^(REMINDER_BACKGROUND|SMS_PROVIDER|SMS_WEBHOOK|NOTIFY_PROVIDER|NOT
   "$OVERRIDE_ENV"
 
 echo "=== write systemd unit ==="
-sudo tee "$UNIT_PATH" >/dev/null <<'UNIT'
+# ReadWritePaths must include validated UPLOAD_DIR (always under APP_ROOT).
+# UNIT heredoc is unquoted only for UPLOAD_DIR_VALIDATED expansion — no secrets.
+sudo tee "$UNIT_PATH" >/dev/null <<UNIT
 [Unit]
 Description=ASA Physio FastAPI (uvicorn)
 After=network.target
@@ -1636,7 +1646,7 @@ Environment=WORKERS=1
 ExecStart=/opt/asa-physio/.venv/bin/uvicorn api.main:app --host 127.0.0.1 --port 8080 --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1
 Restart=on-failure
 RestartSec=5
-ReadWritePaths=/opt/asa-physio/data
+ReadWritePaths=/opt/asa-physio/data ${UPLOAD_DIR_VALIDATED}
 NoNewPrivileges=true
 
 [Install]
@@ -1748,7 +1758,7 @@ else
     echo "WARNING: using --register-unsafely-without-email (explicit CERTBOT_NO_EMAIL=1)"
   else
     echo "FATAL: internal error — cert policy gate should have stopped earlier"
-    exit 1
+    fail_partial_install "failed_https_internal_cert_policy"
   fi
 
   if ! sudo certbot "${CERTBOT_ARGS[@]}"; then
