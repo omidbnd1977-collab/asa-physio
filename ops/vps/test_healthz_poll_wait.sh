@@ -123,12 +123,28 @@ run_py() {
 }
 
 # --- Runtime A: delayed success (real short delay) ---
-run_py - "$PORT" "$DELAY_SEC" <<'PY' &
-import sys, time
+#
+# Root cause of ~450s wall time on Git Bash/Windows (pre-fix):
+# after taskkill, `kill -0` fails and the old cleanup called `wait $pid`,
+# which can hang indefinitely under MINGW/MSYS. That is NOT normal test work
+# (logical tests finish in ~15–20s; the rest was cleanup hang).
+_is_windows_bash() {
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) return 0 ;;
+  esac
+  return 1
+}
+
+SERVER_PIDFILE="$(mktemp "${TMPDIR:-/tmp}/asa-healthz-pid.XXXXXX")"
+run_py - "$PORT" "$DELAY_SEC" "$SERVER_PIDFILE" <<'PY' &
+import os, sys, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 port = int(sys.argv[1])
 delay = float(sys.argv[2])
+pidfile = sys.argv[3]
+with open(pidfile, "w", encoding="ascii") as fh:
+    fh.write(str(os.getpid()))
 t0 = time.time()
 
 class H(BaseHTTPRequestHandler):
@@ -152,36 +168,66 @@ class H(BaseHTTPRequestHandler):
 
 HTTPServer(("127.0.0.1", port), H).serve_forever()
 PY
-SERVER_PID=$!
-# Stop the delayed HTTP server without hanging forever on Windows/Git Bash wait.
+BG_JOB_PID=$!
+# Prefer real Python PID from pidfile (Git Bash $! may be a wrapper).
+SERVER_PID=""
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if [ -s "$SERVER_PIDFILE" ]; then
+    SERVER_PID="$(tr -d '[:space:]' <"$SERVER_PIDFILE" || true)"
+    [ -n "$SERVER_PID" ] && break
+  fi
+  sleep 0.1
+done
+[ -n "$SERVER_PID" ] || SERVER_PID="$BG_JOB_PID"
+
+# Stop server without unbounded wait (Git Bash hang after taskkill).
 cleanup() {
   local pid="${SERVER_PID:-}"
+  local job="${BG_JOB_PID:-}"
+  local port="${PORT:-}"
+  local pf="${SERVER_PIDFILE:-}"
   SERVER_PID=""
-  [ -n "$pid" ] || return 0
-  # Windows: taskkill first (tree), then POSIX kill; never unbounded wait.
+  BG_JOB_PID=""
+
   if command -v taskkill >/dev/null 2>&1; then
-    taskkill //F //T //PID "$pid" 2>/dev/null || true
+    [ -n "$pid" ] && taskkill //F //T //PID "$pid" 2>/dev/null || true
+    [ -n "$job" ] && [ "$job" != "$pid" ] && taskkill //F //T //PID "$job" 2>/dev/null || true
   fi
-  kill "$pid" 2>/dev/null || true
+  [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+  [ -n "$job" ] && kill "$job" 2>/dev/null || true
+
+  # Free the listen port if an orphan still holds it (Windows).
+  if [ -n "$port" ] && command -v powershell.exe >/dev/null 2>&1; then
+    powershell.exe -NoProfile -Command \
+      "Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }" \
+      >/dev/null 2>&1 || true
+  fi
+
+  rm -f "$pf" 2>/dev/null || true
+
+  # CRITICAL: never call bare `wait` after taskkill on Git Bash — it can hang ~minutes.
+  if _is_windows_bash; then
+    return 0
+  fi
+
+  # Linux/macOS: bounded poll then short wait.
   local n=0
   while [ "$n" -lt 20 ]; do
-    if ! kill -0 "$pid" 2>/dev/null; then
-      wait "$pid" 2>/dev/null || true
+    local alive=0
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && alive=1
+    [ -n "$job" ] && kill -0 "$job" 2>/dev/null && alive=1
+    if [ "$alive" -eq 0 ]; then
+      [ -n "$pid" ] && wait "$pid" 2>/dev/null || true
+      [ -n "$job" ] && [ "$job" != "$pid" ] && wait "$job" 2>/dev/null || true
       return 0
     fi
-    sleep 0.1 2>/dev/null || sleep 1
+    sleep 0.1
     n=$((n + 1))
   done
-  kill -KILL "$pid" 2>/dev/null || true
-  if command -v taskkill >/dev/null 2>&1; then
-    taskkill //F //T //PID "$pid" 2>/dev/null || true
-  fi
-  # Last reap attempt — bounded so cleanup cannot block the suite.
+  [ -n "$pid" ] && kill -KILL "$pid" 2>/dev/null || true
+  [ -n "$job" ] && kill -KILL "$job" 2>/dev/null || true
   if command -v timeout >/dev/null 2>&1; then
-    timeout 1 bash -c "wait $pid" 2>/dev/null || true
-  else
-    ( wait "$pid" 2>/dev/null || true ) &
-    sleep 0.3 2>/dev/null || true
+    [ -n "$pid" ] && timeout 1 bash -c "wait $pid" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
