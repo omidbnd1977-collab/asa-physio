@@ -58,7 +58,8 @@ printf '%s\n' "$fn_body" | grep -q 'deadline_ns=' || fail "deadline_ns missing"
 if printf '%s\n' "$fn_body" | grep -E 'healthz OK' -A8 | grep -E 'curl\s+-fsS' | grep -q .; then
   fail "second curl after success still present"
 fi
-printf '%s\n' "$fn_body" | grep -q 'responded after' || fail "post-success deadline check missing"
+printf '%s\n' "$fn_body" | grep -q 'at or after' || fail "post-success deadline check missing (>=)"
+printf '%s\n' "$fn_body" | grep -q '\-ge "\$deadline_ns"' || fail "deadline compare must use -ge"
 smoke_region="$(awk '/sudo systemctl restart asa-physio.service/,/verify effective SMS/' "$INSTALL")"
 printf '%s\n' "$smoke_region" | grep -q 'wait_for_local_healthz' || fail "smoke path missing wait_for_local_healthz"
 if printf '%s\n' "$smoke_region" | grep -E '^\s*sleep 2\s*$' | grep -q .; then
@@ -152,11 +153,35 @@ class H(BaseHTTPRequestHandler):
 HTTPServer(("127.0.0.1", port), H).serve_forever()
 PY
 SERVER_PID=$!
+# Stop the delayed HTTP server without hanging forever on Windows/Git Bash wait.
 cleanup() {
-  kill "$SERVER_PID" 2>/dev/null || true
-  wait "$SERVER_PID" 2>/dev/null || true
+  local pid="${SERVER_PID:-}"
+  SERVER_PID=""
+  [ -n "$pid" ] || return 0
+  # Windows: taskkill first (tree), then POSIX kill; never unbounded wait.
   if command -v taskkill >/dev/null 2>&1; then
-    taskkill //F //PID "$SERVER_PID" 2>/dev/null || true
+    taskkill //F //T //PID "$pid" 2>/dev/null || true
+  fi
+  kill "$pid" 2>/dev/null || true
+  local n=0
+  while [ "$n" -lt 20 ]; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      wait "$pid" 2>/dev/null || true
+      return 0
+    fi
+    sleep 0.1 2>/dev/null || sleep 1
+    n=$((n + 1))
+  done
+  kill -KILL "$pid" 2>/dev/null || true
+  if command -v taskkill >/dev/null 2>&1; then
+    taskkill //F //T //PID "$pid" 2>/dev/null || true
+  fi
+  # Last reap attempt — bounded so cleanup cannot block the suite.
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 1 bash -c "wait $pid" 2>/dev/null || true
+  else
+    ( wait "$pid" 2>/dev/null || true ) &
+    sleep 0.3 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
@@ -218,12 +243,29 @@ if [ "$wall_elapsed" -ge 15 ]; then
 fi
 pass "runtime: timeout respects 60s ns deadline via fake clock (fake=${fake_elapsed_s}s wall=${wall_elapsed}s sleeps=${FAKE_SLEEPS})"
 
-# --- Runtime C: success after deadline must be rejected ---
+# --- Runtime C: success exactly ON deadline must be rejected ---
 FAKE_NOW_NS=0
 _asa_healthz_now_ns() { echo "$FAKE_NOW_NS"; }
-_asa_healthz_sleep() { fail "sleep should not run on immediate post-deadline success path"; }
+_asa_healthz_sleep() { fail "sleep should not run on on-deadline success path"; }
 curl() {
-  # Simulate slow response that only "finishes" after the 60s deadline.
+  FAKE_NOW_NS=$((60 * 1000000000))
+  printf '%s\n' '{"ok":true}'
+  return 0
+}
+set +e
+out="$(wait_for_local_healthz "http://127.0.0.1:9/api/healthz" 60 2>&1)"
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "on-deadline success must return 1, got $rc"
+printf '%s\n' "$out" | grep -q 'at or after' || fail "expected at-or-after-deadline message (on)"
+printf '%s\n' "$out" | grep -q 'healthz OK' && fail "must not claim healthz OK on deadline"
+pass "runtime: successful response exactly on deadline is rejected"
+
+# --- Runtime D: success AFTER deadline must be rejected ---
+FAKE_NOW_NS=0
+_asa_healthz_now_ns() { echo "$FAKE_NOW_NS"; }
+_asa_healthz_sleep() { fail "sleep should not run on post-deadline success path"; }
+curl() {
   FAKE_NOW_NS=$((60 * 1000000000 + 1))
   printf '%s\n' '{"ok":true}'
   return 0
@@ -233,7 +275,7 @@ out="$(wait_for_local_healthz "http://127.0.0.1:9/api/healthz" 60 2>&1)"
 rc=$?
 set -e
 [ "$rc" -eq 1 ] || fail "post-deadline success must return 1, got $rc"
-printf '%s\n' "$out" | grep -q 'responded after' || fail "expected responded-after-deadline message"
+printf '%s\n' "$out" | grep -q 'at or after' || fail "expected at-or-after-deadline message (after)"
 printf '%s\n' "$out" | grep -q 'healthz OK' && fail "must not claim healthz OK after deadline"
 pass "runtime: successful response after deadline is rejected"
 

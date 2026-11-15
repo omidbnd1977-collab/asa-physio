@@ -1449,9 +1449,10 @@ wait_for_local_healthz() {
     curl_body_tmp="$(mktemp)"
     if curl -fsS --connect-timeout "$mt" --max-time "$mt" -o "$curl_body_tmp" "$url" 2>/dev/null; then
       now_ns="$(_asa_healthz_now_ns)"
-      if [ "$now_ns" -gt "$deadline_ns" ]; then
+      # Reject at deadline as well as past it (now >= deadline).
+      if [ "$now_ns" -ge "$deadline_ns" ]; then
         rm -f "$curl_body_tmp"
-        echo "FATAL: ${url} responded after ${max_sec}s deadline"
+        echo "FATAL: ${url} responded at or after ${max_sec}s deadline"
         return 1
       fi
       body="$(<"$curl_body_tmp")"
