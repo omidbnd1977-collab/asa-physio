@@ -1270,19 +1270,22 @@ sudo nginx -t && sudo systemctl reload nginx
 echo "RESTORE procedure finished issuing commands — SUCCESS NOT CLAIMED until operator verifies."
 EOF
   # Sanity before chmod 600: RESTORE must embed validated DB_FILE (and wal/shm siblings).
-  if ! grep -Fq "DB_FILE=${DB_FILE}" "$RESTORE_NOTES"; then
+  # Bootstrap dir is root:root 700 and RESTORE is written via sudo tee — operator cannot
+  # read it without root. All checks MUST use sudo grep (do not chmod the dir world-readable).
+  if ! sudo grep -Fq -- "DB_FILE=${DB_FILE}" "$RESTORE_NOTES"; then
     echo "FATAL: RESTORE.txt missing validated DB_FILE=${DB_FILE}"
     exit 1
   fi
-  if ! grep -Fq "${DB_FILE}-wal" "$RESTORE_NOTES" || ! grep -Fq "${DB_FILE}-shm" "$RESTORE_NOTES"; then
+  if ! sudo grep -Fq -- "${DB_FILE}-wal" "$RESTORE_NOTES" \
+    || ! sudo grep -Fq -- "${DB_FILE}-shm" "$RESTORE_NOTES"; then
     echo "FATAL: RESTORE.txt missing ${DB_FILE}-wal/${DB_FILE}-shm rollback paths"
     exit 1
   fi
-  if ! grep -Fq "asa.db.pre-migrate ${DB_FILE}" "$RESTORE_NOTES"; then
+  if ! sudo grep -Fq -- "asa.db.pre-migrate ${DB_FILE}" "$RESTORE_NOTES"; then
     echo "FATAL: RESTORE.txt restore-copy target is not validated DB_FILE"
     exit 1
   fi
-  if ! grep -Fq "quarantine-tree-before-restore" "$RESTORE_NOTES"; then
+  if ! sudo grep -Fq -- "quarantine-tree-before-restore" "$RESTORE_NOTES"; then
     echo "FATAL: RESTORE.txt missing tree quarantine step"
     exit 1
   fi
@@ -1290,40 +1293,41 @@ EOF
     echo "FATAL: write_restore_notes requires non-empty UPLOAD_DIR_VALIDATED"
     exit 1
   fi
-  if ! grep -Fq "UPLOAD_DIR=${UPLOAD_DIR_VALIDATED}" "$RESTORE_NOTES"; then
+  if ! sudo grep -Fq -- "UPLOAD_DIR=${UPLOAD_DIR_VALIDATED}" "$RESTORE_NOTES"; then
     echo "FATAL: RESTORE.txt missing validated UPLOAD_DIR=${UPLOAD_DIR_VALIDATED}"
     exit 1
   fi
-  if ! grep -Fq "includes UPLOAD_DIR=${UPLOAD_DIR_VALIDATED}" "$RESTORE_NOTES"; then
+  if ! sudo grep -Fq -- "includes UPLOAD_DIR=${UPLOAD_DIR_VALIDATED}" "$RESTORE_NOTES"; then
     echo "FATAL: RESTORE.txt missing tree-tar UPLOAD_DIR coverage note"
     exit 1
   fi
-  if ! grep -Fq "asa-physio.service.enabled.state" "$RESTORE_NOTES"; then
+  if ! sudo grep -Fq -- "asa-physio.service.enabled.state" "$RESTORE_NOTES"; then
     echo "FATAL: RESTORE.txt missing systemd enable-state restore"
     exit 1
   fi
-  if ! grep -Fq "asa-physio.service.active.state" "$RESTORE_NOTES"; then
+  if ! sudo grep -Fq -- "asa-physio.service.active.state" "$RESTORE_NOTES"; then
     echo "FATAL: RESTORE.txt missing systemd active-state restore"
     exit 1
   fi
-  if ! grep -Fq "certbot.timer.enabled.state" "$RESTORE_NOTES"; then
+  if ! sudo grep -Fq -- "certbot.timer.enabled.state" "$RESTORE_NOTES"; then
     echo "FATAL: RESTORE.txt missing certbot.timer state restore"
     exit 1
   fi
-  if ! grep -Fq "NEVER start only because the unit file exists" "$RESTORE_NOTES" \
-    && ! grep -Fq "do not start merely because unit exists" "$RESTORE_NOTES"; then
+  if ! sudo grep -Fq -- "NEVER start only because the unit file exists" "$RESTORE_NOTES" \
+    && ! sudo grep -Fq -- "do not start merely because unit exists" "$RESTORE_NOTES"; then
     echo "FATAL: RESTORE.txt missing active-state start guard wording"
     exit 1
   fi
   # Order: overrides restore marker must appear before service-start marker.
-  _ov_line="$(grep -n 'MARKER: overrides-before-service-start' "$RESTORE_NOTES" | head -n1 | cut -d: -f1 || true)"
-  _st_line="$(grep -n 'MARKER: service-start-after-overrides' "$RESTORE_NOTES" | head -n1 | cut -d: -f1 || true)"
+  _ov_line="$(sudo grep -n -- 'MARKER: overrides-before-service-start' "$RESTORE_NOTES" | head -n1 | cut -d: -f1 || true)"
+  _st_line="$(sudo grep -n -- 'MARKER: service-start-after-overrides' "$RESTORE_NOTES" | head -n1 | cut -d: -f1 || true)"
   if [ -z "${_ov_line:-}" ] || [ -z "${_st_line:-}" ] || [ "$_ov_line" -ge "$_st_line" ]; then
     echo "FATAL: RESTORE.txt must restore runtime-overrides.env before starting the service"
     exit 1
   fi
-  if ! grep -Fq "rebuild .venv" "$RESTORE_NOTES" && ! grep -Fq "venv rebuilt" "$RESTORE_NOTES"; then
-    if ! grep -Fq "python3 -m venv" "$RESTORE_NOTES"; then
+  if ! sudo grep -Fq -- "rebuild .venv" "$RESTORE_NOTES" \
+    && ! sudo grep -Fq -- "venv rebuilt" "$RESTORE_NOTES"; then
+    if ! sudo grep -Fq -- "python3 -m venv" "$RESTORE_NOTES"; then
       echo "FATAL: RESTORE.txt missing venv rebuild steps"
       exit 1
     fi
