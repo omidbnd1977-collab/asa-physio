@@ -55,6 +55,12 @@ INSTALL_PHASE="preflight"
 INSTALL_OUTCOME="failed_other"
 NON_DB_ROLLBACK_ATTEMPTED=0
 NON_DB_ROLLBACK_VERIFIED=0
+CERTBOT_TIMER_RESTORE_ATTEMPTED=0
+CERTBOT_TIMER_RESTORE_VERIFIED=0
+# Guard so fail_partial_install / on_err never double-run rollback or hints.
+HANDLING_FAILURE=0
+# Validated under APP_ROOT (like DB_FILE). Set in preflight; forced after sourcing .env.
+UPLOAD_DIR_VALIDATED=""
 
 umask 077
 
@@ -141,6 +147,81 @@ PY
       ;;
   esac
   echo "DB_FILE validated: $DB_FILE"
+}
+
+# Read ONLY UPLOAD_DIR from .env.production (no secret dump). Must stay under APP_ROOT.
+# Empty key → hard stop. Unset → default <APP_ROOT>/data/uploads.
+resolve_upload_dir_from_env() {
+  local envf="$APP_ROOT/.env.production"
+  _up_rel="$(
+    APP_ROOT="$APP_ROOT" ENVF="$envf" python3 - <<'PY'
+import os, re, sys
+from pathlib import Path
+
+app = Path(os.environ["APP_ROOT"]).resolve()
+envf = Path(os.environ["ENVF"])
+if not envf.is_file():
+    print("FATAL: .env.production missing while resolving UPLOAD_DIR", file=sys.stderr)
+    sys.exit(2)
+
+raw = None
+for line in envf.read_text(encoding="utf-8", errors="replace").splitlines():
+    s = line.strip()
+    if not s or s.startswith("#"):
+        continue
+    if s.startswith("export "):
+        s = s[7:].strip()
+    if re.match(r"^UPLOAD_DIR\s*=", s):
+        raw = s.split("=", 1)[1].strip()
+        if (raw.startswith('"') and raw.endswith('"')) or (raw.startswith("'") and raw.endswith("'")):
+            raw = raw[1:-1]
+        break
+
+if raw is not None and raw == "":
+    print(
+        "FATAL: UPLOAD_DIR is present in .env.production but empty — refusing to continue",
+        file=sys.stderr,
+    )
+    sys.exit(6)
+
+if raw is None:
+    candidate = (app / "data" / "uploads").resolve()
+else:
+    p = Path(raw)
+    candidate = p.resolve() if p.is_absolute() else (app / p).resolve()
+
+try:
+    rel = candidate.relative_to(app)
+except ValueError:
+    print(
+        f"FATAL: UPLOAD_DIR resolves outside APP_ROOT ({app}): refused",
+        file=sys.stderr,
+    )
+    sys.exit(3)
+
+if candidate.exists() and not candidate.is_dir():
+    print("FATAL: UPLOAD_DIR exists but is not a directory", file=sys.stderr)
+    sys.exit(4)
+
+print(rel.as_posix())
+PY
+  )" || {
+    echo "FATAL: could not extract/validate UPLOAD_DIR from .env.production — no changes made"
+    return 1
+  }
+  if [ -z "${_up_rel:-}" ] || [[ "$_up_rel" == /* ]] || [[ "$_up_rel" == *..* ]]; then
+    echo "FATAL: invalid relative UPLOAD_DIR from resolver — no changes made"
+    return 1
+  fi
+  UPLOAD_DIR_VALIDATED="${APP_ROOT%/}/${_up_rel}"
+  case "$UPLOAD_DIR_VALIDATED" in
+    "$APP_ROOT"/*) ;;
+    *)
+      echo "FATAL: UPLOAD_DIR not under APP_ROOT after resolve — no changes made"
+      return 1
+      ;;
+  esac
+  echo "UPLOAD_DIR validated under APP_ROOT: $UPLOAD_DIR_VALIDATED"
 }
 
 protect_file() {
@@ -278,6 +359,30 @@ safe_non_db_rollback_attempt() {
         ;;
     esac
   fi
+
+  # Active/inactive: restore exact prior runtime state (do NOT start merely because unit exists).
+  if sudo test -f "${RUN_BACKUP_DIR}/asa-physio.service.active.state"; then
+    _act="$(sudo cat "${RUN_BACKUP_DIR}/asa-physio.service.active.state" 2>/dev/null || echo inactive)"
+    case "$_act" in
+      active|activating|reloading)
+        if [ -f "$UNIT_PATH" ]; then
+          sudo systemctl start asa-physio.service || ok=0
+        else
+          echo "WARN: prior active=$_act but unit missing after rollback — cannot start"
+          ok=0
+        fi
+        ;;
+      *)
+        sudo systemctl stop asa-physio.service 2>/dev/null || true
+        ;;
+    esac
+  else
+    # No recorded active state: prefer stop over speculative start.
+    sudo systemctl stop asa-physio.service 2>/dev/null || true
+  fi
+
+  # certbot.timer prior enabled/active (separate verification flag)
+  restore_certbot_timer_prior_state || ok=0
 
   # overrides
   if sudo test -f "${RUN_BACKUP_DIR}/runtime-overrides.env.prev"; then
@@ -549,8 +654,8 @@ PY
 require_owner_probe_readable() {
   local where="$1"
   if [ "$OWNER_PROBE_STATUS" = "unreadable" ]; then
-    echo "FATAL: owner probe unreadable (${where}) — not treating as zero owners. Install stopped; success NOT claimed."
-    exit 1
+    echo "FATAL: owner probe unreadable (${where}) — not treating as zero owners."
+    fail_partial_install "failed_owner_probe_unreadable_${where// /_}"
   fi
 }
 
@@ -578,7 +683,7 @@ record_owner_pre_state() {
       ;;
     *)
       echo "FATAL: unexpected owner probe status=${OWNER_PROBE_STATUS}"
-      exit 1
+      fail_partial_install "failed_owner_probe_unexpected_prestate"
       ;;
   esac
 
@@ -612,7 +717,7 @@ prompt_initial_owner_credentials() {
   if [ ! -t 0 ]; then
     echo "FATAL: no role=owner and ADMIN_PASSWORD unset; cannot prompt on non-TTY"
     echo "Export ADMIN_USER/ADMIN_PASSWORD for this shell only, then re-run. .env.production untouched."
-    exit 1
+    fail_partial_install "failed_seed_no_tty"
   fi
 
   echo "Initial owner creation required via python -m ops.seed (before service start)."
@@ -621,7 +726,7 @@ prompt_initial_owner_credentials() {
   user="${user:-$user_default}"
   if [ "${#user}" -lt 3 ] || [ "${#user}" -gt 32 ]; then
     echo "FATAL: username must be between 3 and 32 characters"
-    exit 1
+    fail_partial_install "failed_seed_bad_username"
   fi
 
   while true; do
@@ -665,18 +770,18 @@ ensure_initial_owner_before_service() {
 
   case "$OWNER_PROBE_STATUS" in
     db_absent)
-      echo "FATAL: DB file missing after migrate — cannot seed owner. Install stopped; success NOT claimed."
-      exit 1
+      echo "FATAL: DB file missing after migrate — cannot seed owner."
+      fail_partial_install "failed_seed_db_absent_after_migrate"
       ;;
     table_absent)
-      echo "FATAL: admin_users table missing after migrate — cannot seed owner. Install stopped; success NOT claimed."
-      exit 1
+      echo "FATAL: admin_users table missing after migrate — cannot seed owner."
+      fail_partial_install "failed_seed_table_absent_after_migrate"
       ;;
     ok)
       ;;
     *)
       echo "FATAL: unexpected owner probe status=${OWNER_PROBE_STATUS} after migrate"
-      exit 1
+      fail_partial_install "failed_seed_unexpected_probe"
       ;;
   esac
 
@@ -691,10 +796,10 @@ ensure_initial_owner_before_service() {
   prompt_initial_owner_credentials
 
   if [ -z "${_SEED_PASS:-}" ] || [ -z "${_SEED_USER:-}" ]; then
-    echo "FATAL: empty seed credentials — install stopped; success NOT claimed."
+    echo "FATAL: empty seed credentials."
     _SEED_PASS=""
     _SEED_USER=""
-    exit 1
+    fail_partial_install "failed_seed_empty_credentials"
   fi
 
   seed_out="$(mktemp)"
@@ -715,7 +820,7 @@ ensure_initial_owner_before_service() {
     echo "FATAL: ops.seed emitted a generated password — ADMIN_PASSWORD was not applied"
     rm -f "$seed_out" "$seed_err"
     _SEED_USER=""
-    exit 1
+    fail_partial_install "failed_seed_generated_password_leak_path"
   fi
   # Safe status lines only (username may appear; never password).
   if [ -s "$seed_out" ]; then
@@ -723,10 +828,10 @@ ensure_initial_owner_before_service() {
   fi
 
   if [ "$seed_rc" -ne 0 ]; then
-    echo "FATAL: ops.seed failed (exit ${seed_rc}). Install stopped; success NOT claimed."
+    echo "FATAL: ops.seed failed (exit ${seed_rc})."
     rm -f "$seed_out" "$seed_err"
     _SEED_USER=""
-    exit 1
+    fail_partial_install "failed_seed_ops_seed"
   fi
   rm -f "$seed_out" "$seed_err"
 
@@ -734,9 +839,9 @@ ensure_initial_owner_before_service() {
   require_owner_probe_readable "after ops.seed"
   if [ "$OWNER_PROBE_STATUS" != "ok" ] || [ "$OWNER_PROBE_COUNT" -lt 1 ]; then
     echo "FATAL: after ops.seed still no role=owner (status=${OWNER_PROBE_STATUS} count=${OWNER_PROBE_COUNT:-?})."
-    echo "Install stopped; success NOT claimed. Existing accounts were not modified."
+    echo "Existing accounts were not modified."
     _SEED_USER=""
-    exit 1
+    fail_partial_install "failed_seed_no_owner_after"
   fi
 
   echo "owner ensure: OK via ops.seed (password not written to logs/reports)"
@@ -782,6 +887,120 @@ record_systemd_enable_state() {
   echo "systemd enable state recorded: $st (contents of unit not printed)"
 }
 
+# Record active/inactive (is-active) before install mutates the service.
+record_systemd_active_state() {
+  local state_file="${RUN_BACKUP_DIR}/asa-physio.service.active.state"
+  local st="inactive"
+  if [ -f "$UNIT_PATH" ] || systemctl cat asa-physio.service >/dev/null 2>&1; then
+    st="$(systemctl is-active asa-physio.service 2>/dev/null || true)"
+    [ -n "$st" ] || st="inactive"
+  else
+    st="missing"
+  fi
+  printf '%s' "$st" | sudo tee "$state_file" >/dev/null
+  protect_file "$state_file"
+  echo "systemd active state recorded: $st"
+}
+
+# Record certbot.timer enabled + active BEFORE this install may enable/start it.
+record_certbot_timer_state() {
+  local en_file="${RUN_BACKUP_DIR}/certbot.timer.enabled.state"
+  local act_file="${RUN_BACKUP_DIR}/certbot.timer.active.state"
+  local en="missing"
+  local act="missing"
+  if systemctl cat certbot.timer >/dev/null 2>&1; then
+    en="$(systemctl is-enabled certbot.timer 2>/dev/null || true)"
+    [ -n "$en" ] || en="disabled"
+    act="$(systemctl is-active certbot.timer 2>/dev/null || true)"
+    [ -n "$act" ] || act="inactive"
+  else
+    en="missing"
+    act="missing"
+  fi
+  printf '%s' "$en" | sudo tee "$en_file" >/dev/null
+  printf '%s' "$act" | sudo tee "$act_file" >/dev/null
+  protect_file "$en_file"
+  protect_file "$act_file"
+  echo "certbot.timer prior state recorded: enabled=$en active=$act"
+}
+
+# Restore certbot.timer to recorded prior enabled/active. Reports verification separately.
+restore_certbot_timer_prior_state() {
+  local en_file="${RUN_BACKUP_DIR}/certbot.timer.enabled.state"
+  local act_file="${RUN_BACKUP_DIR}/certbot.timer.active.state"
+  local en="missing"
+  local act="missing"
+  local ok=1
+  CERTBOT_TIMER_RESTORE_ATTEMPTED=1
+  CERTBOT_TIMER_RESTORE_VERIFIED=0
+
+  if ! sudo test -f "$en_file"; then
+    echo "certbot.timer restore: no prior enabled.state — skipped (NOT verified as restored)"
+    return 0
+  fi
+  en="$(sudo cat "$en_file" 2>/dev/null || echo missing)"
+  act="$(sudo cat "$act_file" 2>/dev/null || echo missing)"
+
+  if ! systemctl cat certbot.timer >/dev/null 2>&1; then
+    echo "certbot.timer restore: unit missing now — cannot restore (NOT verified)"
+    return 1
+  fi
+
+  case "$en" in
+    enabled|enabled-runtime)
+      sudo systemctl enable certbot.timer || ok=0
+      ;;
+    disabled|masked)
+      sudo systemctl disable certbot.timer 2>/dev/null || true
+      ;;
+    missing|not-found|static|indirect|*)
+      # Was missing/unknown before: undo enable we may have done; do not claim perfect restore.
+      sudo systemctl disable certbot.timer 2>/dev/null || true
+      ;;
+  esac
+
+  case "$act" in
+    active|activating)
+      sudo systemctl start certbot.timer || ok=0
+      ;;
+    *)
+      sudo systemctl stop certbot.timer 2>/dev/null || true
+      ;;
+  esac
+
+  # Separate verification against recorded priors (best-effort match).
+  local now_en now_act
+  now_en="$(systemctl is-enabled certbot.timer 2>/dev/null || true)"
+  now_act="$(systemctl is-active certbot.timer 2>/dev/null || true)"
+  echo "certbot.timer restore check: wanted enabled=$en active=$act ; now enabled=${now_en:-?} active=${now_act:-?}"
+
+  case "$en" in
+    enabled|enabled-runtime)
+      case "$now_en" in enabled|enabled-runtime) ;; *) ok=0 ;; esac
+      ;;
+    disabled|masked)
+      case "$now_en" in disabled|masked) ;; *) ok=0 ;; esac
+      ;;
+  esac
+  case "$act" in
+    active|activating)
+      case "$now_act" in active|activating) ;; *) ok=0 ;; esac
+      ;;
+    inactive|dead|missing)
+      case "$now_act" in inactive|dead|failed|"") ;; *) ok=0 ;; esac
+      ;;
+  esac
+
+  if [ "$ok" = 1 ]; then
+    CERTBOT_TIMER_RESTORE_VERIFIED=1
+    echo "certbot.timer restore: VERIFIED against prior state"
+    return 0
+  fi
+  CERTBOT_TIMER_RESTORE_VERIFIED=0
+  echo "certbot.timer restore: NOT verified — operator must inspect timer state"
+  return 1
+}
+
 write_restore_notes() {
   # Must run only after resolve_db_path_from_env; every DB path in RESTORE uses DB_FILE.
   if [ -z "${DB_FILE:-}" ]; then
@@ -820,6 +1039,8 @@ Artifacts:
   ${RUN_BACKUP_DIR}/owner.seed.state             (skipped_existing|seeded_ok; no secrets)
   ${RUN_BACKUP_DIR}/asa-physio.service.prev     (or .prev.missing)
   ${RUN_BACKUP_DIR}/asa-physio.service.enabled.state   (enabled|disabled|missing|…)
+  ${RUN_BACKUP_DIR}/asa-physio.service.active.state    (active|inactive|failed|missing|…)
+  ${RUN_BACKUP_DIR}/certbot.timer.enabled.state / certbot.timer.active.state
   ${RUN_BACKUP_DIR}/nginx-asa-physio.prev       (or .prev.missing)
   ${RUN_BACKUP_DIR}/nginx-asa-physio.enabled.kind / .link / .prev
   ${RUN_BACKUP_DIR}/nginx-default.enabled.kind / .link / .prev
@@ -939,6 +1160,44 @@ case "\$_en" in
     ;;
 esac
 
+# 4c) restore exact prior active/inactive — NEVER start only because the unit file exists
+_act=\$(sudo cat ${RUN_BACKUP_DIR}/asa-physio.service.active.state 2>/dev/null || echo inactive)
+case "\$_act" in
+  active|activating|reloading)
+    if [ -f ${UNIT_PATH} ]; then
+      sudo systemctl start asa-physio.service
+    else
+      echo "Prior active=\$_act but unit missing — not starting."
+    fi
+    ;;
+  *)
+    sudo systemctl stop asa-physio.service 2>/dev/null || true
+    echo "Service left stopped (prior active=\$_act)."
+    ;;
+esac
+
+# 4d) restore prior certbot.timer enabled/active (verify manually afterward)
+if [ -f ${RUN_BACKUP_DIR}/certbot.timer.enabled.state ]; then
+  _ct_en=\$(sudo cat ${RUN_BACKUP_DIR}/certbot.timer.enabled.state)
+  _ct_act=\$(sudo cat ${RUN_BACKUP_DIR}/certbot.timer.active.state 2>/dev/null || echo inactive)
+  if systemctl cat certbot.timer >/dev/null 2>&1; then
+    case "\$_ct_en" in
+      enabled|enabled-runtime) sudo systemctl enable certbot.timer ;;
+      disabled|masked) sudo systemctl disable certbot.timer 2>/dev/null || true ;;
+      *) sudo systemctl disable certbot.timer 2>/dev/null || true ;;
+    esac
+    case "\$_ct_act" in
+      active|activating) sudo systemctl start certbot.timer ;;
+      *) sudo systemctl stop certbot.timer 2>/dev/null || true ;;
+    esac
+    echo "certbot.timer restore attempted: wanted enabled=\$_ct_en active=\$_ct_act"
+    echo "certbot.timer now: enabled=\$(systemctl is-enabled certbot.timer 2>/dev/null || true) active=\$(systemctl is-active certbot.timer 2>/dev/null || true)"
+    echo "Operator must confirm timer match — SUCCESS NOT CLAIMED automatically."
+  else
+    echo "certbot.timer unit missing — cannot restore prior timer state."
+  fi
+fi
+
 # 5) restore runtime-overrides.env
 if [ -f ${RUN_BACKUP_DIR}/runtime-overrides.env.prev ]; then
   sudo mkdir -p ${OVERRIDE_DIR}
@@ -988,10 +1247,7 @@ esac
 
 sudo nginx -t && sudo systemctl reload nginx
 
-# 9) optionally start previous app unit (only if unit file exists again)
-if [ -f ${UNIT_PATH} ]; then
-  sudo systemctl start asa-physio || true
-fi
+# 9) active/inactive already handled in 4c — do not start merely because unit exists
 
 # 10) Verify manually — do NOT claim rollback success until health checks pass:
 #   curl -fsS http://127.0.0.1:8080/api/healthz
@@ -1018,6 +1274,19 @@ EOF
   fi
   if ! grep -Fq "asa-physio.service.enabled.state" "$RESTORE_NOTES"; then
     echo "FATAL: RESTORE.txt missing systemd enable-state restore"
+    exit 1
+  fi
+  if ! grep -Fq "asa-physio.service.active.state" "$RESTORE_NOTES"; then
+    echo "FATAL: RESTORE.txt missing systemd active-state restore"
+    exit 1
+  fi
+  if ! grep -Fq "certbot.timer.enabled.state" "$RESTORE_NOTES"; then
+    echo "FATAL: RESTORE.txt missing certbot.timer state restore"
+    exit 1
+  fi
+  if ! grep -Fq "NEVER start only because the unit file exists" "$RESTORE_NOTES" \
+    && ! grep -Fq "do not start merely because unit exists" "$RESTORE_NOTES"; then
+    echo "FATAL: RESTORE.txt missing active-state start guard wording"
     exit 1
   fi
   if ! grep -Fq "rebuild .venv" "$RESTORE_NOTES" && ! grep -Fq "venv rebuilt" "$RESTORE_NOTES"; then
@@ -1067,12 +1336,19 @@ ensure_certbot_timer_and_dry_run() {
 
 fail_partial_install() {
   local reason="$1"
+  # exit does not re-enter ERR, but clear trap anyway to avoid any nested set -e surprises.
+  if [ "$HANDLING_FAILURE" = 1 ]; then
+    echo "FATAL: $reason (failure handler already active — skipping duplicate rollback/hints)"
+    exit 1
+  fi
+  HANDLING_FAILURE=1
+  trap - ERR
   INSTALL_OUTCOME="$reason"
   echo "FATAL: $reason — install is PARTIAL/FAILED; success NOT claimed."
   mark_install_incomplete || true
   case "$INSTALL_PHASE" in
     service|nginx|certbot|seeded|migrated)
-      # Never auto-restore DB/tree; optional non-DB restore only.
+      # Never auto-restore DB/tree; optional non-DB restore only (includes service active + certbot.timer).
       safe_non_db_rollback_attempt || true
       ;;
   esac
@@ -1080,11 +1356,19 @@ fail_partial_install() {
   if [ "$NON_DB_ROLLBACK_ATTEMPTED" = 1 ] && [ "$NON_DB_ROLLBACK_VERIFIED" != 1 ]; then
     echo "Non-DB rollback was attempted but NOT verified — do not assume services are restored."
   fi
+  if [ "$CERTBOT_TIMER_RESTORE_ATTEMPTED" = 1 ] && [ "$CERTBOT_TIMER_RESTORE_VERIFIED" != 1 ]; then
+    echo "certbot.timer restore was attempted but NOT verified — inspect timer separately."
+  fi
   exit 1
 }
 
 on_err() {
   local ec=$?
+  if [ "$HANDLING_FAILURE" = 1 ]; then
+    exit "$ec"
+  fi
+  HANDLING_FAILURE=1
+  trap - ERR
   INSTALL_OUTCOME="failed_other"
   echo "ERROR: installer failed (exit ${ec}) at phase=${INSTALL_PHASE}. No success claimed."
   echo "Backups (if any) are under: ${RUN_BACKUP_DIR}"
@@ -1098,6 +1382,9 @@ on_err() {
   print_manual_restore_and_continue_hints
   if [ "$NON_DB_ROLLBACK_ATTEMPTED" = 1 ] && [ "$NON_DB_ROLLBACK_VERIFIED" != 1 ]; then
     echo "Non-DB rollback was attempted but NOT verified — do not assume services are restored."
+  fi
+  if [ "$CERTBOT_TIMER_RESTORE_ATTEMPTED" = 1 ] && [ "$CERTBOT_TIMER_RESTORE_VERIFIED" != 1 ]; then
+    echo "certbot.timer restore was attempted but NOT verified — inspect timer separately."
   fi
   exit "$ec"
 }
@@ -1116,6 +1403,9 @@ require_cert_policy_before_nginx
 
 echo "=== resolve DB_PATH from .env.production (before backup/migrate) ==="
 resolve_db_path_from_env || exit 1
+
+echo "=== resolve UPLOAD_DIR from .env.production (must stay under APP_ROOT) ==="
+resolve_upload_dir_from_env || exit 1
 
 echo "=== verify prior backup (checksum only, via root; no backup contents printed) ==="
 if sudo test -f "$BACKUP_TAR"; then
@@ -1159,6 +1449,8 @@ else
   echo "systemd unit backup: none existed"
 fi
 record_systemd_enable_state
+record_systemd_active_state
+record_certbot_timer_state
 
 if [ -f "$NGINX_AVAILABLE" ]; then
   sudo cp -a "$NGINX_AVAILABLE" "${RUN_BACKUP_DIR}/nginx-asa-physio.prev"
@@ -1234,10 +1526,19 @@ set -a
 # shellcheck disable=SC1091
 source "$APP_ROOT/.env.production"
 set +a
-# Force the validated path so migrate/backup/rollback stay on the same DB.
+# Force validated paths so migrate/backup/rollback stay on the same DB/uploads tree.
 export DB_PATH="$DB_FILE"
+export UPLOAD_DIR="$UPLOAD_DIR_VALIDATED"
 export REMINDER_BACKGROUND=0
-mkdir -p "${UPLOAD_DIR:-$APP_ROOT/data/uploads}"
+# Re-check after source: reject any attempt to escape APP_ROOT via sourced env.
+case "$UPLOAD_DIR" in
+  "$APP_ROOT"/*) ;;
+  *)
+    echo "FATAL: effective UPLOAD_DIR escaped APP_ROOT after sourcing .env.production"
+    fail_partial_install "failed_upload_dir_outside_app_root"
+    ;;
+esac
+mkdir -p "$UPLOAD_DIR"
 mkdir -p "$(dirname "$DB_FILE")"
 python3 -m api.db
 python3 - <<'PY'
@@ -1329,22 +1630,22 @@ echo "=== verify effective SMS/notify/reminder env in running process ==="
 PID="$(systemctl show -p MainPID --value asa-physio)"
 if [ -z "$PID" ] || [ "$PID" = "0" ]; then
   echo "FATAL: asa-physio has no MainPID — cannot verify SMS sink"
-  exit 1
+  fail_partial_install "failed_sms_verify_no_pid"
 fi
 EFF="$(sudo cat "/proc/${PID}/environ" | tr '\0' '\n' | grep -E '^(REMINDER_BACKGROUND|SMS_PROVIDER|SMS_WEBHOOK|NOTIFY_PROVIDER|NOTIFY_WEBHOOK)=' || true)"
 echo "$EFF"
 echo "$EFF" | grep -qx 'REMINDER_BACKGROUND=0' \
-  || { echo "FATAL: REMINDER_BACKGROUND not 0 in process env"; exit 1; }
+  || { echo "FATAL: REMINDER_BACKGROUND not 0 in process env"; fail_partial_install "failed_sms_verify_reminder"; }
 echo "$EFF" | grep -qx 'SMS_PROVIDER=webhook' \
-  || { echo "FATAL: SMS_PROVIDER not webhook in process env"; exit 1; }
+  || { echo "FATAL: SMS_PROVIDER not webhook in process env"; fail_partial_install "failed_sms_verify_provider"; }
 echo "$EFF" | grep -qx 'SMS_WEBHOOK=http://127.0.0.1:9/asa-sms-sink' \
-  || { echo "FATAL: SMS_WEBHOOK sink missing in process env"; exit 1; }
+  || { echo "FATAL: SMS_WEBHOOK sink missing in process env"; fail_partial_install "failed_sms_verify_webhook"; }
 echo "$EFF" | grep -qx 'NOTIFY_PROVIDER=webhook' \
-  || { echo "FATAL: NOTIFY_PROVIDER not webhook in process env"; exit 1; }
+  || { echo "FATAL: NOTIFY_PROVIDER not webhook in process env"; fail_partial_install "failed_sms_verify_notify_provider"; }
 echo "$EFF" | grep -qx 'NOTIFY_WEBHOOK=http://127.0.0.1:9/asa-notify-sink' \
-  || { echo "FATAL: NOTIFY_WEBHOOK sink missing in process env"; exit 1; }
+  || { echo "FATAL: NOTIFY_WEBHOOK sink missing in process env"; fail_partial_install "failed_sms_verify_notify_webhook"; }
 echo "$READY_JSON" | grep -q '"notify_provider"[[:space:]]*:[[:space:]]*"webhook"' \
-  || { echo "FATAL: readyz notify_provider is not webhook"; exit 1; }
+  || { echo "FATAL: readyz notify_provider is not webhook"; fail_partial_install "failed_sms_verify_readyz"; }
 echo "SMS sink verification: OK (no SMS.ir call performed)"
 
 echo "=== write nginx site (previous configs already backed up) ==="
@@ -1475,6 +1776,8 @@ fi
 echo "HTTPS_OK=$HTTPS_OK  (1=both domains probed OK; 0=not full HTTPS success)"
 echo "CERTBOT_TIMER_OK=$CERTBOT_TIMER_OK CERTBOT_RENEW_DRY_RUN_OK=$CERTBOT_RENEW_DRY_RUN_OK"
 echo "NON_DB_ROLLBACK_ATTEMPTED=$NON_DB_ROLLBACK_ATTEMPTED NON_DB_ROLLBACK_VERIFIED=$NON_DB_ROLLBACK_VERIFIED"
+echo "CERTBOT_TIMER_RESTORE_ATTEMPTED=$CERTBOT_TIMER_RESTORE_ATTEMPTED CERTBOT_TIMER_RESTORE_VERIFIED=$CERTBOT_TIMER_RESTORE_VERIFIED"
+echo "UPLOAD_DIR=$UPLOAD_DIR_VALIDATED (validated under APP_ROOT)"
 echo "Real SMS blocked via post-.env EnvironmentFile sink; REMINDER_BACKGROUND=0 verified."
 echo ".env.production was NOT modified or printed."
 echo "Admin password was not written to logs, RESTORE.txt, or process argv."
