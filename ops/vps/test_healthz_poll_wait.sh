@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Regression: wait_for_local_healthz high-res wall-clock deadline.
+# Regression: wait_for_local_healthz high-res monotonic deadline.
+# - formatter never exceeds input (truncate-down)
 # - delayed success within 60s
-# - timeout honours max_sec via controllable ns clock (no real 60s wait)
+# - fake-clock timeout (~60s virtual)
+# - successful response after deadline rejected
 # No VPS / no real install.
 set -euo pipefail
 
@@ -38,8 +40,10 @@ pass "bash -n"
 grep -q 'wait_for_local_healthz' "$INSTALL" || fail "wait_for_local_healthz missing"
 grep -q 'report_service_smoke_diagnostics' "$INSTALL" || fail "diagnostics helper missing"
 grep -q '_asa_healthz_now_ns' "$INSTALL" || fail "ns clock hook missing"
-grep -q 'date +%s%N' "$INSTALL" || fail "nanosecond date format missing"
+grep -q 'monotonic_ns' "$INSTALL" || fail "monotonic_ns preferred clock missing"
+grep -q 'PRECISION LIMITED' "$INSTALL" || fail "fallback precision limitation not documented"
 grep -q '_asa_healthz_ns_to_curl_s' "$INSTALL" || fail "curl budget formatter missing"
+grep -q 'Truncates DOWN' "$INSTALL" || fail "truncate-down documentation missing"
 
 fn_body="$(awk '
   /^wait_for_local_healthz\(\)/ {on=1}
@@ -51,7 +55,6 @@ if printf '%s\n' "$fn_body" | grep -E 'while\s+\[\s*"\$i"\s+-lt' | grep -q .; th
   fail "iteration-count while-loop still present"
 fi
 printf '%s\n' "$fn_body" | grep -q 'deadline_ns=' || fail "deadline_ns missing"
-# Single-request body: must not issue a second curl after success for body print.
 if printf '%s\n' "$fn_body" | grep -E 'healthz OK' -A8 | grep -E 'curl\s+-fsS' | grep -q .; then
   fail "second curl after success still present"
 fi
@@ -61,9 +64,8 @@ printf '%s\n' "$smoke_region" | grep -q 'wait_for_local_healthz' || fail "smoke 
 if printf '%s\n' "$smoke_region" | grep -E '^\s*sleep 2\s*$' | grep -q .; then
   fail "smoke path still has bare sleep 2"
 fi
-pass "static: ns deadline + single-curl success + helpers wired"
+pass "static: monotonic ns deadline + single-curl success + helpers wired"
 
-# Extract helpers + wait_for_local_healthz (from first _asa_healthz_now_ns through wait fn).
 extract="$(awk '
   /^_asa_healthz_now_ns\(\)/ {on=1}
   on {print}
@@ -75,6 +77,34 @@ eval "$extract"
 
 command -v curl >/dev/null || fail "curl required"
 command -v awk >/dev/null || fail "awk required"
+
+# --- Unit: formatter truncates down; never exceeds input ns ---
+assert_fmt_le() {
+  local ns="$1"
+  local out out_ns
+  out="$(_asa_healthz_ns_to_curl_s "$ns")"
+  out_ns="$(awk -v s="$out" 'BEGIN{printf "%.0f", s * 1e9}')"
+  if [ "$out_ns" -gt "$ns" ]; then
+    fail "formatter($ns) -> $out (${out_ns}ns) exceeds input"
+  fi
+}
+assert_fmt_le 0
+assert_fmt_le 999999
+out999="$(_asa_healthz_ns_to_curl_s 999999)"
+[ "$out999" = "0.000" ] || fail "sub-1ms budget must be 0.000, got $out999"
+assert_fmt_le 1000000
+out1ms="$(_asa_healthz_ns_to_curl_s 1000000)"
+[ "$out1ms" = "0.001" ] || fail "exactly 1ms must be 0.001, got $out1ms"
+# Classic round-up trap: 1.5ms must become 0.001 not 0.002
+assert_fmt_le 1500000
+out15="$(_asa_healthz_ns_to_curl_s 1500000)"
+[ "$out15" = "0.001" ] || fail "1.5ms must truncate to 0.001, got $out15"
+assert_fmt_le 1999999
+out19="$(_asa_healthz_ns_to_curl_s 1999999)"
+[ "$out19" = "0.001" ] || fail "1.999ms must truncate to 0.001, got $out19"
+assert_fmt_le 1000000000
+assert_fmt_le 1000000001
+pass "unit: _asa_healthz_ns_to_curl_s truncates down and never exceeds input"
 
 run_py() {
   local c
@@ -187,6 +217,25 @@ if [ "$wall_elapsed" -ge 15 ]; then
   fail "wall elapsed ${wall_elapsed}s too long — fake clock/curl not used"
 fi
 pass "runtime: timeout respects 60s ns deadline via fake clock (fake=${fake_elapsed_s}s wall=${wall_elapsed}s sleeps=${FAKE_SLEEPS})"
+
+# --- Runtime C: success after deadline must be rejected ---
+FAKE_NOW_NS=0
+_asa_healthz_now_ns() { echo "$FAKE_NOW_NS"; }
+_asa_healthz_sleep() { fail "sleep should not run on immediate post-deadline success path"; }
+curl() {
+  # Simulate slow response that only "finishes" after the 60s deadline.
+  FAKE_NOW_NS=$((60 * 1000000000 + 1))
+  printf '%s\n' '{"ok":true}'
+  return 0
+}
+set +e
+out="$(wait_for_local_healthz "http://127.0.0.1:9/api/healthz" 60 2>&1)"
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "post-deadline success must return 1, got $rc"
+printf '%s\n' "$out" | grep -q 'responded after' || fail "expected responded-after-deadline message"
+printf '%s\n' "$out" | grep -q 'healthz OK' && fail "must not claim healthz OK after deadline"
+pass "runtime: successful response after deadline is rejected"
 
 grep -q 'already present' "$INSTALL" || fail "owner skip path missing"
 grep -q 'credentials unchanged' "$INSTALL" || fail "owner no-overwrite wording missing"

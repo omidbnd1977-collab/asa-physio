@@ -1371,15 +1371,30 @@ ensure_certbot_timer_and_dry_run() {
   return 0
 }
 
-# Monotonic-ish wall clock in nanoseconds (Ubuntu: date +%s%N). Overridable in tests.
+# Deadline clock in nanoseconds. Overridable in tests via redefining this function.
+#
+# Preferred (Ubuntu/production): Python time.monotonic_ns() — monotonic, ns precision,
+# immune to NTP/settime jumps.
+#
+# Fallback 1: GNU `date +%s%N` — WALL clock with ns; NOT monotonic (can jump).
+# Fallback 2: `date +%s` expanded to ns — WALL clock, PRECISION LIMITED TO 1 SECOND;
+#   near the deadline this may over-budget a curl by up to ~1s versus true elapsed time.
 _asa_healthz_now_ns() {
-  local raw
+  local raw py
+  for py in python3 python; do
+    if command -v "$py" >/dev/null 2>&1; then
+      raw="$("$py" -c 'import time; print(time.monotonic_ns())' 2>/dev/null || true)"
+      if [[ "$raw" =~ ^[0-9]+$ ]]; then
+        printf '%s\n' "$raw"
+        return 0
+      fi
+    fi
+  done
   raw="$(date +%s%N 2>/dev/null || true)"
   if [[ "$raw" =~ ^[0-9]+$ ]] && [ "${#raw}" -ge 13 ]; then
     printf '%s\n' "$raw"
     return 0
   fi
-  # Fallback when %N unsupported (e.g. some non-GNU date): second resolution as ns.
   printf '%s000000000\n' "$(date +%s)"
 }
 
@@ -1387,10 +1402,13 @@ _asa_healthz_now_ns() {
 _asa_healthz_sleep() { sleep "$1"; }
 
 # Format nanoseconds budget as curl --max-time / --connect-timeout (seconds, 3dp).
+# Truncates DOWN to whole milliseconds so the printed value never exceeds remaining_ns.
+# Emits 0.001 only when ns >= 1_000_000; smaller budgets become 0.000 (caller should not curl).
 _asa_healthz_ns_to_curl_s() {
   awk -v ns="$1" 'BEGIN {
-    if (ns < 1000000) { printf "0.001"; exit }
-    printf "%.3f", ns / 1e9
+    if (ns < 0) ns = 0
+    ms = int(ns / 1000000)
+    printf "%d.%03d", int(ms / 1000), ms % 1000
   }'
 }
 
@@ -1403,7 +1421,7 @@ wait_for_local_healthz() {
   local url="${1:-http://127.0.0.1:8080/api/healthz}"
   local max_sec="${2:-60}"
   local start_ns now_ns deadline_ns remaining_ns budget_ns poll_ns body elapsed_ns
-  local mt sl
+  local mt sl curl_body_tmp
   local curl_cap_ns=1000000000
   local min_curl_ns=1000000
 
@@ -1428,18 +1446,23 @@ wait_for_local_healthz() {
     mt="$(_asa_healthz_ns_to_curl_s "$budget_ns")"
 
     body=""
-    if body="$(curl -fsS --connect-timeout "$mt" --max-time "$mt" "$url" 2>/dev/null)"; then
+    curl_body_tmp="$(mktemp)"
+    if curl -fsS --connect-timeout "$mt" --max-time "$mt" -o "$curl_body_tmp" "$url" 2>/dev/null; then
       now_ns="$(_asa_healthz_now_ns)"
       if [ "$now_ns" -gt "$deadline_ns" ]; then
+        rm -f "$curl_body_tmp"
         echo "FATAL: ${url} responded after ${max_sec}s deadline"
         return 1
       fi
+      body="$(<"$curl_body_tmp")"
+      rm -f "$curl_body_tmp"
       elapsed_ns=$((now_ns - start_ns))
       echo "healthz OK after $(awk -v ns="$elapsed_ns" 'BEGIN{printf "%.3f", ns/1e9}')s"
       # Body from the same request (no second curl that could overrun the deadline).
       printf '%s\n' "$body"
       return 0
     fi
+    rm -f "$curl_body_tmp"
 
     now_ns="$(_asa_healthz_now_ns)"
     remaining_ns=$((deadline_ns - now_ns))
