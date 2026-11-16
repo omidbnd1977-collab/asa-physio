@@ -363,23 +363,19 @@ def send_smsir(phone: str, body: str) -> None:
 
 
 def send_smsir_for_message(msg: dict) -> None:
-    """Deliver one queued row via Verify when mapped, otherwise bulk text."""
+    """Deliver one queued row via Verify when mapped, otherwise bulk text.
+
+    Templated kinds must not silently fall back to free-text bulk — incomplete
+    patient/appointment rows fail the delivery attempt so retry can surface the error.
+    """
     kind = msg.get("kind") or ""
     if kind in VERIFY_TEMPLATES:
-        try:
-            built = verify_payload_for_message(msg)
-        except RuntimeError as exc:
-            # Mapped kind but incomplete rows (legacy/tests): keep bulk body, never invent params.
-            warn(
-                "sms.verify_unavailable",
-                kind=kind,
-                exc_type=type(exc).__name__,
-            )
-            built = None
-        if built is not None:
-            template_id, parameters = built
-            send_smsir_verify(msg["phone"], template_id, parameters)
-            return
+        built = verify_payload_for_message(msg)
+        if built is None:
+            raise RuntimeError(f"sms.ir verify mapping missing for kind {kind!r}")
+        template_id, parameters = built
+        send_smsir_verify(msg["phone"], template_id, parameters)
+        return
     send_smsir(msg["phone"], msg["body"])
 
 
@@ -576,7 +572,9 @@ def deliver(message_id: int, *, attempts: int = 2) -> bool:
                 sms_kind=msg["kind"],
                 provider=settings.SMS_PROVIDER,
                 to=fingerprint(msg["phone"]),
-                via_verify=msg["kind"] in VERIFY_TEMPLATES,
+                via_verify=bool(
+                    settings.SMS_PROVIDER == "smsir" and msg["kind"] in VERIFY_TEMPLATES
+                ),
             )
             return True
         except Exception as exc:  # noqa: BLE001 — gateway failures are expected

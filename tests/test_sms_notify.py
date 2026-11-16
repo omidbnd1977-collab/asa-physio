@@ -103,7 +103,8 @@ class TestSmsIrProvider:
         monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
         monkeypatch.setattr(sms.httpx, "post", lambda *a, **k: _smsir_ok())
 
-        mid, ok = sms.send_now("09123334444", "بدن تست", "booked")
+        # Unmapped kind → bulk path (no Verify template in Issue #27).
+        mid, ok = sms.send_now("09123334444", "بدن تست", "custom")
         assert ok is True
         row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
         assert row["status"] == "sent"
@@ -122,7 +123,7 @@ class TestSmsIrProvider:
             )
 
         monkeypatch.setattr(sms.httpx, "post", boom)
-        mid = sms.queue("09123334444", "بدن", "confirm_request")
+        mid = sms.queue("09123334444", "بدن", "custom")
         assert sms.deliver(mid, attempts=1) is False
         row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
         assert row["status"] == "failed"
@@ -132,6 +133,24 @@ class TestSmsIrProvider:
         assert sms.deliver(mid, attempts=1) is True
         row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
         assert row["status"] == "sent"
+
+    def test_templated_kind_without_appointment_does_not_bulk_fallback(self, monkeypatch):
+        monkeypatch.setattr(settings, "SMS_PROVIDER", "smsir")
+        monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
+        monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
+        calls = {"n": 0}
+
+        def counting_post(*a, **k):
+            calls["n"] += 1
+            return _smsir_ok()
+
+        monkeypatch.setattr(sms.httpx, "post", counting_post)
+        mid = sms.queue("09123334444", "should-not-send-as-bulk", "booked")
+        assert sms.deliver(mid, attempts=1) is False
+        assert calls["n"] == 0
+        row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
+        assert row["status"] == "failed"
+        assert "appointment" in row["last_error"].lower() or "patient" in row["last_error"].lower()
 
 
 class TestAdminNotifySmsIr:
@@ -217,18 +236,35 @@ class TestAdminNotifySmsIr:
         assert d["status"] == "delivered"
 
     def test_alert_new_appointment_queues_admin_sms_only(self, monkeypatch):
+        from api import scheduling
+        from tests.test_portal import nid, tomorrow
+
+        pid = repo.insert(
+            SYSTEM,
+            "patients",
+            {
+                "public_id": "patadmin0001",
+                "full_name": "بیمار",
+                "national_id": nid(48837093),
+                "birth_date": "1991-07-25",
+                "birth_jalali": "1370/05/03",
+                "phone": "09121112233",
+                "sms_service_consent": 1,
+            },
+        )
+        appt = scheduling.allocate(pid, tomorrow(), "16:00")
         monkeypatch.setattr(settings, "SMS_PROVIDER", "smsir")
         monkeypatch.setattr(settings, "ADMIN_NOTIFICATION_PHONE", "09127776655")
         monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
         monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
-        monkeypatch.setattr(sms.httpx, "post", lambda *a, **k: _smsir_ok())
+        monkeypatch.setattr(sms.httpx, "post", lambda *a, **k: _smsir_verify_ok())
 
         mid, ok = notify.alert_new_appointment(
             name="بیمار",
             phone="09121112233",
             when="شنبه ۱۲:۰۰",
-            code="appt000001",
-            appointment_id=None,
+            code=appt["public_id"],
+            appointment_id=appt["id"],
         )
         assert ok is True and mid is not None
         row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
