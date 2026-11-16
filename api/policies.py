@@ -25,9 +25,18 @@ class Actor:
     role: Role = "anon"
     user_id: int | None = None
     session_id: str | None = None
+    # Granular capabilities for role=staff (secretaries). Owners/system ignore this set.
+    permissions: frozenset[str] = field(default_factory=frozenset)
 
     def at_least(self, role: Role) -> bool:
         return ROLE_RANK[self.role] >= ROLE_RANK[role]
+
+    def can(self, permission: str) -> bool:
+        if self.role in ("owner", "system"):
+            return True
+        if self.role != "staff":
+            return False
+        return permission in self.permissions
 
 
 ANON = Actor("anon")
@@ -64,6 +73,13 @@ POLICIES: dict[str, TablePolicy] = {
         delete="owner",
         hidden_columns=frozenset({"password_hash"}),
         note="Only the owner lists staff. Hashes are never selectable through repo.",
+    ),
+    "staff_permissions": TablePolicy(
+        select="owner",
+        insert="system",
+        update="system",
+        delete="owner",
+        note="Per-secretary capability flags; written only via the staff_users service.",
     ),
     "sessions": TablePolicy(
         select="staff",
@@ -121,6 +137,13 @@ POLICIES: dict[str, TablePolicy] = {
         note="Message log, including what was sent to whom.",
     ),
     "sms_inbound": TablePolicy(select="staff", insert="system", update="system", delete="owner"),
+    "feedback": TablePolicy(
+        select="staff",
+        insert="system",
+        update="staff",
+        delete="owner",
+        note="Public feedback is created through validation/rate limiting; staff control publication.",
+    ),
     "messages": TablePolicy(
         select="staff",
         insert="system",

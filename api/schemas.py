@@ -102,7 +102,9 @@ class BookingIn(BaseModel):
 class LoginIn(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     username: str = Field(min_length=3, max_length=32, pattern=r"^[A-Za-z0-9_.\-]+$")
-    password: str = Field(min_length=8, max_length=256)
+    # Floor is 1 so short staff passwords (min 6 at create) can still authenticate;
+    # creation/reset policies enforce length separately.
+    password: str = Field(min_length=1, max_length=256)
 
 
 class BookingStatusIn(BaseModel):
@@ -393,3 +395,74 @@ class TreatmentSessionIn(BaseModel):
         if v and not re.match(r"^\d{4}-\d{2}-\d{2}$", v):
             raise ValueError("تاریخ نامعتبر است.")
         return v
+
+
+# ==========================================================================
+# Secretary (staff) management — owner only
+# ==========================================================================
+class SecretaryCreateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    full_name: str = Field(min_length=3, max_length=80)
+    username: str = Field(min_length=3, max_length=32, pattern=r"^[A-Za-z0-9_]+$")
+    password: str = Field(min_length=6, max_length=256)
+    permissions: list[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("full_name")
+    @classmethod
+    def _name(cls, v: str) -> str:
+        return PatientRegisterIn._name(v)
+
+    @field_validator("username")
+    @classmethod
+    def _user(cls, v: str) -> str:
+        return v.strip().lower()
+
+
+class SecretaryUpdateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    full_name: str | None = Field(default=None, min_length=3, max_length=80)
+    is_active: bool | None = None
+    permissions: list[str] | None = Field(default=None, max_length=20)
+
+    @field_validator("full_name")
+    @classmethod
+    def _name(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        return PatientRegisterIn._name(v)
+
+
+class SecretaryPasswordIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    password: str = Field(min_length=6, max_length=256)
+
+
+class OrphanPatientsAssignIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    public_ids: list[str] = Field(min_length=1, max_length=200)
+
+    @field_validator("public_ids")
+    @classmethod
+    def _ids(cls, v: list[str]) -> list[str]:
+        out = [str(x).strip()[:12] for x in v if str(x).strip()]
+        if not out:
+            raise ValueError("هیچ شناسه‌ای انتخاب نشده است.")
+        return out
+
+
+class InboundAssignIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    patient_public_id: str = Field(min_length=8, max_length=12)
+
+
+class BookingAssignIn(BaseModel):
+    """Claim an unassigned consult lead for the actor's clinic (optional patient link)."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    patient_public_id: str | None = Field(default=None, min_length=8, max_length=12)

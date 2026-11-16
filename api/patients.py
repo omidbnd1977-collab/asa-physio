@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import io
 import pathlib
 import secrets
+import zipfile
 
 from fastapi import UploadFile
 
@@ -31,6 +33,58 @@ MAGIC = {
     b"%PDF-": "pdf",
 }
 
+# MRI ZIP limits — keep in sync with the private viewer (client-side JSZip guards).
+MRI_ZIP_MAX_ENTRIES = 1000
+MRI_ZIP_MAX_UNCOMPRESSED = 500 * 1024 * 1024
+MRI_ZIP_MAX_RATIO = 100  # compressed:uncompressed ceiling against zip bombs
+
+
+def _validate_mri_zip(raw: bytes) -> None:
+    """Reject Zip Slip paths, oversized archives, and compression bombs before storage."""
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(raw))
+    except zipfile.BadZipFile as exc:
+        raise BadRequest(
+            "فایل ZIP معتبر نیست.",
+            fields={"mri_file": "ZIP نامعتبر"},
+        ) from exc
+    with zf:
+        infos = [i for i in zf.infolist() if not i.is_dir()]
+        if len(infos) > MRI_ZIP_MAX_ENTRIES:
+            raise BadRequest(
+                "تعداد فایل‌های داخل ZIP بیش از حد مجاز است.",
+                fields={"mri_file": "ZIP بیش از حد شلوغ است"},
+            )
+        total = 0
+        for info in infos:
+            name = info.filename.replace("\\", "/")
+            if name.startswith("/") or name.startswith("../") or "/../" in f"/{name}/":
+                raise BadRequest(
+                    "مسیر فایل داخل ZIP مجاز نیست.",
+                    fields={"mri_file": "مسیر ZIP نامعتبر"},
+                )
+            if ".." in pathlib.PurePosixPath(name).parts:
+                raise BadRequest(
+                    "مسیر فایل داخل ZIP مجاز نیست.",
+                    fields={"mri_file": "مسیر ZIP نامعتبر"},
+                )
+            if info.file_size < 0 or info.compress_size < 0:
+                raise BadRequest(
+                    "فایل ZIP معتبر نیست.",
+                    fields={"mri_file": "ZIP نامعتبر"},
+                )
+            if info.compress_size > 0 and info.file_size > info.compress_size * MRI_ZIP_MAX_RATIO:
+                raise BadRequest(
+                    "نسبت فشرده‌سازی ZIP بیش از حد مجاز است.",
+                    fields={"mri_file": "ZIP مشکوک"},
+                )
+            total += info.file_size
+            if total > MRI_ZIP_MAX_UNCOMPRESSED:
+                raise BadRequest(
+                    "حجم بازشده ZIP بیش از حد مجاز است.",
+                    fields={"mri_file": "ZIP بیش از حد بزرگ است"},
+                )
+
 
 def _now() -> dt.datetime:
     return dt.datetime.now(dt.UTC)
@@ -43,18 +97,13 @@ def _iso(d: dt.datetime) -> str:
 # --------------------------------------------------------------------------
 # uploads
 # --------------------------------------------------------------------------
-def save_upload(file: UploadFile | None, prefix: str) -> str:
-    """Store a medication photo. Content is sniffed, the client's name is never trusted."""
-    if file is None or not file.filename:
-        return ""
-    raw = file.file.read(settings.MAX_UPLOAD_BYTES + 1)
-    if len(raw) > settings.MAX_UPLOAD_BYTES:
-        raise PayloadTooLarge(
-            f"حجم فایل بیشتر از {settings.MAX_UPLOAD_BYTES // (1024 * 1024)} مگابایت است."
-        )
+def save_bytes(raw: bytes, prefix: str, *, max_bytes: int | None = None) -> str:
+    """Store validated private upload bytes using the same path as file uploads."""
+    limit = settings.MAX_UPLOAD_BYTES if max_bytes is None else max_bytes
+    if len(raw) > limit:
+        raise PayloadTooLarge(f"حجم فایل بیشتر از {limit // (1024 * 1024)} مگابایت است.")
     if not raw:
         return ""
-
     # Detect supported formats from their actual signatures; never trust filenames.
     kind = None
     if raw.startswith(b"PK\x03\x04"):
@@ -77,7 +126,8 @@ def save_upload(file: UploadFile | None, prefix: str) -> str:
             "فقط عکس (JPG، PNG، WEBP)، PDF، فایل DICOM یا ZIP حاوی تصاویر MRI قابل ارسال است.",
             fields={field: "نوع فایل مجاز نیست"},
         )
-
+    if kind == "zip":
+        _validate_mri_zip(raw)
     ext = {
         "jpeg": ".jpg",
         "png": ".png",
@@ -89,8 +139,17 @@ def save_upload(file: UploadFile | None, prefix: str) -> str:
     name = f"{prefix}-{hashlib.sha256(raw).hexdigest()[:16]}{ext}"
     settings.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     (settings.UPLOAD_DIR / name).write_bytes(raw)
+    # Never log filenames or DICOM tags — only kind + size fingerprint.
     info("upload.saved", kind=kind, bytes=len(raw))
     return name
+
+
+def save_upload(file: UploadFile | None, prefix: str, *, max_bytes: int | None = None) -> str:
+    """Store a private patient upload after sniffing its content and size."""
+    if file is None or not file.filename:
+        return ""
+    limit = settings.MAX_UPLOAD_BYTES if max_bytes is None else max_bytes
+    return save_bytes(file.file.read(limit + 1), prefix, max_bytes=limit)
 
 
 def upload_path(name: str) -> pathlib.Path | None:
@@ -107,17 +166,35 @@ def upload_path(name: str) -> pathlib.Path | None:
 # --------------------------------------------------------------------------
 # registration and login
 # --------------------------------------------------------------------------
-def register(data: dict, *, med_photo: str, ip: str, mri_file: str = "") -> dict:
+def register(
+    data: dict,
+    *,
+    med_photo: str,
+    ip: str,
+    mri_file: str = "",
+    owner_id: int | None = None,
+) -> dict:
+    from . import ownership
+    from .errors import Conflict
+
     existing = repo.select(
         SYSTEM, "patients", where="national_id = ?", params=[data["national_id"]], limit=1
     )
     if existing:
         # Not an error the patient should be punished for: send them to the login path.
-        from .errors import Conflict
-
         raise Conflict(
             "با این کد ملی قبلاً ثبت‌نام شده است. از گزینه‌ی «قبلاً ثبت‌نام کرده‌ام» وارد شوید.",
             code="already_registered",
+        )
+    # Single-clinic: attach to the sole active owner. Never create an unowned
+    # patient via register — that would allow invisible bookings that occupy cabins.
+    resolved_owner = owner_id
+    if resolved_owner is None:
+        resolved_owner = ownership.sole_active_owner_id()
+    if resolved_owner is None:
+        raise Conflict(
+            "ثبت‌نام اینترنتی فعلاً ممکن نیست. لطفاً تلفنی با کلینیک هماهنگ کنید.",
+            code="clinic_unavailable",
         )
     public_id = secrets.token_hex(6)
     pid = repo.insert(
@@ -135,9 +212,10 @@ def register(data: dict, *, med_photo: str, ip: str, mri_file: str = "") -> dict
             "med_photo": med_photo,
             "mri_file": mri_file,
             "ip_fp": fingerprint(ip),
+            "owner_id": resolved_owner,
         },
     )
-    info("patient.registered", patient_id=pid)
+    info("patient.registered", patient_id=pid, owner_id=resolved_owner)
     return repo.select(SYSTEM, "patients", where="id = ?", params=[pid], limit=1)[0]
 
 

@@ -15,7 +15,7 @@ import datetime as dt
 import secrets
 from typing import Any
 
-from . import repo
+from . import ownership, repo
 from .logging_ import info
 from .policies import SYSTEM, Actor
 from .schemas import clean_text
@@ -144,13 +144,24 @@ def unread_for_patient(patient_id: int) -> int:
     )
 
 
-def unread_for_staff() -> int:
-    return repo.count(SYSTEM, "messages", where="sender = 'patient' AND read_by_staff_at IS NULL")
+def unread_for_staff(actor: Actor) -> int:
+    ow, params = ownership.owned_patients_where(actor)
+    # ow is a fixed SQL fragment from ownership helpers (never request input).
+    where = f"sender = 'patient' AND read_by_staff_at IS NULL AND patient_id IN (SELECT id FROM patients WHERE {ow})"  # noqa: S608
+    return repo.count(SYSTEM, "messages", where=where, params=params)
 
 
 def inbox(actor: Actor, limit: int = 300) -> list[dict[str, Any]]:
     """One row per patient: the latest message and how many are still unread."""
-    rows = repo.select(actor, "messages", order_by="created_at desc", limit=limit)
+    ow, params = ownership.owned_patients_where(actor)
+    rows = repo.select(
+        SYSTEM,
+        "messages",
+        where=f"patient_id IN (SELECT id FROM patients WHERE {ow})",  # noqa: S608
+        params=params,
+        order_by="created_at desc",
+        limit=limit,
+    )
     # created_at has one-second resolution — the id breaks the tie deterministically
     rows.sort(key=lambda r: (r["created_at"], r["id"]), reverse=True)
     latest: dict[int, dict[str, Any]] = {}
@@ -164,7 +175,12 @@ def inbox(actor: Actor, limit: int = 300) -> list[dict[str, Any]]:
     marks = ",".join("?" for _ in latest)
     pmap = {
         p["id"]: p
-        for p in repo.select(actor, "patients", where=f"id IN ({marks})", params=list(latest))
+        for p in repo.select(
+            SYSTEM,
+            "patients",
+            where=f"id IN ({marks}) AND ({ow})",
+            params=[*list(latest), *params],
+        )
     }
     out = []
     for pid, r in latest.items():

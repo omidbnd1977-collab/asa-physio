@@ -3,19 +3,163 @@
 from __future__ import annotations
 
 import datetime as dt
+import ipaddress
+import socket
 from typing import Any
+from urllib.parse import urljoin, urlparse
 
+import httpcore
+import httpx
 from fastapi import APIRouter, Body, File, Form, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 
 from . import clinical, messages, metrics, patients, ratelimit, repo, scheduling, schemas, sms
 from .config import settings
-from .errors import BadRequest, Forbidden, NotFound
+from .errors import AppError, BadRequest, Conflict, Forbidden, NotFound, PayloadTooLarge
 from .jalali import to_jalali_long, to_jalali_str
 from .logging_ import info
 from .policies import SYSTEM
 
 router = APIRouter(prefix="/api/portal", tags=["portal"])
+
+_CGNAT_V4 = ipaddress.ip_network("100.64.0.0/10")
+_BLOCKED_MRI_HOSTS = frozenset({"localhost", "localhost.localdomain", "metadata.google.internal"})
+
+
+def _blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """True when the address must not be contacted for an MRI fetch (SSRF)."""
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if ip.version == 4 and ip in _CGNAT_V4:
+        return True
+    return bool(
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_unspecified
+        or ip.is_multicast
+    )
+
+
+class _PinnedIPBackend(httpcore.AsyncNetworkBackend):
+    """Connect TCP to a pre-validated IP while httpx keeps the URL hostname for Host/SNI/TLS."""
+
+    def __init__(self, pinned_ip: str) -> None:
+        self._pinned_ip = pinned_ip
+        self._inner = httpcore.AnyIOBackend()
+
+    async def connect_tcp(  # type: ignore[override]
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Any | None = None,
+    ) -> httpcore.AsyncNetworkStream:
+        # `host` is the original hostname (needed upstream for SNI); dial the pinned IP only.
+        return await self._inner.connect_tcp(
+            self._pinned_ip,
+            port,
+            timeout=timeout,
+            local_address=local_address,
+            socket_options=socket_options,
+        )
+
+    async def connect_unix_socket(  # type: ignore[override]
+        self,
+        path: str,
+        timeout: float | None = None,
+        socket_options: Any | None = None,
+    ) -> httpcore.AsyncNetworkStream:
+        raise RuntimeError("unix sockets are not used for MRI downloads")
+
+    async def sleep(self, seconds: float) -> None:
+        await self._inner.sleep(seconds)
+
+
+def _pinned_transport(pinned_ip: str) -> httpx.AsyncHTTPTransport:
+    transport = httpx.AsyncHTTPTransport()
+    # httpx 0.28 / httpcore 1.x: swap the pool backend so TCP uses the pinned IP.
+    transport._pool._network_backend = _PinnedIPBackend(pinned_ip)  # noqa: SLF001
+    return transport
+
+
+def _pin_public_mri_url(raw: str) -> tuple[str, str, str]:
+    """Validate URL, resolve DNS, require every answer to be public, return (url, host, pinned_ip)."""
+    parsed = urlparse(raw)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        raise BadRequest("لینک MRI باید یک آدرس معتبر http یا https باشد.", code="bad_mri_url")
+    host = parsed.hostname.rstrip(".").lower()
+    if host in _BLOCKED_MRI_HOSTS:
+        raise BadRequest("این آدرس برای دریافت MRI مجاز نیست.", code="blocked_mri_url")
+    port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise BadRequest("آدرس MRI قابل دسترسی نیست.", code="unreachable_mri_url") from exc
+
+    resolved: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    seen: set[str] = set()
+    for addr_info in infos:
+        address = addr_info[4][0]
+        if address in seen:
+            continue
+        seen.add(address)
+        resolved.append(ipaddress.ip_address(address))
+
+    if not resolved:
+        raise BadRequest("آدرس MRI قابل دسترسی نیست.", code="unreachable_mri_url")
+    if any(_blocked_ip(ip) for ip in resolved):
+        raise BadRequest("دریافت از شبکه داخلی یا آدرس خصوصی مجاز نیست.", code="blocked_mri_url")
+
+    # Prefer IPv4 when both families are public; pin exactly one validated address.
+    resolved.sort(key=lambda ip: (ip.version != 4, str(ip)))
+    return raw, host, str(resolved[0])
+
+
+def _public_mri_url(raw: str) -> str:
+    """Back-compat validator used by tests; delegates to the pinning resolver."""
+    url, _host, _ip = _pin_public_mri_url(raw)
+    return url
+
+
+async def _download_remote_mri(url: str) -> tuple[bytes, str]:
+    current = url
+    for _ in range(4):
+        current, _hostname, pinned_ip = _pin_public_mri_url(current)
+        transport = _pinned_transport(pinned_ip)
+        async with (
+            httpx.AsyncClient(
+                transport=transport,
+                timeout=httpx.Timeout(20.0, connect=5.0),
+                follow_redirects=False,
+            ) as client,
+            client.stream("GET", current, headers={"Accept": "image/*"}) as response,
+        ):
+            if response.status_code in {301, 302, 303, 307, 308}:
+                location = response.headers.get("location", "")
+                if not location:
+                    raise BadRequest("لینک MRI قابل دریافت نیست.", code="mri_download_failed")
+                current = urljoin(current, location)
+                continue
+            if response.status_code != 200:
+                raise BadRequest("لینک MRI قابل دریافت نیست.", code="mri_download_failed")
+            content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
+            if not content_type.startswith("image/"):
+                raise BadRequest("لینک MRI باید به یک فایل تصویر اشاره کند.", code="bad_mri_type")
+            length = response.headers.get("content-length")
+            if length and int(length) > settings.MRI_REMOTE_MAX_BYTES:
+                raise PayloadTooLarge("حجم فایل MRI از سقف فنی مجاز بیشتر است.")
+            chunks: list[bytes] = []
+            total = 0
+            async for chunk in response.aiter_bytes(1024 * 1024):
+                total += len(chunk)
+                if total > settings.MRI_REMOTE_MAX_BYTES:
+                    raise PayloadTooLarge("حجم فایل MRI از سقف فنی مجاز بیشتر است.")
+                chunks.append(chunk)
+            return b"".join(chunks), content_type
+    raise BadRequest("تعداد redirectهای لینک MRI بیش از حد مجاز است.", code="mri_download_failed")
 
 
 def client_ip(request: Request) -> str:
@@ -102,8 +246,24 @@ async def register(
         message="برای این کد ملی امروز ثبت‌نام انجام شده است.",
     )
 
-    photo = patients.save_upload(med_photo, prefix=data.national_id[-4:])
+    photo = patients.save_upload(
+        med_photo, prefix=data.national_id[-4:], max_bytes=settings.MEDS_UPLOAD_MAX_BYTES
+    )
     mri = patients.save_upload(mri_file, prefix=f"mri-{data.national_id[-4:]}")
+    mri_warning = ""
+    if data.mri_link:
+        try:
+            remote_blob, _ = await _download_remote_mri(data.mri_link)
+            mri = patients.save_bytes(
+                remote_blob,
+                prefix=f"mri-{data.national_id[-4:]}",
+                max_bytes=settings.MRI_REMOTE_MAX_BYTES,
+            )
+        except AppError as exc:
+            mri_warning = exc.message
+        except (httpx.HTTPError, TimeoutError, OSError) as exc:
+            info("portal.mri_download_failed", error=type(exc).__name__)
+            mri_warning = "لینک MRI قابل دریافت نیست؛ ثبت‌نام شما انجام شد و پزشک می‌تواند بعداً فایل را بارگذاری کند."
     patient = patients.register(data.model_dump(), med_photo=photo, mri_file=mri, ip=ip)
 
     # layer: the SMS the user asked for — "اطلاعات شما ثبت شد"
@@ -121,6 +281,7 @@ async def register(
             "ok": True,
             "sms_sent": sent,
             "patient": patients.public_view(patient),
+            "mri_warning": mri_warning,
             "redirect": "/booking/reserve",
         },
         status_code=201,
@@ -214,6 +375,11 @@ async def slots(request: Request, response: Response, date: str = "") -> Any:
 @router.post("/appointments", status_code=201)
 async def book(request: Request, payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     p = patients.require(current_patient(request))
+    if p.get("owner_id") is None:
+        raise Conflict(
+            "حساب شما هنوز به کلینیک متصل نیست؛ رزرو اینترنتی ممکن نیست. لطفاً تماس بگیرید.",
+            code="patient_unassigned",
+        )
     ratelimit.enforce(
         ratelimit.id_bucket("appt", str(p["id"])),
         settings.RL_APPT_PATIENT_PER_DAY,
@@ -252,6 +418,15 @@ async def book(request: Request, payload: dict[str, Any] = Body(default={})) -> 
         patient_id=p["id"],
         appointment_id=appt["id"],
     )
+    from . import notify
+
+    notify.alert_new_appointment(
+        name=p["full_name"],
+        phone=p["phone"],
+        when=when,
+        code=appt["public_id"],
+        appointment_id=appt["id"],
+    )
     metrics.record("appointment_booked")
     messages.system_note(
         p["id"],
@@ -288,13 +463,22 @@ async def cancel(public_id: str, request: Request) -> dict[str, Any]:
     if not rows:
         raise NotFound("این نوبت پیدا نشد.")
     appt = rows[0]
+    if appt["status"] != "booked":
+        raise Conflict("این نوبت قابل لغو نیست.")
     when = scheduling.slot_datetime(appt["slot_date"], appt["slot_time"])
     from .jalali import now_tehran
 
     if when - now_tehran() < dt.timedelta(hours=3):
         raise Forbidden("لغو نوبت تا ۳ ساعت مانده به زمان مراجعه ممکن نیست. تماس بگیرید.")
     repo.update(
-        SYSTEM, "appointments", {"status": "cancelled"}, where="id = ?", params=[appt["id"]]
+        SYSTEM,
+        "appointments",
+        {
+            "status": "cancelled",
+            "updated_at": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        },
+        where="id = ?",
+        params=[appt["id"]],
     )
     # attributed to the patient, so the doctor-panel inbox badge lights up
     messages.system_note(
@@ -389,8 +573,8 @@ canvas{max-width:100%;max-height:68vh;object-fit:contain;cursor:grab;touch-actio
 .bar input{flex:1;min-width:120px}.notice{font-size:.78rem;color:#aab4c2;line-height:1.8}
 @media(max-width:600px){header{align-items:flex-start}.viewer{min-height:48vh}.tools{width:100%}}
 </style>
-<script src="https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicomParser.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicomParser.min.js" integrity="sha384-Z8ua3fbU1i9fPqw0gGLF0aw6yqnTK3GO6R9CFvnlvXB0x0AIFi6JqYvQ6v+s9kuw" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" integrity="sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 </head><body><header><div><h1>نمایشگر تصاویر MRI</h1><div class="notice">پرونده خصوصی آسا فیزیو</div></div><a href="/booking/reserve">بازگشت به پنل بیمار ←</a></header>
 <main><div class="tools"><button id="prev" disabled>برش قبلی</button><button id="next" disabled>برش بعدی</button>
 <label>مرکز <input id="center" type="range" min="-1000" max="3000" value="40"></label>
@@ -405,19 +589,21 @@ var $=function(id){return document.getElementById(id)},canvas=$('image'),ctx=can
 function say(t){$('status').textContent=t;$('status').style.display='block';canvas.style.display='none'}
 function val(ds,tag,def){try{var x=ds.string(tag);return x===undefined?def:x}catch(e){return def}}
 function num(ds,tag,def){try{return ds.uint16(tag)}catch(e){var n=parseInt(val(ds,tag,''),10);return isNaN(n)?def:n}}
+function safeLabel(name){var n=String(name||'').replace(/\\/g,'/').split('/').pop()||'slice';return n.replace(/[^A-Za-z0-9._-]/g,'').slice(0,40)||'slice'}
 function parse(buf,name){var arr=new Uint8Array(buf),ds;try{ds=dicomParser.parseDicom(arr)}catch(e){return null}
 var pe=ds.elements.x7fe00010,rows=num(ds,'x00280010',0),cols=num(ds,'x00280011',0),bits=num(ds,'x00280100',16),signed=num(ds,'x00280103',0)===1;
 if(!pe||!rows||!cols||![8,16].includes(bits)||rows*cols>16000000)return null;
-var ts=val(ds,'x00020010','1.2.840.10008.1.2');if(!['1.2.840.10008.1.2','1.2.840.10008.1.2.1'].includes(ts))return {unsupported:true,name:name};
+var ts=val(ds,'x00020010','1.2.840.10008.1.2');if(!['1.2.840.10008.1.2','1.2.840.10008.1.2.1'].includes(ts))return {unsupported:true,label:safeLabel(name)};
 var count=rows*cols,bpc=bits/8;if(pe.length<count*bpc)return null;var dv=new DataView(arr.buffer,arr.byteOffset,arr.byteLength),vals=new Float64Array(count),mn=Infinity,mx=-Infinity;
 for(var i=0;i<count;i++){var v=bits===8?dv.getUint8(pe.dataOffset+i):dv.getUint16(pe.dataOffset+i*2,true);if(bits===16&&signed&&v>32767)v-=65536;vals[i]=v;mn=Math.min(mn,v);mx=Math.max(mx,v)}
 var ipp=val(ds,'x00200032','').split('\\').map(Number);
-return {name:name,ds:ds,rows:rows,cols:cols,vals:vals,min:mn,max:mx,ipp:ipp,inst:num(ds,'x00200013',0),photo:val(ds,'x00280004','MONOCHROME2'),slope:Number(val(ds,'x00281053','1'))||1,intercept:Number(val(ds,'x00281052','0'))||0};}
+/* Keep only geometry/window tags in memory for render — never surface PatientName/ID/etc. */
+return {label:safeLabel(name),wc:val(ds,'x00281050','40'),ww:val(ds,'x00281051','400'),rows:rows,cols:cols,vals:vals,min:mn,max:mx,ipp:ipp,inst:num(ds,'x00200013',0),photo:val(ds,'x00280004','MONOCHROME2'),slope:Number(val(ds,'x00281053','1'))||1,intercept:Number(val(ds,'x00281052','0'))||0};}
 function draw(){var s=slices[idx];if(!s||s.unsupported){say('این فایل فشرده یا ناسازگار است و در این نسخه قابل نمایش نیست. فایل اصلی محفوظ مانده است.');return}
 canvas.style.display='block';$('status').style.display='none';canvas.width=s.cols;canvas.height=s.rows;var out=ctx.createImageData(s.cols,s.rows),lo=center-width/2,hi=center+width/2;
 for(var i=0;i<s.vals.length;i++){var v=s.vals[i]*s.slope+s.intercept;v=Math.max(0,Math.min(255,Math.round((v-lo)/Math.max(1,hi-lo)*255)));if(s.photo==='MONOCHROME1')v=255-v;var j=i*4;out.data[j]=out.data[j+1]=out.data[j+2]=v;out.data[j+3]=255}
 ctx.putImageData(out,0,0);canvas.style.width=(s.cols*zoom)+'px';canvas.style.height=(s.rows*zoom)+'px';$('sliceText').textContent='برش '+(idx+1)+' از '+slices.length;$('slice').value=idx;
-$('prev').disabled=idx===0;$('next').disabled=idx>=slices.length-1;$('meta').textContent=s.cols+' × '+s.rows+' · '+s.name+' · Instance '+(s.inst||'—');}
+$('prev').disabled=idx===0;$('next').disabled=idx>=slices.length-1;$('meta').textContent=s.cols+' × '+s.rows+' · برش '+(s.inst||(idx+1));}
 function setIdx(n){idx=Math.max(0,Math.min(slices.length-1,n));draw()}
 $('prev').onclick=function(){setIdx(idx-1)};$('next').onclick=function(){setIdx(idx+1)};$('slice').oninput=function(e){setIdx(+e.target.value)};
 $('center').oninput=function(e){center=+e.target.value;draw()};$('width').oninput=function(e){width=+e.target.value;draw()};
@@ -427,10 +613,12 @@ canvas.addEventListener('wheel',function(e){e.preventDefault();setIdx(idx+(e.del
 try{var res=await fetch('/api/portal/mri/file',{credentials:'same-origin',cache:'no-store'});if(!res.ok)throw Error('دریافت فایل MRI ناموفق بود.');
 var blob=await res.blob(),buf=await blob.arrayBuffer(),list=[];
 if(new Uint8Array(buf,0,Math.min(4,buf.byteLength))[0]===0x50){var zip=await JSZip.loadAsync(buf),entries=Object.values(zip.files).filter(function(f){return !f.dir});if(entries.length>1000)throw Error('تعداد فایل‌های ZIP بیش از حد مجاز است.');var total=0;
-for(var k=0;k<entries.length;k++){var f=entries[k];if(/\.(pdf|jpg|jpeg|png|webp)$/i.test(f.name))continue;var b=await f.async('arraybuffer');total+=b.byteLength;if(total>500*1024*1024)throw Error('حجم بازشده ZIP بیش از حد مجاز است.');var item=parse(b,f.name);if(item)list.push(item)}
-}else{var one=parse(buf,'MRI DICOM');if(one)list.push(one)}
+for(var k=0;k<entries.length;k++){var f=entries[k],path=String(f.name||'').replace(/\\/g,'/');
+if(path.charAt(0)==='/'||path.indexOf('..')>=0)continue;
+if(/\.(pdf|jpg|jpeg|png|webp)$/i.test(path))continue;var b=await f.async('arraybuffer');total+=b.byteLength;if(total>500*1024*1024)throw Error('حجم بازشده ZIP بیش از حد مجاز است.');var item=parse(b,path);if(item)list.push(item)}
+}else{var one=parse(buf,'slice');if(one)list.push(one)}
 if(!list.length)throw Error('فایل DICOM قابل‌خواندن پیدا نشد.');list.sort(function(a,b){if(a.unsupported||b.unsupported)return 0;var az=a.ipp[2],bz=b.ipp[2];return Number.isFinite(az)&&Number.isFinite(bz)?az-bz:(a.inst||0)-(b.inst||0)});
-slices=list;var first=list.find(function(x){return !x.unsupported});if(first){center=Number(val(first.ds,'x00281050','40').split('\\')[0])||Math.round((first.min+first.max)/2);width=Number(val(first.ds,'x00281051','400').split('\\')[0])||Math.max(1,first.max-first.min);$('center').value=Math.max(-1000,Math.min(3000,center));$('width').value=Math.max(1,Math.min(4000,width))}
+slices=list;var first=list.find(function(x){return !x.unsupported});if(first){center=Number(String(first.wc||'40').split('\\')[0])||Math.round((first.min+first.max)/2);width=Number(String(first.ww||'400').split('\\')[0])||Math.max(1,first.max-first.min);$('center').value=Math.max(-1000,Math.min(3000,center));$('width').value=Math.max(1,Math.min(4000,width))}
 $('slice').max=slices.length-1;$('slice').disabled=false;setIdx(0);
 }catch(e){say(e.message||'خواندن فایل MRI ممکن نشد.')}
 })();

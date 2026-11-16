@@ -69,6 +69,8 @@ body{min-height:100vh}
 .daybtn b{display:block;font-size:1.22rem;font-weight:800}
 .daybtn span{display:block;font-size:.68rem;color:var(--muted)}
 .daybtn:hover{border-color:rgba(45,212,191,.45);transform:translateY(-3px)}
+.daybtn:disabled{opacity:.34;cursor:not-allowed;filter:grayscale(.8)}
+.daybtn:disabled:hover{transform:none;border-color:rgba(45,212,191,.18)}
 .daybtn.on{background:linear-gradient(135deg,rgba(45,212,191,.28),rgba(56,189,248,.16));
   border-color:var(--teal);box-shadow:0 14px 32px -14px rgba(45,212,191,.75)}
 .daybtn.on span{color:var(--glow)}
