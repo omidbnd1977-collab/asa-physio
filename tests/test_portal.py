@@ -17,6 +17,7 @@ def nid(n: int) -> str:
 
 NID_A = nid(49937089)
 NID_B = nid(123456789)
+NID_C = nid(987654321)
 
 
 def tomorrow() -> str:
@@ -31,6 +32,7 @@ def reg_form(**kw) -> dict:
         "national_id": NID_A,
         "birth_date": "۱۳۷۰/۰۵/۰۳",
         "phone": "۰۹۱۲۱۱۱۲۲۳۳",
+        "sms_service_consent": "true",
         "mri_link": "https://drive.google.com/file/d/abc",
         "ortho_doctor": "دکتر رضایی",
     }
@@ -159,6 +161,9 @@ class TestRegistration:
         assert p["birth_date"] == "1991-07-25"  # stored gregorian
         assert p["birth_jalali"] == "1370/05/03"  # shown jalali
         assert p["phone"] == "09121112233"  # normalised
+        assert p["sms_service_consent"] == 1
+        assert p["sms_service_consent_at"]
+        assert p["sms_service_consent_version"] == "service-sms-v1"
         assert p["ortho_doctor"] == "دکتر رضایی"
         assert p["med_photo"].endswith(".png")
         assert (settings.UPLOAD_DIR / p["med_photo"]).is_file()
@@ -166,6 +171,38 @@ class TestRegistration:
         sms = repo.select(SYSTEM, "sms_messages", where="kind = 'registered'")
         assert len(sms) == 1 and sms[0]["status"] == "sent"
         assert "اطلاعات شما" in sms[0]["body"]
+
+    def test_registration_without_sms_consent_saves_no_patient_sms(self, client):
+        from api import repo
+        from api.policies import SYSTEM
+
+        r = client.post(
+            "/api/portal/register",
+            data=reg_form(national_id=NID_C, sms_service_consent="false"),
+        )
+        assert r.status_code == 201, r.text
+        assert r.json()["ok"] and r.json()["sms_sent"] is False
+        assert r.json()["sms_consent"] is False
+        patient = repo.select(SYSTEM, "patients", where="national_id = ?", params=[NID_C])[0]
+        assert patient["sms_service_consent"] == 0
+        assert patient["sms_service_consent_at"] is None
+        assert patient["sms_service_consent_version"] == ""
+        assert repo.count(
+            SYSTEM, "sms_messages", where="patient_id = ? AND kind = 'registered'",
+            params=[patient["id"]],
+        ) == 0
+
+        # Booking still succeeds, but every patient-facing SMS remains suppressed.
+        booked = client.post(
+            "/api/portal/appointments",
+            json={"slot_date": tomorrow(), "slot_time": "17:30"},
+        )
+        assert booked.status_code == 201, booked.text
+        assert booked.json()["sms_sent"] is False
+        assert repo.count(
+            SYSTEM, "sms_messages", where="patient_id = ? AND kind = 'booked'",
+            params=[patient["id"]],
+        ) == 0
 
     def test_mri_url_is_saved_as_private_file_when_image_download_succeeds(
         self, client, monkeypatch
