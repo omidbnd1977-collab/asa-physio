@@ -219,6 +219,7 @@ async def register(
     national_id: str = Form(...),
     birth_date: str = Form(...),
     phone: str = Form(...),
+    sms_service_consent: bool = Form(False),
     mri_link: str = Form(""),
     ortho_doctor: str = Form(""),
     website: str = Form(""),
@@ -238,6 +239,7 @@ async def register(
         national_id=national_id,
         birth_date=birth_date,
         phone=phone,
+        sms_service_consent=sms_service_consent,
         mri_link=mri_link,
         ortho_doctor=ortho_doctor,
         website=website,
@@ -286,6 +288,7 @@ async def register(
         {
             "ok": True,
             "sms_sent": sent,
+            "sms_consent": bool(patient.get("sms_service_consent")),
             "patient": patients.public_view(patient),
             "mri_warning": mri_warning,
             "redirect": "/booking/reserve",
