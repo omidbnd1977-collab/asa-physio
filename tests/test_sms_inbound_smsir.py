@@ -355,6 +355,61 @@ class TestSmsIrDivertEndpoint:
         assert repo.select(SYSTEM, "sms_inbound")[0]["provider_msg_id"] == "json-1"
 
 
+class TestInboundSecretFailClosed:
+    """HTTP gate must refuse traffic when secret is missing, wrong, or absent."""
+
+    def test_no_secret_header_rejected_when_configured(self, client, monkeypatch):
+        from api.config import settings
+
+        monkeypatch.setattr(settings, "SMS_INBOUND_SECRET", "s3cret")
+        r = client.post("/api/sms/inbound", json={"phone": "09121112233", "body": "1"})
+        assert r.status_code == 403
+
+    def test_wrong_secret_header_rejected(self, client, monkeypatch):
+        from api.config import settings
+
+        monkeypatch.setattr(settings, "SMS_INBOUND_SECRET", "s3cret")
+        r = client.post(
+            "/api/sms/inbound",
+            json={"phone": "09121112233", "body": "1"},
+            headers={"X-SMS-Secret": "not-s3cret"},
+        )
+        assert r.status_code == 403
+
+    def test_correct_secret_header_accepted(self, client, monkeypatch):
+        from api.config import settings
+
+        monkeypatch.setattr(settings, "SMS_INBOUND_SECRET", "s3cret")
+        r = client.post(
+            "/api/sms/inbound",
+            json={"phone": "09121112233", "body": "1"},
+            headers={"X-SMS-Secret": "s3cret"},
+        )
+        assert r.status_code == 200
+        assert r.json().get("reason") == "unknown_phone" or "handled" in r.json()
+
+    def test_empty_secret_config_rejects_even_with_header(self, client, monkeypatch):
+        from api.config import settings
+
+        monkeypatch.setattr(settings, "SMS_INBOUND_SECRET", "")
+        r = client.post(
+            "/api/sms/inbound",
+            json={"phone": "09121112233", "body": "1"},
+            headers={"X-SMS-Secret": "s3cret"},
+        )
+        assert r.status_code == 403
+
+    def test_divert_fails_closed_when_secret_unset(self, client, monkeypatch):
+        from api.config import settings
+
+        monkeypatch.setattr(settings, "SMS_INBOUND_SECRET", "")
+        r = client.get(
+            _divert_url("any-token"),
+            params={"mobile": "9121112233", "messageText": "1", "receiveReturnId": "1"},
+        )
+        assert r.status_code == 403
+
+
 class TestInboundConcurrencyAndSecurity:
     def test_concurrent_same_receive_return_id_single_winner(self, client, patient):
         """Two races with same ReceiveReturnId: only one mutates attendance."""

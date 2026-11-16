@@ -906,22 +906,24 @@ app.include_router(routes_doctor.router)
 # inbound SMS  (the patient replies "1" to confirm attendance)
 # --------------------------------------------------------------------------
 def _require_sms_inbound_secret(request: Request, *, path_token: str | None = None) -> None:
-    """Shared-secret gate for inbound SMS gateways.
+    """Shared-secret gate for inbound SMS gateways (fail-closed).
 
     Prefer ``X-SMS-Secret`` header. Divert panels that cannot set headers may put the
     same value in the URL *path* (``/api/sms/inbound/smsir/{token}``) — never as a
     query parameter (query secrets leak via access logs, proxies, and Referer).
+
+    If ``SMS_INBOUND_SECRET`` is missing/blank in *any* environment, refuse all
+    inbound traffic (staging/dev must not stay open when Preview omits the secret).
     """
-    secret = settings.SMS_INBOUND_SECRET
-    if secret:
-        header = request.headers.get("x-sms-secret", "")
-        ok_header = bool(header) and secrets.compare_digest(header, secret)
-        token = path_token or ""
-        ok_path = bool(token) and secrets.compare_digest(token, secret)
-        if not (ok_header or ok_path):
-            raise Forbidden("توکن نامعتبر است.")
-    elif settings.is_prod:
+    secret = (settings.SMS_INBOUND_SECRET or "").strip()
+    if not secret:
         raise Forbidden("SMS_INBOUND_SECRET is not configured.")
+    header = request.headers.get("x-sms-secret", "")
+    ok_header = bool(header) and secrets.compare_digest(header, secret)
+    token = path_token or ""
+    ok_path = bool(token) and secrets.compare_digest(token, secret)
+    if not (ok_header or ok_path):
+        raise Forbidden("توکن نامعتبر است.")
 
 
 @app.post("/api/sms/inbound")

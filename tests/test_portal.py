@@ -1492,9 +1492,34 @@ class TestReminders:
             client.post(
                 "/api/sms/inbound",
                 json={"phone": "09121112233", "body": "1"},
+                headers={"X-SMS-Secret": "wrong"},
+            ).status_code
+            == 403
+        )
+        assert (
+            client.post(
+                "/api/sms/inbound",
+                json={"phone": "09121112233", "body": "1"},
                 headers={"X-SMS-Secret": "s3cret"},
             ).status_code
             == 200
+        )
+
+    def test_inbound_fails_closed_when_secret_unset(self, client, monkeypatch):
+        from api.config import settings
+
+        monkeypatch.setattr(settings, "SMS_INBOUND_SECRET", "")
+        assert (
+            client.post(
+                "/api/sms/inbound",
+                json={"phone": "09121112233", "body": "1"},
+                headers={"X-SMS-Secret": "anything"},
+            ).status_code
+            == 403
+        )
+        assert (
+            client.post("/api/sms/inbound", json={"phone": "09121112233", "body": "1"}).status_code
+            == 403
         )
 
 

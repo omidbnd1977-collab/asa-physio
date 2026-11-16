@@ -308,18 +308,21 @@ class TestLayer08Security:
         assert "notice.textContent = text" in site
 
     def test_c4_inbound_xss_payload_is_stored_as_text_not_executable_html(
-        self, client, owner_client
+        self, client, owner_client, monkeypatch
     ):
         """A crafted inbound SMS body must round-trip as plain text (textContent semantics)."""
         from html import escape
 
         from api import repo
+        from api.config import settings
         from api.policies import SYSTEM
 
+        monkeypatch.setattr(settings, "SMS_INBOUND_SECRET", "s3cret")
         payload = "<img src=x onerror=alert(1)>"
         r = client.post(
             "/api/sms/inbound",
             json={"phone": "09120001122", "body": payload},
+            headers={"X-SMS-Secret": "s3cret"},
         )
         assert r.status_code == 200, r.text
 
