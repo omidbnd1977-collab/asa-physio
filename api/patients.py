@@ -33,14 +33,35 @@ MAGIC = {
     b"%PDF-": "pdf",
 }
 
-# MRI ZIP limits — keep in sync with the private viewer (client-side JSZip guards).
+# MRI ZIP limits — injected into the private viewer so browser checks stay identical.
 MRI_ZIP_MAX_ENTRIES = 1000
 MRI_ZIP_MAX_UNCOMPRESSED = 500 * 1024 * 1024
 MRI_ZIP_MAX_RATIO = 100  # compressed:uncompressed ceiling against zip bombs
+_ZIP_ENCRYPT_FLAG = 0x1
+_ZIP_UNIX_SYMLINK = 0o120000
+_ZIP_ALLOWED_COMPRESS = {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
+
+
+def _zip_entry_path_ok(name: str) -> bool:
+    path = name.replace("\\", "/")
+    if not path or path.startswith("/") or path.startswith("../") or "/../" in f"/{path}/":
+        return False
+    if ".." in pathlib.PurePosixPath(path).parts:
+        return False
+    # Reject Windows drive paths (e.g. C:/...).
+    return not (len(path) >= 2 and path[1] == ":" and path[0].isalpha())
+
+
+def _zip_entry_is_symlink(info: zipfile.ZipInfo) -> bool:
+    # Unix mode lives in the high 16 bits of external_attr when create_system == 3.
+    if info.create_system != 3:
+        return False
+    mode = (info.external_attr >> 16) & 0o170000
+    return mode == _ZIP_UNIX_SYMLINK
 
 
 def _validate_mri_zip(raw: bytes) -> None:
-    """Reject Zip Slip paths, oversized archives, and compression bombs before storage."""
+    """Reject Zip Slip, encryption, symlinks, bombs — using central-directory sizes only."""
     try:
         zf = zipfile.ZipFile(io.BytesIO(raw))
     except zipfile.BadZipFile as exc:
@@ -58,15 +79,31 @@ def _validate_mri_zip(raw: bytes) -> None:
         total = 0
         for info in infos:
             name = info.filename.replace("\\", "/")
-            if name.startswith("/") or name.startswith("../") or "/../" in f"/{name}/":
+            if not _zip_entry_path_ok(name):
                 raise BadRequest(
                     "مسیر فایل داخل ZIP مجاز نیست.",
                     fields={"mri_file": "مسیر ZIP نامعتبر"},
                 )
-            if ".." in pathlib.PurePosixPath(name).parts:
+            if info.flag_bits & _ZIP_ENCRYPT_FLAG:
                 raise BadRequest(
-                    "مسیر فایل داخل ZIP مجاز نیست.",
-                    fields={"mri_file": "مسیر ZIP نامعتبر"},
+                    "ZIP رمزگذاری‌شده پشتیبانی نمی‌شود.",
+                    fields={"mri_file": "ZIP رمزگذاری‌شده"},
+                )
+            if _zip_entry_is_symlink(info):
+                raise BadRequest(
+                    "پیوند نمادین داخل ZIP مجاز نیست.",
+                    fields={"mri_file": "symlink غیرمجاز"},
+                )
+            if info.compress_type not in _ZIP_ALLOWED_COMPRESS:
+                raise BadRequest(
+                    "روش فشرده‌سازی ZIP پشتیبانی نمی‌شود.",
+                    fields={"mri_file": "compress غیرمجاز"},
+                )
+            # Central-directory sizes must be present and non-negative before any extract.
+            if not isinstance(info.file_size, int) or not isinstance(info.compress_size, int):
+                raise BadRequest(
+                    "metadata فایل ZIP نامعتبر است.",
+                    fields={"mri_file": "ZIP بدون اندازه معتبر"},
                 )
             if info.file_size < 0 or info.compress_size < 0:
                 raise BadRequest(

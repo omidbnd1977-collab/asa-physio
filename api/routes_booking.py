@@ -612,10 +612,18 @@ $('reset').onclick=function(){zoom=1;center=40;width=400;$('center').value=cente
 canvas.addEventListener('wheel',function(e){e.preventDefault();setIdx(idx+(e.deltaY>0?1:-1))},{passive:false});
 try{var res=await fetch('/api/portal/mri/file',{credentials:'same-origin',cache:'no-store'});if(!res.ok)throw Error('دریافت فایل MRI ناموفق بود.');
 var blob=await res.blob(),buf=await blob.arrayBuffer(),list=[];
-if(new Uint8Array(buf,0,Math.min(4,buf.byteLength))[0]===0x50){var zip=await JSZip.loadAsync(buf),entries=Object.values(zip.files).filter(function(f){return !f.dir});if(entries.length>1000)throw Error('تعداد فایل‌های ZIP بیش از حد مجاز است.');var total=0;
+var ZIP_MAX_ENTRIES=__ZIP_MAX_ENTRIES__,ZIP_MAX_UNCOMPRESSED=__ZIP_MAX_UNCOMPRESSED__,ZIP_MAX_RATIO=__ZIP_MAX_RATIO__;
+if(new Uint8Array(buf,0,Math.min(4,buf.byteLength))[0]===0x50){var zip=await JSZip.loadAsync(buf),entries=Object.values(zip.files).filter(function(f){return !f.dir});
+if(entries.length>ZIP_MAX_ENTRIES)throw Error('تعداد فایل‌های ZIP بیش از حد مجاز است.');
+var total=0,readable=[];
 for(var k=0;k<entries.length;k++){var f=entries[k],path=String(f.name||'').replace(/\\/g,'/');
-if(path.charAt(0)==='/'||path.indexOf('..')>=0)continue;
-if(/\.(pdf|jpg|jpeg|png|webp)$/i.test(path))continue;var b=await f.async('arraybuffer');total+=b.byteLength;if(total>500*1024*1024)throw Error('حجم بازشده ZIP بیش از حد مجاز است.');var item=parse(b,path);if(item)list.push(item)}
+if(!path||path.charAt(0)==='/'||path.indexOf('..')>=0||(path.length>=2&&path.charAt(1)===':'))throw Error('مسیر فایل داخل ZIP مجاز نیست.');
+var meta=f._data;if(!meta||typeof meta.uncompressedSize!=='number'||!isFinite(meta.uncompressedSize)||meta.uncompressedSize<0||typeof meta.compressedSize!=='number'||!isFinite(meta.compressedSize)||meta.compressedSize<0)throw Error('metadata فایل ZIP نامعتبر است.');
+if(meta.compressedSize>0&&meta.uncompressedSize>meta.compressedSize*ZIP_MAX_RATIO)throw Error('نسبت فشرده‌سازی ZIP بیش از حد مجاز است.');
+total+=meta.uncompressedSize;if(total>ZIP_MAX_UNCOMPRESSED)throw Error('حجم بازشده ZIP بیش از حد مجاز است.');
+if(/\.(pdf|jpg|jpeg|png|webp)$/i.test(path))continue;readable.push({file:f,path:path,expected:meta.uncompressedSize});}
+for(var i=0;i<readable.length;i++){var ent=readable[i],b;try{b=await ent.file.async('arraybuffer')}catch(err){throw Error('خواندن ZIP ممکن نشد (رمزگذاری یا ساختار غیرعادی).')}
+if(b.byteLength!==ent.expected)throw Error('اندازه استخراج‌شده با metadata ZIP هم‌خوان نیست.');var item=parse(b,ent.path);if(item)list.push(item)}
 }else{var one=parse(buf,'slice');if(one)list.push(one)}
 if(!list.length)throw Error('فایل DICOM قابل‌خواندن پیدا نشد.');list.sort(function(a,b){if(a.unsupported||b.unsupported)return 0;var az=a.ipp[2],bz=b.ipp[2];return Number.isFinite(az)&&Number.isFinite(bz)?az-bz:(a.inst||0)-(b.inst||0)});
 slices=list;var first=list.find(function(x){return !x.unsupported});if(first){center=Number(String(first.wc||'40').split('\\')[0])||Math.round((first.min+first.max)/2);width=Number(String(first.ww||'400').split('\\')[0])||Math.max(1,first.max-first.min);$('center').value=Math.max(-1000,Math.min(3000,center));$('width').value=Math.max(1,Math.min(4000,width))}
@@ -623,6 +631,11 @@ $('slice').max=slices.length-1;$('slice').disabled=false;setIdx(0);
 }catch(e){say(e.message||'خواندن فایل MRI ممکن نشد.')}
 })();
 </script></body></html>"""
+    html = (
+        html.replace("__ZIP_MAX_ENTRIES__", str(patients.MRI_ZIP_MAX_ENTRIES))
+        .replace("__ZIP_MAX_UNCOMPRESSED__", str(patients.MRI_ZIP_MAX_UNCOMPRESSED))
+        .replace("__ZIP_MAX_RATIO__", str(patients.MRI_ZIP_MAX_RATIO))
+    )
     return Response(
         content=html,
         media_type="text/html; charset=utf-8",

@@ -2024,6 +2024,17 @@ def _minimal_mri_zip(entry_name: str = "scan.dcm") -> bytes:
     return buf.getvalue()
 
 
+def _zip_bytes_with_info(info, payload: bytes, *, compression=None) -> bytes:
+    import zipfile
+
+    buf = io.BytesIO()
+    compress = zipfile.ZIP_STORED if compression is None else compression
+    info.compress_type = compress
+    with zipfile.ZipFile(buf, "w", compression=compress) as zf:
+        zf.writestr(info, payload)
+    return buf.getvalue()
+
+
 @pytest.mark.parametrize(
     ("filename", "payload", "suffix"),
     [
@@ -2065,6 +2076,61 @@ def test_mri_zip_slip_and_invalid_archives_are_rejected(client):
     assert bogus.status_code == 400, bogus.text
 
 
+def test_mri_zip_encrypted_symlink_bomb_and_entry_cap_are_rejected():
+    """Negative ZIP cases checked via central-directory metadata (no huge extracts)."""
+    import zipfile
+
+    from api.errors import BadRequest
+    from api.patients import MRI_ZIP_MAX_ENTRIES, _validate_mri_zip
+
+    # zipfile.writestr clears the encrypt bit — forge it in local + central headers.
+    encrypted_raw = bytearray(_minimal_mri_zip("secret.dcm"))
+    assert encrypted_raw[0:4] == b"PK\x03\x04"
+    encrypted_raw[6] |= 0x1  # local general-purpose bit 0
+    cd_enc = encrypted_raw.find(b"PK\x01\x02")
+    assert cd_enc >= 0
+    encrypted_raw[cd_enc + 8] |= 0x1  # central-directory general-purpose bit 0
+    with pytest.raises(BadRequest):
+        _validate_mri_zip(bytes(encrypted_raw))
+
+    link = zipfile.ZipInfo("link.dcm")
+    link.create_system = 3
+    link.external_attr = 0o120777 << 16
+    with pytest.raises(BadRequest):
+        _validate_mri_zip(_zip_bytes_with_info(link, b"not-a-real-target"))
+
+    # High DEFLATE ratio on zeros — metadata shows compress_size << file_size.
+    zeros = b"\x00" * (64 * 1024)
+    with pytest.raises(BadRequest):
+        _validate_mri_zip(
+            _zip_bytes_with_info(
+                zipfile.ZipInfo("bomb.dcm"),
+                zeros,
+                compression=zipfile.ZIP_DEFLATED,
+            )
+        )
+
+    crowded = io.BytesIO()
+    with zipfile.ZipFile(crowded, "w", compression=zipfile.ZIP_STORED) as zf:
+        for i in range(MRI_ZIP_MAX_ENTRIES + 1):
+            zf.writestr(f"e{i}.dcm", b"\x00" * 128 + b"DICM")
+    with pytest.raises(BadRequest):
+        _validate_mri_zip(crowded.getvalue())
+
+    # Declared uncompressed size above the 500MB ceiling without writing 500MB.
+    from api.patients import MRI_ZIP_MAX_UNCOMPRESSED
+
+    forged_raw = bytearray(_minimal_mri_zip("huge.dcm"))
+    huge = (MRI_ZIP_MAX_UNCOMPRESSED + 1).to_bytes(4, "little")
+    assert forged_raw[0:4] == b"PK\x03\x04"
+    forged_raw[22:26] = huge  # local header uncompressed size
+    cd = forged_raw.find(b"PK\x01\x02")
+    assert cd >= 0
+    forged_raw[cd + 24 : cd + 28] = huge  # central-directory uncompressed size
+    with pytest.raises(BadRequest):
+        _validate_mri_zip(bytes(forged_raw))
+
+
 def test_med_photo_rejects_dicom_and_zip(client):
     dicom = client.post(
         "/api/portal/register",
@@ -2088,6 +2154,12 @@ def test_med_photo_rejects_dicom_and_zip(client):
 
 
 def test_patient_mri_viewer_is_session_scoped_and_uncached(client):
+    from api.patients import (
+        MRI_ZIP_MAX_ENTRIES,
+        MRI_ZIP_MAX_RATIO,
+        MRI_ZIP_MAX_UNCOMPRESSED,
+    )
+
     response = client.post(
         "/api/portal/register",
         data=reg_form(national_id=nid(800000005)),
@@ -2106,6 +2178,12 @@ def test_patient_mri_viewer_is_session_scoped_and_uncached(client):
     assert "no-store" in viewer.headers.get("Cache-Control", "")
     assert "dicom-parser@1.8.21" in viewer.text
     assert "integrity=" in viewer.text
+    # Browser guards are injected from the same server constants (pre-decompress).
+    assert f"ZIP_MAX_ENTRIES={MRI_ZIP_MAX_ENTRIES}" in viewer.text
+    assert f"ZIP_MAX_UNCOMPRESSED={MRI_ZIP_MAX_UNCOMPRESSED}" in viewer.text
+    assert f"ZIP_MAX_RATIO={MRI_ZIP_MAX_RATIO}" in viewer.text
+    assert "meta.uncompressedSize" in viewer.text
+    assert "arraybuffer" in viewer.text
 
     file_resp = client.get("/api/portal/mri/file")
     assert file_resp.status_code == 200
@@ -2181,4 +2259,3 @@ def test_closed_day_controls_require_staff_authentication(client):
         json={"date": date},
     )
     assert response.status_code == 401
-
