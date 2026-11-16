@@ -137,6 +137,7 @@ class PatientRegisterIn(BaseModel):
     national_id: str = Field(min_length=8, max_length=14)
     birth_date: str = Field(min_length=6, max_length=12)  # Jalali y/m/d
     phone: str = Field(min_length=10, max_length=20)
+    sms_service_consent: bool = False
     mri_link: str = Field(default="", max_length=500)
     ortho_doctor: str = Field(default="", max_length=80)
     website: str = Field(default="", max_length=100)  # honeypot

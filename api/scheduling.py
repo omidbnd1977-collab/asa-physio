@@ -26,6 +26,7 @@ from .policies import SYSTEM
 def _utc_now() -> str:
     return dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+
 OPEN_HOUR = 16
 CLOSE_HOUR = 22
 STEP_MIN = 90

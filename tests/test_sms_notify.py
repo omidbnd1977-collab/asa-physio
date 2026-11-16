@@ -510,16 +510,15 @@ class TestAdminAlertConcurrencyAndClaim:
         monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
         monkeypatch.setattr(sms.httpx, "post", lambda *a, **k: _smsir_ok())
 
-        mid = sms.ensure_admin_appointment(
-            "09127776655", "نوبت جدید", appt["id"]
-        )
+        mid = sms.ensure_admin_appointment("09127776655", "نوبت جدید", appt["id"])
         # Hold an active claim without finishing send.
         claimed = sms.claim_for_send(mid)
         assert claimed is not None and claimed["status"] == "sending"
         assert sms.deliver(mid) is False
-        assert repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid])[0][
-            "status"
-        ] == "sending"
+        assert (
+            repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid])[0]["status"]
+            == "sending"
+        )
         # Finish via reclaim after marking failed (simulates gateway path).
         repo.update(
             SYSTEM,
@@ -529,9 +528,9 @@ class TestAdminAlertConcurrencyAndClaim:
             params=[mid],
         )
         assert sms.deliver(mid) is True
-        assert repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid])[0][
-            "status"
-        ] == "sent"
+        assert (
+            repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid])[0]["status"] == "sent"
+        )
 
     def test_stale_sending_is_reclaimed_and_retried(self, monkeypatch):
         appt = self._patient_appt()

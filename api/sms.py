@@ -193,9 +193,7 @@ def send_smsir(phone: str, body: str) -> None:
         raise RuntimeError("sms.ir returned non-JSON body") from exc
     status = payload.get("status")
     if status != 1:
-        raise RuntimeError(
-            f"sms.ir status {status}: {payload.get('message') or payload!r}"
-        )
+        raise RuntimeError(f"sms.ir status {status}: {payload.get('message') or payload!r}")
     data = payload.get("data") or {}
     ids = data.get("messageIds")
     if isinstance(ids, list) and ids:
@@ -225,6 +223,11 @@ def dispatch(phone: str, body: str) -> None:
 # --------------------------------------------------------------------------
 # queue
 # --------------------------------------------------------------------------
+def _patient_has_service_sms_consent(patient_id: int) -> bool:
+    rows = repo.select(SYSTEM, "patients", where="id = ?", params=[patient_id], limit=1)
+    return bool(rows and rows[0].get("sms_service_consent", 0))
+
+
 def queue(
     phone: str,
     body: str,
@@ -233,6 +236,9 @@ def queue(
     patient_id: int | None = None,
     appointment_id: int | None = None,
 ) -> int:
+    # Patient-facing SMS is opt-in only. Admin notifications have no patient_id.
+    if patient_id is not None and not _patient_has_service_sms_consent(patient_id):
+        return 0
     now = _now()
     return repo.insert(
         SYSTEM,
@@ -271,8 +277,7 @@ def ensure_admin_appointment(
             (appointment_id, phone, body[:600], settings.SMS_PROVIDER, now, now),
         )
         row = conn.execute(
-            "SELECT id FROM sms_messages"
-            " WHERE appointment_id = ? AND kind = 'admin_appointment'",
+            "SELECT id FROM sms_messages WHERE appointment_id = ? AND kind = 'admin_appointment'",
             (appointment_id,),
         ).fetchone()
     if not row:
@@ -300,9 +305,7 @@ def claim_for_send(message_id: int) -> dict | None:
         )
         if cur.rowcount != 1:
             return None
-        row = conn.execute(
-            "SELECT * FROM sms_messages WHERE id = ?", (message_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM sms_messages WHERE id = ?", (message_id,)).fetchone()
     return dict(row) if row else None
 
 
@@ -312,6 +315,23 @@ def deliver(message_id: int, *, attempts: int = 2) -> bool:
         return False
     if rows[0]["status"] == "sent":
         return True
+    patient_id = rows[0].get("patient_id")
+    if patient_id is not None and not _patient_has_service_sms_consent(patient_id):
+        # Suppress legacy/pending messages too; do not retry them if consent is
+        # later granted, because consent must not retroactively authorize old SMS.
+        repo.update(
+            SYSTEM,
+            "sms_messages",
+            {
+                "status": "failed",
+                "attempts": 10,
+                "last_error": "suppressed: no recorded service SMS consent",
+                "updated_at": _now(),
+            },
+            where="id = ?",
+            params=[message_id],
+        )
+        return False
 
     msg = claim_for_send(message_id)
     if msg is None:
@@ -410,6 +430,8 @@ def send_now(
     appointment_id: int | None = None,
 ) -> tuple[int, bool]:
     mid = queue(phone, body, kind, patient_id=patient_id, appointment_id=appointment_id)
+    if not mid:
+        return 0, False
     return mid, deliver(mid)
 
 
@@ -418,10 +440,7 @@ def retry_failed(limit: int = 20) -> dict[str, int]:
     rows = repo.select(
         SYSTEM,
         "sms_messages",
-        where=(
-            "(status = 'failed' OR (status = 'sending' AND updated_at < ?))"
-            " AND attempts < 10"
-        ),
+        where=("(status = 'failed' OR (status = 'sending' AND updated_at < ?)) AND attempts < 10"),
         params=[stale],
         order_by="created_at",
         limit=limit,

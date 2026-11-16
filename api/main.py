@@ -599,9 +599,7 @@ async def me(request: Request) -> dict[str, Any]:
     from . import permissions as perms
 
     actor = staff(request)
-    rows = repo.select(
-        SYSTEM, "admin_users", where="id = ?", params=[actor.user_id], limit=1
-    )
+    rows = repo.select(SYSTEM, "admin_users", where="id = ?", params=[actor.user_id], limit=1)
     full_name = (rows[0].get("full_name") or rows[0]["username"]) if rows else ""
     caps = sorted(actor.permissions) if actor.role == "staff" else list(perms.ALL)
     return {
@@ -609,9 +607,7 @@ async def me(request: Request) -> dict[str, Any]:
         "user_id": actor.user_id,
         "full_name": full_name,
         "permissions": caps,
-        "permission_catalog": [
-            {"id": p, "label": perms.LABELS_FA[p]} for p in perms.ALL
-        ],
+        "permission_catalog": [{"id": p, "label": perms.LABELS_FA[p]} for p in perms.ALL],
         "can_manage_secretaries": actor.role == "owner",
         "csrf": auth.csrf_token(actor.session_id or ""),
     }
@@ -824,9 +820,7 @@ async def redeliver(public_id: str, request: Request) -> dict[str, Any]:
         message="ارسال مجدد بیش از حد انجام شده است.",
     )
     ok = notify.deliver(row, attempts=2)
-    metrics.record(
-        "booking_delivered" if ok else "booking_delivery_failed", booking_id=row["id"]
-    )
+    metrics.record("booking_delivered" if ok else "booking_delivery_failed", booking_id=row["id"])
     cache.purge("admin:bookings")
     return {"delivered": ok}
 

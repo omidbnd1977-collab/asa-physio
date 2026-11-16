@@ -92,13 +92,9 @@ def _ensure_clinic_owner(_clean):
     from api import auth, repo
     from api.policies import SYSTEM
 
-    owners = repo.select(
-        SYSTEM, "admin_users", where="role = 'owner' AND is_active = 1", limit=1
-    )
+    owners = repo.select(SYSTEM, "admin_users", where="role = 'owner' AND is_active = 1", limit=1)
     if not owners:
-        auth.create_user(
-            "t_owner", "a-very-long-test-password", role="owner", full_name="پزشک تست"
-        )
+        auth.create_user("t_owner", "a-very-long-test-password", role="owner", full_name="پزشک تست")
     yield
 
 
@@ -131,9 +127,7 @@ def owner_client(client):
     from api.policies import SYSTEM
 
     # Do not delete+recreate: patients may already reference this owner_id.
-    rows = repo.select(
-        SYSTEM, "admin_users", where="username = ?", params=["t_owner"], limit=1
-    )
+    rows = repo.select(SYSTEM, "admin_users", where="username = ?", params=["t_owner"], limit=1)
     if not rows:
         auth.create_user("t_owner", "a-very-long-test-password", role="owner")
     r = client.post(

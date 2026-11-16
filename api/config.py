@@ -142,24 +142,22 @@ class Settings:
             and self.NOTIFY_PROVIDER == "smsir"
             and not self.ADMIN_NOTIFICATION_PHONE
         ):
-            raise RuntimeError(
-                "ADMIN_NOTIFICATION_PHONE is required when NOTIFY_PROVIDER=smsir"
-            )
-        if self.ENV == "production" and self.NOTIFY_PROVIDER == "smsir" and (
-            not self.SMS_API_KEY or not self.SMS_SENDER
+            raise RuntimeError("ADMIN_NOTIFICATION_PHONE is required when NOTIFY_PROVIDER=smsir")
+        if (
+            self.ENV == "production"
+            and self.NOTIFY_PROVIDER == "smsir"
+            and (not self.SMS_API_KEY or not self.SMS_SENDER)
         ):
-            raise RuntimeError(
-                "SMS_API_KEY and SMS_SENDER are required when NOTIFY_PROVIDER=smsir"
-            )
+            raise RuntimeError("SMS_API_KEY and SMS_SENDER are required when NOTIFY_PROVIDER=smsir")
         if self.ENV == "production" and self.SMS_PROVIDER == "file":
             # same rule for SMS: never tell a patient we texted them when we did not
             raise RuntimeError("SMS_PROVIDER=file is not allowed in production")
-        if self.ENV == "production" and self.SMS_PROVIDER == "smsir" and (
-            not self.SMS_API_KEY or not self.SMS_SENDER
+        if (
+            self.ENV == "production"
+            and self.SMS_PROVIDER == "smsir"
+            and (not self.SMS_API_KEY or not self.SMS_SENDER)
         ):
-            raise RuntimeError(
-                "SMS_API_KEY and SMS_SENDER are required when SMS_PROVIDER=smsir"
-            )
+            raise RuntimeError("SMS_API_KEY and SMS_SENDER are required when SMS_PROVIDER=smsir")
         self.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         self.BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         self.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)

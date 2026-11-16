@@ -19,9 +19,9 @@ def idem() -> dict[str, str]:
 
 @pytest.fixture()
 def clinic(client):
-    oid = repo.select(
-        SYSTEM, "admin_users", where="username = ?", params=["t_owner"], limit=1
-    )[0]["id"]
+    oid = repo.select(SYSTEM, "admin_users", where="username = ?", params=["t_owner"], limit=1)[0][
+        "id"
+    ]
     return {"owner_id": oid, "client": client}
 
 
@@ -47,10 +47,13 @@ class TestReceptionPermissionGrant:
         # Secretary cannot manage secretaries / self-escalate
         _login(client, "sec_recv_grant", "secretary-iso-12")
         assert client.get("/api/admin/secretaries").status_code == 403
-        assert client.patch(
-            f"/api/admin/secretaries/{sec}",
-            json={"permissions": list(perms.ALL)},
-        ).status_code == 403
+        assert (
+            client.patch(
+                f"/api/admin/secretaries/{sec}",
+                json={"permissions": list(perms.ALL)},
+            ).status_code
+            == 403
+        )
 
 
 class TestBookingQueue:
@@ -64,14 +67,14 @@ class TestBookingQueue:
     def test_secretary_without_reception_cannot_see_unassigned(self, client, clinic):
         oid = clinic["owner_id"]
         _sec(oid, "sec_no_recv", [perms.MESSAGES_VIEW])
-        created = client.post("/api/bookings", json=booking_payload(name="لید مخفی"), headers=idem())
+        created = client.post(
+            "/api/bookings", json=booking_payload(name="لید مخفی"), headers=idem()
+        )
         pid = created.json()["public_id"]
         _login(client, "sec_no_recv", "secretary-iso-12")
         items = client.get("/api/admin/bookings").json()["items"]
         assert all(x["public_id"] != pid for x in items)
-        assert client.post(
-            f"/api/admin/bookings/{pid}/assign", json={}
-        ).status_code == 403
+        assert client.post(f"/api/admin/bookings/{pid}/assign", json={}).status_code == 403
 
     def test_reception_secretary_sees_and_assigns_unassigned(self, client, clinic):
         oid = clinic["owner_id"]
@@ -131,9 +134,7 @@ class TestInboundSmsQueue:
         inbound2 = client.get("/api/admin/sms").json()["inbound"]
         assert all(r["phone"] != "09121110011" or r.get("owner_id") for r in inbound2)
         # messages-only secretary must not see unassigned rows
-        assert not any(
-            r["phone"] == "09121110011" and r.get("owner_id") is None for r in inbound2
-        )
+        assert not any(r["phone"] == "09121110011" and r.get("owner_id") is None for r in inbound2)
 
     def test_assign_inbound_to_patient_audited(self, client, clinic):
         from api import audit, reminders
@@ -167,8 +168,6 @@ class TestInboundSmsQueue:
         oid = clinic["owner_id"]
         p = _patient_for(oid, 52137089)
         reminders.handle_inbound(p["phone"], "بله")
-        row = repo.select(
-            SYSTEM, "sms_inbound", where="phone = ?", params=[p["phone"]], limit=1
-        )[0]
+        row = repo.select(SYSTEM, "sms_inbound", where="phone = ?", params=[p["phone"]], limit=1)[0]
         assert row["patient_id"] == p["id"]
         assert row["owner_id"] == oid

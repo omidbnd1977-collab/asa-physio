@@ -61,17 +61,13 @@ class TestSecretaryLifecycle:
         me = client.get("/api/admin/me")
         assert me.status_code == 200
         assert me.json()["role"] == "staff"
-        assert me.json()["permissions"] == sorted(
-            [perms.PATIENTS_VIEW, perms.APPOINTMENTS_VIEW]
-        )
+        assert me.json()["permissions"] == sorted([perms.PATIENTS_VIEW, perms.APPOINTMENTS_VIEW])
         assert me.json()["can_manage_secretaries"] is False
 
     def test_secretary_without_perm_cannot_list_patients(self, secretary_client):
         client, _ = secretary_client
         # Drop patients.view
-        sid = repo.select(SYSTEM, "admin_users", where="username = ?", params=["sec_mary"])[0][
-            "id"
-        ]
+        sid = repo.select(SYSTEM, "admin_users", where="username = ?", params=["sec_mary"])[0]["id"]
         auth.replace_permissions(sid, [perms.APPOINTMENTS_VIEW])
         # Session still active; permissions reloaded on each resolve_session
         r = client.get("/api/admin/patients")
@@ -97,9 +93,7 @@ class TestSecretaryLifecycle:
                 "permissions": [perms.PATIENTS_VIEW],
             },
         ).json()
-        owner_client.patch(
-            f"/api/admin/secretaries/{created['id']}", json={"is_active": False}
-        )
+        owner_client.patch(f"/api/admin/secretaries/{created['id']}", json={"is_active": False})
         client.cookies.clear()
         r = client.post(
             "/api/admin/login",
@@ -131,9 +125,7 @@ class TestSecretaryLifecycle:
             "/api/admin/login", json={"username": "owner_b", "password": "owner-b-password-12"}
         )
         client.headers["X-CSRF-Token"] = b.json()["csrf"]
-        deny = client.patch(
-            f"/api/admin/secretaries/{sec_id}", json={"is_active": False}
-        )
+        deny = client.patch(f"/api/admin/secretaries/{sec_id}", json={"is_active": False})
         # Cross-owner management must not succeed (404 avoids existence leak).
         assert deny.status_code in (403, 404)
 
@@ -303,17 +295,23 @@ class TestSecretaryPermissionsStrict:
         assert owner_client.get("/api/admin/appointments").status_code == 403
 
         _relogin_owner(owner_client)
-        assert owner_client.patch(
-            f"/api/admin/secretaries/{sid}",
-            json={"permissions": [perms.PATIENTS_VIEW, perms.APPOINTMENTS_VIEW]},
-        ).status_code == 200
+        assert (
+            owner_client.patch(
+                f"/api/admin/secretaries/{sid}",
+                json={"permissions": [perms.PATIENTS_VIEW, perms.APPOINTMENTS_VIEW]},
+            ).status_code
+            == 200
+        )
         _login_as(owner_client, "sec_perm_flip", "abcdef")
         assert owner_client.get("/api/admin/appointments").status_code == 200
         _relogin_owner(owner_client)
-        assert owner_client.patch(
-            f"/api/admin/secretaries/{sid}",
-            json={"permissions": [perms.APPOINTMENTS_VIEW]},
-        ).status_code == 200
+        assert (
+            owner_client.patch(
+                f"/api/admin/secretaries/{sid}",
+                json={"permissions": [perms.APPOINTMENTS_VIEW]},
+            ).status_code
+            == 200
+        )
         _login_as(owner_client, "sec_perm_flip", "abcdef")
         assert owner_client.get("/api/admin/patients").status_code == 403
 
@@ -346,16 +344,19 @@ class TestSecretaryPermissionsStrict:
         assert owner_client.get("/api/admin/feedback").status_code == 403
 
         _relogin_owner(owner_client)
-        assert owner_client.patch(
-            f"/api/admin/secretaries/{sec['id']}",
-            json={
-                "permissions": [
-                    perms.PATIENTS_VIEW,
-                    perms.CLINICAL_RECORD,
-                    perms.FILES_MANAGE,
-                ]
-            },
-        ).status_code == 200
+        assert (
+            owner_client.patch(
+                f"/api/admin/secretaries/{sec['id']}",
+                json={
+                    "permissions": [
+                        perms.PATIENTS_VIEW,
+                        perms.CLINICAL_RECORD,
+                        perms.FILES_MANAGE,
+                    ]
+                },
+            ).status_code
+            == 200
+        )
         _login_as(owner_client, "sec_no_clin", "abcdef")
         assert owner_client.get(f"/api/admin/patients/{pid}/sessions").status_code == 200
         assert owner_client.get("/api/admin/catalog").status_code == 200
@@ -387,9 +388,9 @@ class TestSecretaryPermissionsStrict:
     def test_soft_delete_preserves_booker(self, owner_client):
         from api import patients, scheduling
 
-        oid = repo.select(
-            SYSTEM, "admin_users", where="username = ?", params=["t_owner"], limit=1
-        )[0]["id"]
+        oid = repo.select(SYSTEM, "admin_users", where="username = ?", params=["t_owner"], limit=1)[
+            0
+        ]["id"]
         sec = owner_client.post(
             "/api/admin/secretaries",
             json={
@@ -431,9 +432,7 @@ class TestSecretaryPermissionsStrict:
         assert deleted.json()["mode"] == "soft"
         row = repo.select(SYSTEM, "admin_users", where="id = ?", params=[sec["id"]])[0]
         assert row["is_active"] == 0
-        still = repo.select(
-            SYSTEM, "appointments", where="id = ?", params=[appt["id"]]
-        )[0]
+        still = repo.select(SYSTEM, "appointments", where="id = ?", params=[appt["id"]])[0]
         assert still["booked_by_user_id"] == sec["id"]
 
     def test_hard_delete_when_no_history(self, owner_client):
@@ -449,9 +448,7 @@ class TestSecretaryPermissionsStrict:
         r = owner_client.delete(f"/api/admin/secretaries/{created['id']}")
         assert r.status_code == 200, r.text
         assert r.json()["mode"] == "hard"
-        assert not repo.select(
-            SYSTEM, "admin_users", where="id = ?", params=[created["id"]]
-        )
+        assert not repo.select(SYSTEM, "admin_users", where="id = ?", params=[created["id"]])
 
 
 class TestSecretaryUiAndBack:
@@ -474,7 +471,7 @@ class TestSecretaryUiAndBack:
         # Must not rely on HTML5 required/pattern that fail invisibly when step1 is display:none.
         assert 'id="secUser" required' not in html
         assert 'id="secPass" type="password" required' not in html
-        assert "pattern=\"[A-Za-z0-9_]+\"" not in html
+        assert 'pattern="[A-Za-z0-9_]+"' not in html
 
 
 class TestSecretaryCreateApi:
@@ -596,7 +593,7 @@ class TestSecretaryCreateApi:
         html = owner_client.get("/admin").text
         assert 'data-tab="pts" data-need-any="patients.view,patients.create,patients.edit"' in html
         assert "patCreateForm" in html and "patCreateCard" in html
-        assert "data-pane=\"noperm\"" in html
+        assert 'data-pane="noperm"' in html
         assert "firstVisibleTab" in html and "'noperm'" in html
         assert "applyPatientsPaneVisibility" in html
 
@@ -619,9 +616,7 @@ class TestPermissionMatrixApi:
 
     def _as(self, client, username: str):
         client.cookies.clear()
-        login = client.post(
-            "/api/admin/login", json={"username": username, "password": "abcdef"}
-        )
+        login = client.post("/api/admin/login", json={"username": username, "password": "abcdef"})
         assert login.status_code == 200, login.text
         client.headers["X-CSRF-Token"] = login.json()["csrf"]
         return login.json()
@@ -649,9 +644,9 @@ class TestPermissionMatrixApi:
         assert created.status_code == 201, created.text
         assert created.json()["public_id"]
         # Ownership: patient belongs to clinic owner, not the secretary id.
-        oid = repo.select(
-            SYSTEM, "admin_users", where="username = ?", params=["t_owner"], limit=1
-        )[0]["id"]
+        oid = repo.select(SYSTEM, "admin_users", where="username = ?", params=["t_owner"], limit=1)[
+            0
+        ]["id"]
         row = repo.select(
             SYSTEM,
             "patients",
@@ -676,19 +671,25 @@ class TestPermissionMatrixApi:
         ).json()
         self._as(owner_client, "sec_view_only")
         assert owner_client.get("/api/admin/patients").status_code == 200
-        assert owner_client.post(
-            "/api/admin/patients",
-            json={
-                "full_name": "نباید ثبت شود",
-                "national_id": nid(46837089),
-                "birth_date": "1370/05/03",
-                "phone": "09128889900",
-            },
-        ).status_code == 403
-        assert owner_client.patch(
-            f"/api/admin/patients/{p['public_id']}/note",
-            json={"staff_note": "x"},
-        ).status_code == 403
+        assert (
+            owner_client.post(
+                "/api/admin/patients",
+                json={
+                    "full_name": "نباید ثبت شود",
+                    "national_id": nid(46837089),
+                    "birth_date": "1370/05/03",
+                    "phone": "09128889900",
+                },
+            ).status_code
+            == 403
+        )
+        assert (
+            owner_client.patch(
+                f"/api/admin/patients/{p['public_id']}/note",
+                json={"staff_note": "x"},
+            ).status_code
+            == 403
+        )
 
     def test_edit_only_can_note_not_list_without_view(self, owner_client):
         _relogin_owner(owner_client)
@@ -704,10 +705,13 @@ class TestPermissionMatrixApi:
         self._sec(owner_client, "sec_edit_only", [perms.PATIENTS_EDIT])
         self._as(owner_client, "sec_edit_only")
         assert owner_client.get("/api/admin/patients").status_code == 403
-        assert owner_client.patch(
-            f"/api/admin/patients/{p['public_id']}/note",
-            json={"staff_note": "یادداشت منشی"},
-        ).status_code == 200
+        assert (
+            owner_client.patch(
+                f"/api/admin/patients/{p['public_id']}/note",
+                json={"staff_note": "یادداشت منشی"},
+            ).status_code
+            == 200
+        )
 
     def test_appointments_perms_positive_negative(self, owner_client):
         _relogin_owner(owner_client)
@@ -723,10 +727,13 @@ class TestPermissionMatrixApi:
         self._sec(owner_client, "sec_appt_view", [perms.APPOINTMENTS_VIEW])
         self._as(owner_client, "sec_appt_view")
         assert owner_client.get("/api/admin/appointments").status_code == 200
-        assert owner_client.post(
-            f"/api/admin/patients/{p['public_id']}/followup",
-            json={"slot_date": "2099-01-01", "slot_time": "16:00", "notify": False},
-        ).status_code == 403
+        assert (
+            owner_client.post(
+                f"/api/admin/patients/{p['public_id']}/followup",
+                json={"slot_date": "2099-01-01", "slot_time": "16:00", "notify": False},
+            ).status_code
+            == 403
+        )
 
         _relogin_owner(owner_client)
         self._sec(
@@ -786,7 +793,11 @@ class TestPermissionMatrixApi:
     def test_create_only_ui_not_ops_fallback(self, owner_client):
         """Regression: patients.create alone must not land on doctor ops pane."""
         html = owner_client.get("/admin").text
-        assert "return t ? t.dataset.tab : 'noperm'" in html or "return t ? t.dataset.tab : \"noperm\"" in html or "'noperm'" in html
+        assert (
+            "return t ? t.dataset.tab : 'noperm'" in html
+            or 'return t ? t.dataset.tab : "noperm"' in html
+            or "'noperm'" in html
+        )
         assert "if (name === 'ops' && ROLE !== 'owner')" in html
         assert 'data-need-any="patients.view,patients.create,patients.edit"' in html
 
@@ -911,15 +922,18 @@ class TestPermissionMatrixApi:
         auth.replace_permissions(sec["id"], [perms.APPOINTMENTS_VIEW])
         assert owner_client.get("/api/admin/patients").status_code == 403
         assert owner_client.get("/api/admin/messages").status_code == 403
-        assert owner_client.post(
-            "/api/admin/patients",
-            json={
-                "full_name": "نباید",
-                "national_id": nid(47337089),
-                "birth_date": "1370/05/03",
-                "phone": "09124445566",
-            },
-        ).status_code == 403
+        assert (
+            owner_client.post(
+                "/api/admin/patients",
+                json={
+                    "full_name": "نباید",
+                    "national_id": nid(47337089),
+                    "birth_date": "1370/05/03",
+                    "phone": "09124445566",
+                },
+            ).status_code
+            == 403
+        )
         assert owner_client.get("/api/admin/appointments").status_code == 200
 
 
@@ -941,9 +955,7 @@ class TestStaffMedPhoto:
 
     def _as(self, client, username: str):
         client.cookies.clear()
-        login = client.post(
-            "/api/admin/login", json={"username": username, "password": "abcdef"}
-        )
+        login = client.post("/api/admin/login", json={"username": username, "password": "abcdef"})
         assert login.status_code == 200, login.text
         client.headers["X-CSRF-Token"] = login.json()["csrf"]
 
@@ -1007,9 +1019,7 @@ class TestStaffMedPhoto:
         body = r.json()
         assert body["med_photo"] is True
         pid = body["public_id"]
-        row = repo.select(
-            SYSTEM, "patients", where="public_id = ?", params=[pid], limit=1
-        )[0]
+        row = repo.select(SYSTEM, "patients", where="public_id = ?", params=[pid], limit=1)[0]
         stored = row["med_photo"]
         assert stored
         assert "user-evil-name" not in stored
@@ -1120,10 +1130,15 @@ class TestStaffMedPhoto:
         assert "pcMedDenied" in html
         assert "pcMedName" in html
         # Field is discoverable whenever create is allowed; disabled without files.manage.
-        assert "$('#pcMedWrap').hidden = !canCreate" in html or '$("#pcMedWrap").hidden = !canCreate' in html
+        assert (
+            "$('#pcMedWrap').hidden = !canCreate" in html
+            or '$("#pcMedWrap").hidden = !canCreate' in html
+        )
         assert "fileEl.disabled = !canFiles" in html
         assert "syncPermCatalog" in html
-        assert "/patients/'+p.public_id+'/photo" in html or '/patients/\'+p.public_id+\'/photo' in html
+        assert (
+            "/patients/'+p.public_id+'/photo" in html or "/patients/'+p.public_id+'/photo" in html
+        )
 
     def test_owner_me_lists_all_eleven_permissions(self, owner_client):
         me = owner_client.get("/api/admin/me").json()
@@ -1163,9 +1178,7 @@ class TestStaffMedPhoto:
             listed = owner_client.get("/api/admin/secretaries").json()["items"]
             row = next(x for x in listed if x["id"] == sid)
             assert row["permissions"] == [cap]
-        cleared = owner_client.patch(
-            f"/api/admin/secretaries/{sid}", json={"permissions": []}
-        )
+        cleared = owner_client.patch(f"/api/admin/secretaries/{sid}", json={"permissions": []})
         assert cleared.status_code == 200
         assert cleared.json()["permissions"] == []
         assert auth.load_permissions(sid) == frozenset()

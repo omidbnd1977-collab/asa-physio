@@ -94,9 +94,10 @@ class TestOwnerIsolationIDOR:
         assert c.get(f"/api/admin/patients/{other}/mri").status_code == 404
         assert c.get(f"/api/admin/patients/{other}/sessions").status_code == 404
         assert c.get(f"/api/admin/patients/{other}/photo").status_code == 404
-        assert c.patch(
-            f"/api/admin/patients/{other}/note", json={"staff_note": "x"}
-        ).status_code == 404
+        assert (
+            c.patch(f"/api/admin/patients/{other}/note", json={"staff_note": "x"}).status_code
+            == 404
+        )
 
     def test_secretary_scoped_to_owning_doctor(self, two_clinics):
         c = two_clinics["client"]
@@ -112,26 +113,34 @@ class TestOwnerIsolationIDOR:
         c = two_clinics["client"]
         pb = two_clinics["b"]["patient"]
         appt = scheduling.allocate(
-            pb["id"], tomorrow(), "17:30", kind="first", booked_by="staff",
+            pb["id"],
+            tomorrow(),
+            "17:30",
+            kind="first",
+            booked_by="staff",
             booked_by_user_id=two_clinics["b"]["owner_id"],
         )
         _login(c, "iso_owner_a", "owner-isolation-12")
         assert c.get(f"/api/admin/appointments/{appt['public_id']}/audit").status_code == 404
-        assert c.patch(
-            f"/api/admin/appointments/{appt['public_id']}/status",
-            json={"status": "cancelled", "notify": False},
-        ).status_code == 404
-        assert c.patch(
-            f"/api/admin/appointments/{appt['public_id']}/move",
-            json={"slot_date": tomorrow(), "slot_time": "19:00", "notify": False},
-        ).status_code == 404
+        assert (
+            c.patch(
+                f"/api/admin/appointments/{appt['public_id']}/status",
+                json={"status": "cancelled", "notify": False},
+            ).status_code
+            == 404
+        )
+        assert (
+            c.patch(
+                f"/api/admin/appointments/{appt['public_id']}/move",
+                json={"slot_date": tomorrow(), "slot_time": "19:00", "notify": False},
+            ).status_code
+            == 404
+        )
 
 
 class TestOrphanAssign:
     def test_orphan_secretary_cannot_login_until_assigned(self, client):
-        auth.create_user(
-            "orphan_sec", "orphan-sec-pass12", role="staff", full_name="منشی یتیم"
-        )
+        auth.create_user("orphan_sec", "orphan-sec-pass12", role="staff", full_name="منشی یتیم")
         r = client.post(
             "/api/admin/login",
             json={"username": "orphan_sec", "password": "orphan-sec-pass12"},
@@ -162,9 +171,7 @@ class TestOrphanAssign:
         b = _make_owner("orp_pat_owner_b")
         # Legacy unassigned rows (created before register-required-owner); simulate via SQL.
         orphan = _patient_for(a, 50337089, "بیمار یتیم")
-        repo.update(
-            SYSTEM, "patients", {"owner_id": None}, where="id = ?", params=[orphan["id"]]
-        )
+        repo.update(SYSTEM, "patients", {"owner_id": None}, where="id = ?", params=[orphan["id"]])
         owned = _patient_for(a, 50437089, "بیمار مالک‌دار")
         _login(client, "orp_pat_owner_a", "owner-isolation-12")
         listed = client.get("/api/admin/orphan-patients").json()
@@ -218,9 +225,7 @@ class TestBookedByIdentity:
         )
         assert r.status_code == 201, r.text
         code = r.json()["code"]
-        appt = repo.select(
-            SYSTEM, "appointments", where="public_id = ?", params=[code], limit=1
-        )[0]
+        appt = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[code], limit=1)[0]
         assert appt["booked_by"] == "staff"
         assert appt["booked_by_user_id"] == sec
         events = audit.list_for("appointment", code)
@@ -251,9 +256,7 @@ class TestBookedByIdentity:
         )
         assert book.status_code == 201, book.text
         code = book.json()["code"]
-        appt = repo.select(
-            SYSTEM, "appointments", where="public_id = ?", params=[code], limit=1
-        )[0]
+        appt = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[code], limit=1)[0]
         assert appt["booked_by"] == "patient"
         assert appt["booked_by_user_id"] is None
 
@@ -268,9 +271,9 @@ class TestBookedByIdentity:
         )
         assert booked.status_code == 201, booked.text
         code = booked.json()["code"]
-        before = repo.select(
-            SYSTEM, "appointments", where="public_id = ?", params=[code], limit=1
-        )[0]
+        before = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[code], limit=1)[
+            0
+        ]
         assert before["booked_by_user_id"] == sec
 
         _login(client, "move_book_owner", "owner-isolation-12")
@@ -324,9 +327,12 @@ class TestTwoSecretariesPermissions:
         assert client.get(f"/api/admin/patients/{p['public_id']}/messages").status_code == 403
         assert client.get(f"/api/admin/patients/{p['public_id']}/mri").status_code == 403
         assert client.get(f"/api/admin/patients/{p['public_id']}/photo").status_code == 403
-        assert client.patch(
-            f"/api/admin/patients/{p['public_id']}/note", json={"staff_note": "x"}
-        ).status_code == 403
+        assert (
+            client.patch(
+                f"/api/admin/patients/{p['public_id']}/note", json={"staff_note": "x"}
+            ).status_code
+            == 403
+        )
         assert client.get("/api/admin/appointments").status_code == 200
         assert full and limited
 
@@ -345,19 +351,25 @@ class TestTwoSecretariesPermissions:
         )[0]["id"]
         auth.replace_permissions(sid, [perms.APPOINTMENTS_VIEW])
         _login(client, "sec_appt_only", "secretary-iso-12")
-        assert client.post(
-            f"/api/admin/patients/{p['public_id']}/followup",
-            json={"slot_date": tomorrow(), "slot_time": "17:30", "notify": False},
-        ).status_code == 403
-        assert client.post(
-            "/api/admin/patients",
-            json={
-                "full_name": "نفوذ بیمار",
-                "national_id": nid(51437089),
-                "birth_date": "1370/05/03",
-                "phone": "09121112233",
-            },
-        ).status_code == 403
+        assert (
+            client.post(
+                f"/api/admin/patients/{p['public_id']}/followup",
+                json={"slot_date": tomorrow(), "slot_time": "17:30", "notify": False},
+            ).status_code
+            == 403
+        )
+        assert (
+            client.post(
+                "/api/admin/patients",
+                json={
+                    "full_name": "نفوذ بیمار",
+                    "national_id": nid(51437089),
+                    "birth_date": "1370/05/03",
+                    "phone": "09121112233",
+                },
+            ).status_code
+            == 403
+        )
 
 
 class TestDisableAndSelfEscalate:
@@ -386,20 +398,26 @@ class TestDisableAndSelfEscalate:
         c = two_clinics["client"]
         _login(c, "iso_sec_a", "secretary-iso-12")
         assert c.get("/api/admin/secretaries").status_code == 403
-        assert c.post(
-            "/api/admin/secretaries",
-            json={
-                "full_name": "نفوذ",
-                "username": "evil_sec",
-                "password": "evil-password-12",
-                "permissions": list(perms.ALL),
-            },
-        ).status_code == 403
+        assert (
+            c.post(
+                "/api/admin/secretaries",
+                json={
+                    "full_name": "نفوذ",
+                    "username": "evil_sec",
+                    "password": "evil-password-12",
+                    "permissions": list(perms.ALL),
+                },
+            ).status_code
+            == 403
+        )
         assert c.get("/api/admin/orphan-patients").status_code == 403
-        assert c.post(
-            "/api/admin/orphan-patients/assign",
-            json={"public_ids": [two_clinics["a"]["patient"]["public_id"]]},
-        ).status_code == 403
+        assert (
+            c.post(
+                "/api/admin/orphan-patients/assign",
+                json={"public_ids": [two_clinics["a"]["patient"]["public_id"]]},
+            ).status_code
+            == 403
+        )
 
 
 class TestPortalRequiresClinicOwner:

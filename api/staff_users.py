@@ -115,15 +115,11 @@ def create_secretary(
     if not (3 <= len(user) <= 32) or not user.replace("_", "").isalnum():
         raise BadRequest("نام کاربری باید ۳ تا ۳۲ نویسه و فقط حروف، رقم یا _ باشد.")
     if len(password) < auth.STAFF_PASSWORD_MIN:
-        raise BadRequest(
-            f"رمز عبور اولیه باید دست‌کم {auth.STAFF_PASSWORD_MIN} نویسه باشد."
-        )
+        raise BadRequest(f"رمز عبور اولیه باید دست‌کم {auth.STAFF_PASSWORD_MIN} نویسه باشد.")
     if len(password) > 256:
         raise BadRequest("رمز عبور بیش از حد طولانی است.")
     caps = perms.normalize(permissions)
-    existing = repo.select(
-        SYSTEM, "admin_users", where="username = ?", params=[user], limit=1
-    )
+    existing = repo.select(SYSTEM, "admin_users", where="username = ?", params=[user], limit=1)
     if existing:
         raise Conflict("این نام کاربری قبلاً ثبت شده است.")
     try:
@@ -213,9 +209,7 @@ def set_secretary_password(owner: Actor, secretary_id: int, password: str) -> di
     auth.require(owner, "owner")
     _owned_secretary(owner, secretary_id)
     if len(password) < auth.STAFF_PASSWORD_MIN:
-        raise BadRequest(
-            f"رمز عبور باید دست‌کم {auth.STAFF_PASSWORD_MIN} نویسه باشد."
-        )
+        raise BadRequest(f"رمز عبور باید دست‌کم {auth.STAFF_PASSWORD_MIN} نویسه باشد.")
     if len(password) > 256:
         raise BadRequest("رمز عبور بیش از حد طولانی است.")
     try:
@@ -249,9 +243,7 @@ def set_secretary_password(owner: Actor, secretary_id: int, password: str) -> di
 
 def _secretary_has_history(secretary_id: int) -> bool:
     """True when deleting the row would lose booker/audit/clinical attribution."""
-    if repo.count(
-        SYSTEM, "appointments", where="booked_by_user_id = ?", params=[secretary_id]
-    ):
+    if repo.count(SYSTEM, "appointments", where="booked_by_user_id = ?", params=[secretary_id]):
         return True
     if repo.count(
         SYSTEM,
@@ -260,13 +252,9 @@ def _secretary_has_history(secretary_id: int) -> bool:
         params=[secretary_id],
     ):
         return True
-    if repo.count(
-        SYSTEM, "treatment_sessions", where="created_by = ?", params=[secretary_id]
-    ):
+    if repo.count(SYSTEM, "treatment_sessions", where="created_by = ?", params=[secretary_id]):
         return True
-    return bool(
-        repo.count(SYSTEM, "messages", where="created_by = ?", params=[secretary_id])
-    )
+    return bool(repo.count(SYSTEM, "messages", where="created_by = ?", params=[secretary_id]))
 
 
 def delete_secretary(owner: Actor, secretary_id: int) -> dict[str, Any]:

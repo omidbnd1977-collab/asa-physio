@@ -133,6 +133,15 @@ def register(
             "birth_date": data["birth_date"],
             "birth_jalali": to_jalali_str(data["birth_date"]),
             "phone": data["phone"],
+            "sms_service_consent": int(bool(data.get("sms_service_consent", False))),
+            "sms_service_consent_at": (
+                dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+                if data.get("sms_service_consent", False)
+                else None
+            ),
+            "sms_service_consent_version": (
+                "service-sms-v1" if data.get("sms_service_consent", False) else ""
+            ),
             "mri_link": data.get("mri_link", ""),
             "ortho_doctor": data.get("ortho_doctor", ""),
             "med_photo": med_photo,
