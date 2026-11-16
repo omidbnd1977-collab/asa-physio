@@ -23,6 +23,12 @@ from .policies import SYSTEM, Actor
 
 PATIENT_COOKIE = "asa_patient"
 
+# Explicit opt-in versions/sources for service SMS. Never infer consent.
+SMS_CONSENT_VERSION_REGISTER = "service-sms-v1"
+SMS_CONSENT_VERSION_BOOKING_STEP2 = "service-sms-booking-v1"
+SMS_CONSENT_SOURCE_REGISTER = "portal_register"
+SMS_CONSENT_SOURCE_BOOKING_STEP2 = "portal_booking_step2"
+
 ALLOWED_IMAGE = {"jpeg", "png", "webp"}
 MAGIC = {
     b"\xff\xd8\xff": "jpeg",
@@ -140,7 +146,10 @@ def register(
                 else None
             ),
             "sms_service_consent_version": (
-                "service-sms-v1" if data.get("sms_service_consent", False) else ""
+                SMS_CONSENT_VERSION_REGISTER if data.get("sms_service_consent", False) else ""
+            ),
+            "sms_service_consent_source": (
+                SMS_CONSENT_SOURCE_REGISTER if data.get("sms_service_consent", False) else ""
             ),
             "mri_link": data.get("mri_link", ""),
             "ortho_doctor": data.get("ortho_doctor", ""),
@@ -152,6 +161,43 @@ def register(
     )
     info("patient.registered", patient_id=pid, owner_id=resolved_owner)
     return repo.select(SYSTEM, "patients", where="id = ?", params=[pid], limit=1)[0]
+
+
+def grant_sms_service_consent(
+    patient_id: int,
+    *,
+    source: str,
+    version: str,
+) -> dict:
+    """Record explicit service-SMS consent once. Never clears or overwrites an existing yes."""
+    rows = repo.select(SYSTEM, "patients", where="id = ?", params=[patient_id], limit=1)
+    if not rows:
+        raise BadRequest("پرونده بیمار پیدا نشد.")
+    patient = rows[0]
+    if int(patient.get("sms_service_consent") or 0):
+        return patient
+    now = _iso(_now())
+    repo.update(
+        SYSTEM,
+        "patients",
+        {
+            "sms_service_consent": 1,
+            "sms_service_consent_at": now,
+            "sms_service_consent_version": version[:80],
+            "sms_service_consent_source": source[:40],
+            "updated_at": now,
+        },
+        where="id = ? AND sms_service_consent = 0",
+        params=[patient_id],
+    )
+    info(
+        "patient.sms_consent_granted",
+        patient_id=patient_id,
+        source=source,
+        version=version,
+    )
+    refreshed = repo.select(SYSTEM, "patients", where="id = ?", params=[patient_id], limit=1)
+    return refreshed[0] if refreshed else patient
 
 
 def login(national_id: str, birth_date: str) -> dict:
@@ -226,4 +272,6 @@ def public_view(p: dict) -> dict:
         "full_name": p["full_name"],
         "phone": p["phone"][:4] + "***" + p["phone"][-2:],
         "birth_jalali": p["birth_jalali"],
+        # Boolean only — used by the booking UI to hide/show the opt-in checkbox.
+        "sms_service_consent": bool(int(p.get("sms_service_consent") or 0)),
     }

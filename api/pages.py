@@ -566,6 +566,20 @@ RESERVE_BODY = """
     <span><i class="l-full"></i>تکمیل / گذشته</span>
   </div>
 
+  <div id="smsConsentWrap" class="hidden" style="margin-top:18px;padding:14px 16px;border:1px solid rgba(45,212,191,.22);border-radius:14px;background:rgba(11,42,74,.28)">
+    <p style="margin:0 0 10px;line-height:1.9;font-size:.92rem">
+      اگر می‌خواهید تاریخ و ساعت نوبت برای شما پیامک شود و از تغییر، جابه‌جایی یا لغو نوبت خود مطلع شوید، لطفاً این گزینه را فعال کنید.
+    </p>
+    <label for="sms_service_consent_booking" style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;line-height:1.9">
+      <input type="checkbox" id="sms_service_consent_booking" name="sms_service_consent_booking" value="true"
+             style="width:18px;height:18px;flex:0 0 auto;margin-top:5px;accent-color:var(--teal)">
+      <span>با دریافت پیامک‌های اطلاع‌رسانی و خدماتی آسا فیزیو موافقم.</span>
+    </label>
+    <p class="hint" style="margin:8px 3px 0">
+      این پیامک‌ها صرفاً برای اطلاع‌رسانی درباره نوبت و خدمات درمانی شما هستند و شامل تبلیغات نمی‌شوند.
+    </p>
+  </div>
+
   <div class="field hidden" id="noteWrap" style="margin-top:20px">
     <textarea id="note" placeholder=" " maxlength="500"></textarea>
     <label for="note">یادداشت (اختیاری)</label>
@@ -585,8 +599,8 @@ RESERVE_BODY = """
         ثبت نهایی نوبت
       </button>
     </div>
-    <p class="hint" style="text-align:center;margin-top:10px">
-      پس از ثبت، پیامک تأیید با کد پیگیری برای شما ارسال می‌شود.
+    <p class="hint" style="text-align:center;margin-top:10px" id="bookSmsHint">
+      پس از ثبت، در صورت فعال‌بودن رضایت پیامکی، پیامک تأیید با کد پیگیری برای شما ارسال می‌شود.
     </p>
   </div>
   <div style="margin-top:16px">
@@ -606,9 +620,25 @@ const REGISTER_NOTE=sessionStorage.getItem('asa_booking_note')||'';
 const RESERVE_DRAFT='asa_reserve_draft';
 
 function saveReserveDraft(){
+  const consentEl=$('#sms_service_consent_booking');
   sessionStorage.setItem(RESERVE_DRAFT, JSON.stringify({
-    step:RESERVE_STEP, date:SEL_DATE, time:SEL_TIME, note:($('#note')&&$('#note').value)||''
+    step:RESERVE_STEP, date:SEL_DATE, time:SEL_TIME, note:($('#note')&&$('#note').value)||'',
+    sms_consent: !!(consentEl && consentEl.checked)
   }));
+}
+function needsBookingSmsConsent(){
+  return !!(ME && ME.patient && !ME.patient.sms_service_consent);
+}
+function syncSmsConsentUI(){
+  const wrap=$('#smsConsentWrap');
+  if(!wrap) return;
+  // Show from step 2 onward only when the patient has not already opted in.
+  const show = needsBookingSmsConsent() && RESERVE_STEP >= 2;
+  wrap.classList.toggle('hidden', !show);
+  if(!show){
+    const el=$('#sms_service_consent_booking');
+    if(el) el.checked=false;
+  }
 }
 function setReserveStep(n){
   RESERVE_STEP=n;
@@ -617,6 +647,7 @@ function setReserveStep(n){
   $('#reserveStepLabel').textContent=labels[n]||'';
   // Early back visible until confirm; confirm has its own back beside book.
   if($('#reserveBackEarly')) $('#reserveBackEarly').classList.toggle('hidden', n===3);
+  syncSmsConsentUI();
   saveReserveDraft();
 }
 function goReserveBack(){
@@ -649,6 +680,12 @@ document.addEventListener('who',e=>{
   if(!e.detail){ location.href='/booking'; return; }
   ME=e.detail;
   $('#rName').textContent=ME.patient.full_name;
+  const consentEl=$('#sms_service_consent_booking');
+  if(consentEl){
+    consentEl.checked=false; // always default off; never auto-opt-in
+    consentEl.addEventListener('change', saveReserveDraft);
+  }
+  syncSmsConsentUI();
   renderMine();
   loadDays();
 });
@@ -724,6 +761,10 @@ async function loadDays(){
       if(btn) pickSlot(draft.time, btn);
     }
     if(draft.note && $('#note')) $('#note').value=draft.note;
+    if(draft.sms_consent && $('#sms_service_consent_booking') && needsBookingSmsConsent()){
+      $('#sms_service_consent_booking').checked=true;
+    }
+    syncSmsConsentUI();
   } else {
     const firstOpen=DAYS.find(d=>!d.closed);
     if(firstOpen) pickDay(firstOpen.date);
@@ -824,8 +865,11 @@ document.addEventListener('click',async e=>{
   if(!btn) return;
   if(!SEL_DATE||!SEL_TIME){flash('ابتدا تاریخ و ساعت را انتخاب کنید.',true);return;}
   await withBtn(btn,'در حال ثبت نوبت…',async()=>{
+    const consentEl=$('#sms_service_consent_booking');
+    const wantConsent = !!(needsBookingSmsConsent() && consentEl && consentEl.checked);
     const r=await api('/api/portal/appointments',{method:'POST',body:{
-      slot_date:SEL_DATE, slot_time:SEL_TIME, note:$('#note').value.trim()}});
+      slot_date:SEL_DATE, slot_time:SEL_TIME, note:$('#note').value.trim(),
+      sms_service_consent: wantConsent}});
     if(!r.ok){
       flash((r.error.message||'ثبت نشد.')+(r.error.trace_id?' (کد: '+r.error.trace_id+')':''),true);
       if(r.error.code==='slot_full') pickDay(SEL_DATE);   // refresh the grid
@@ -833,7 +877,10 @@ document.addEventListener('click',async e=>{
     }
     sessionStorage.removeItem('asa_booking_note');
     sessionStorage.removeItem(RESERVE_DRAFT);
-    flash(r.data.sms_sent?'نوبت ثبت شد ✓ پیامک تأیید ارسال شد':'نوبت ثبت شد ✓');
+    let msg='نوبت ثبت شد ✓';
+    if(r.data.sms_sent) msg='نوبت ثبت شد ✓ پیامک تأیید ارسال شد';
+    else if(wantConsent && !r.data.sms_sent) msg='نوبت ثبت شد ✓ رضایت پیامکی ثبت شد';
+    flash(msg);
     setTimeout(()=>location.href=r.data.redirect,1100);
   });
 });

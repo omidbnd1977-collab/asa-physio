@@ -227,6 +227,8 @@ class AppointmentIn(BaseModel):
     slot_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     slot_time: str = Field(pattern=r"^\d{2}:\d{2}$")
     note: str = Field(default="", max_length=500)
+    # Optional late opt-in during booking step 2. Default off; never auto-true.
+    sms_service_consent: bool = False
 
     @field_validator("note")
     @classmethod

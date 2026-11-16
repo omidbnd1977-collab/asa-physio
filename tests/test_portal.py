@@ -160,6 +160,7 @@ class TestRegistration:
         assert p["sms_service_consent"] == 1
         assert p["sms_service_consent_at"]
         assert p["sms_service_consent_version"] == "service-sms-v1"
+        assert p["sms_service_consent_source"] == "portal_register"
         assert p["ortho_doctor"] == "دکتر رضایی"
         assert p["med_photo"].endswith(".png")
         assert (settings.UPLOAD_DIR / p["med_photo"]).is_file()
@@ -183,6 +184,7 @@ class TestRegistration:
         assert patient["sms_service_consent"] == 0
         assert patient["sms_service_consent_at"] is None
         assert patient["sms_service_consent_version"] == ""
+        assert patient["sms_service_consent_source"] == ""
         assert (
             repo.count(
                 SYSTEM,
@@ -200,6 +202,8 @@ class TestRegistration:
         )
         assert booked.status_code == 201, booked.text
         assert booked.json()["sms_sent"] is False
+        assert booked.json()["sms_consent"] is False
+        assert booked.json()["sms_consent_granted_now"] is False
         assert (
             repo.count(
                 SYSTEM,
@@ -209,6 +213,163 @@ class TestRegistration:
             )
             == 0
         )
+
+    def test_booking_step_can_grant_sms_consent_explicitly(self, client):
+        from api import patients, repo, sms
+        from api.policies import SYSTEM
+
+        r = client.post(
+            "/api/portal/register",
+            data=reg_form(national_id=NID_C, sms_service_consent="false"),
+        )
+        assert r.status_code == 201, r.text
+        patient = repo.select(SYSTEM, "patients", where="national_id = ?", params=[NID_C])[0]
+        assert patient["sms_service_consent"] == 0
+
+        me = client.get("/api/portal/me")
+        assert me.status_code == 200
+        assert me.json()["patient"]["sms_service_consent"] is False
+
+        booked = client.post(
+            "/api/portal/appointments",
+            json={
+                "slot_date": tomorrow(),
+                "slot_time": "17:30",
+                "sms_service_consent": True,
+            },
+        )
+        assert booked.status_code == 201, booked.text
+        body = booked.json()
+        assert body["sms_consent"] is True
+        assert body["sms_consent_granted_now"] is True
+        # Preview/tests use SMS_PROVIDER=file — still a local sink, not a real gateway.
+        assert body["sms_sent"] is True
+
+        patient = repo.select(SYSTEM, "patients", where="id = ?", params=[patient["id"]])[0]
+        assert patient["sms_service_consent"] == 1
+        assert patient["sms_service_consent_at"]
+        assert patient["sms_service_consent_version"] == patients.SMS_CONSENT_VERSION_BOOKING_STEP2
+        assert patient["sms_service_consent_source"] == patients.SMS_CONSENT_SOURCE_BOOKING_STEP2
+        assert (
+            repo.count(
+                SYSTEM,
+                "sms_messages",
+                where="patient_id = ? AND kind = 'booked' AND status = 'sent'",
+                params=[patient["id"]],
+            )
+            == 1
+        )
+        assert sms.settings.SMS_PROVIDER == "file"
+
+    def test_booking_without_step_consent_keeps_consent_zero(self, client):
+        from api import repo
+        from api.policies import SYSTEM
+
+        r = client.post(
+            "/api/portal/register",
+            data=reg_form(national_id=NID_C, sms_service_consent="false"),
+        )
+        assert r.status_code == 201, r.text
+
+        booked = client.post(
+            "/api/portal/appointments",
+            json={
+                "slot_date": tomorrow(),
+                "slot_time": "17:30",
+                "sms_service_consent": False,
+            },
+        )
+        assert booked.status_code == 201, booked.text
+        assert booked.json()["sms_sent"] is False
+        assert booked.json()["sms_consent"] is False
+        assert booked.json()["sms_consent_granted_now"] is False
+
+        patient = repo.select(SYSTEM, "patients", where="national_id = ?", params=[NID_C])[0]
+        assert patient["sms_service_consent"] == 0
+        assert patient["sms_service_consent_at"] is None
+        assert patient["sms_service_consent_version"] == ""
+        assert patient["sms_service_consent_source"] == ""
+
+    def test_existing_consent_is_preserved_and_checkbox_payload_ignored(self, client):
+        from api import patients, repo
+        from api.policies import SYSTEM
+
+        r = client.post("/api/portal/register", data=reg_form(national_id=NID_C))
+        assert r.status_code == 201, r.text
+        before = repo.select(SYSTEM, "patients", where="national_id = ?", params=[NID_C])[0]
+        assert before["sms_service_consent"] == 1
+        assert before["sms_service_consent_source"] == patients.SMS_CONSENT_SOURCE_REGISTER
+        at_before = before["sms_service_consent_at"]
+
+        me = client.get("/api/portal/me")
+        assert me.json()["patient"]["sms_service_consent"] is True
+
+        booked = client.post(
+            "/api/portal/appointments",
+            json={
+                "slot_date": tomorrow(),
+                "slot_time": "17:30",
+                "sms_service_consent": True,
+            },
+        )
+        assert booked.status_code == 201, booked.text
+        assert booked.json()["sms_consent"] is True
+        assert booked.json()["sms_consent_granted_now"] is False
+
+        after = repo.select(SYSTEM, "patients", where="id = ?", params=[before["id"]])[0]
+        assert after["sms_service_consent"] == 1
+        assert after["sms_service_consent_at"] == at_before
+        assert after["sms_service_consent_version"] == patients.SMS_CONSENT_VERSION_REGISTER
+        assert after["sms_service_consent_source"] == patients.SMS_CONSENT_SOURCE_REGISTER
+
+    def test_granting_consent_later_does_not_send_prior_suppressed_sms(self, client):
+        from api import repo, sms
+        from api.policies import SYSTEM
+
+        r = client.post(
+            "/api/portal/register",
+            data=reg_form(national_id=NID_C, sms_service_consent="false"),
+        )
+        assert r.status_code == 201, r.text
+        patient = repo.select(SYSTEM, "patients", where="national_id = ?", params=[NID_C])[0]
+
+        # Simulate a legacy pending row that never should have been authorized.
+        orphan_id = repo.insert(
+            SYSTEM,
+            "sms_messages",
+            {
+                "patient_id": patient["id"],
+                "appointment_id": None,
+                "phone": patient["phone"],
+                "kind": "registered",
+                "body": "legacy suppressed body",
+                "status": "pending",
+                "provider": "file",
+                "attempts": 0,
+            },
+        )
+        # First deliver attempt marks it suppressed (attempts=10) while consent is still off.
+        assert sms.deliver(orphan_id) is False
+        suppressed = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[orphan_id])[0]
+        assert suppressed["status"] == "failed"
+        assert suppressed["attempts"] >= 10
+
+        booked = client.post(
+            "/api/portal/appointments",
+            json={
+                "slot_date": tomorrow(),
+                "slot_time": "17:30",
+                "sms_service_consent": True,
+            },
+        )
+        assert booked.status_code == 201, booked.text
+        assert booked.json()["sms_consent_granted_now"] is True
+
+        sms.retry_failed(limit=20)
+        again = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[orphan_id])[0]
+        assert again["status"] == "failed"
+        assert again["sent_at"] is None
+        assert again["attempts"] >= 10
 
     def test_mri_url_is_saved_as_private_file_when_image_download_succeeds(
         self, client, monkeypatch
@@ -1563,6 +1724,13 @@ class TestPortalPages:
     def test_no_patient_data_is_baked_into_the_html(self, client, patient):
         html = client.get("/booking/reserve").text
         assert NID_A not in html and "09121112233" not in html
+
+    def test_reserve_page_includes_booking_sms_consent_copy(self, client):
+        html = client.get("/booking/reserve").text
+        assert "با دریافت پیامک‌های اطلاع‌رسانی و خدماتی آسا فیزیو موافقم" in html
+        assert "شامل تبلیغات نمی‌شوند" in html
+        assert 'id="sms_service_consent_booking"' in html
+        assert "smsConsentWrap" in html
 
 
 # ======================================================================

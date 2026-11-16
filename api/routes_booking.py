@@ -400,6 +400,17 @@ async def book(request: Request, payload: dict[str, Any] = Body(default={})) -> 
     )
     when = scheduling.describe(appt)
 
+    # Late opt-in only after a successful booking, and only on an explicit checkbox.
+    # Never grant from a default/false payload; never overwrite an existing consent.
+    consent_granted_now = False
+    if data.sms_service_consent and not int(p.get("sms_service_consent") or 0):
+        p = patients.grant_sms_service_consent(
+            p["id"],
+            source=patients.SMS_CONSENT_SOURCE_BOOKING_STEP2,
+            version=patients.SMS_CONSENT_VERSION_BOOKING_STEP2,
+        )
+        consent_granted_now = True
+
     # Coming back after a long break: thank them first, so the warm message is the
     # one they read before the booking confirmation.
     gap = clinical.returning_after_gap(p["id"], data.slot_date)
@@ -440,10 +451,17 @@ async def book(request: Request, payload: dict[str, Any] = Body(default={})) -> 
     from . import cache
 
     cache.purge("admin:appointments")
-    info("portal.booked", appointment_id=appt["id"], sms_sent=sent)
+    info(
+        "portal.booked",
+        appointment_id=appt["id"],
+        sms_sent=sent,
+        sms_consent_granted_now=consent_granted_now,
+    )
     return {
         "ok": True,
         "sms_sent": sent,
+        "sms_consent": bool(int(p.get("sms_service_consent") or 0)),
+        "sms_consent_granted_now": consent_granted_now,
         "welcomed_back": welcomed,
         "gap_days": gap,
         "code": appt["public_id"],
