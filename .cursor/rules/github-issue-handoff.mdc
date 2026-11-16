@@ -1,0 +1,45 @@
+---
+description: Read/execute shared GitHub Issue 24 tasks only when the user explicitly asks
+alwaysApply: true
+---
+
+# GitHub Issue handoff (asa-physio Issue #24)
+
+## When this applies
+
+Act on GitHub Issue **#24** in `omidbnd1977-collab/asa-physio` **only** when the user explicitly asks to read and run the next shared task, e.g.:
+
+- «وظیفه/کار بعدی را از Issue 24 بخوان و اجرا کن»
+- clear English equivalents such as “read and execute the next task from Issue 24”
+
+For ordinary project work, **do not** open or act on Issue 24 automatically.
+
+## How to pick the task
+
+1. Using **GitHub MCP** only, read comments on Issue 24.
+2. Find the **newest** comment that starts with `[TASK]` and does **not** yet have a corresponding later `[RESULT]` / `[QUESTION]` / `[BLOCKED]` for that same task.
+3. If multiple unfinished tasks are ambiguous, or completion state is unclear: **do not guess**. Post `[QUESTION]` on the Issue and stop.
+4. Execute **only** that one task, within its stated scope, branch, files, and tests.
+
+## Hard limits (unless a separate explicit approval exists in this ChatGPT/Cursor chat)
+
+- No patient data, production DB, uploads, `.env`, secrets, tokens, or credentials in actions or Issue comments
+- No VPS / Production / DNS / infrastructure changes
+- No real SMS
+- No merge and no deploy
+- Do not expand scope beyond the `[TASK]` text; this Rule does not authorize extra development
+
+## Reporting
+
+After the attempt, post on the **same Issue** via GitHub MCP:
+
+- `[RESULT]` — summary, branch, changed files, tests/outcomes, commit/PR links if any, risks
+- or `[QUESTION]` / `[BLOCKED]` when blocked or unclear
+
+Never include secrets or patient-identifiable data in Issue comments.
+
+## Tools and files
+
+- Prefer GitHub MCP tools needed for Issue read/write (`issue_read`, `add_issue_comment`, etc.)
+- Do not delete or casually rewrite unrelated existing project files
+- Do not open, print, stage, or modify `.cursor/mcp.json` as part of handoff work
