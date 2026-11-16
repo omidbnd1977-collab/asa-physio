@@ -194,18 +194,38 @@ class TestHandleInboundHardening:
         )
 
 
+def _divert_url(token: str = "s3cret") -> str:
+    return f"/api/sms/inbound/smsir/{token}"
+
+
 class TestSmsIrDivertEndpoint:
-    def test_secret_required(self, client, monkeypatch):
+    def test_path_token_required(self, client, monkeypatch):
         from api.config import settings
 
         monkeypatch.setattr(settings, "SMS_INBOUND_SECRET", "s3cret")
         r = client.get(
-            "/api/sms/inbound/smsir",
+            _divert_url("wrong-token"),
             params={"mobile": "9121112233", "messageText": "1", "receiveReturnId": "1"},
         )
         assert r.status_code == 403
 
-    def test_get_divert_confirm_with_query_secret(self, client, patient, monkeypatch):
+    def test_query_secret_rejected(self, client, monkeypatch):
+        from api.config import settings
+
+        monkeypatch.setattr(settings, "SMS_INBOUND_SECRET", "s3cret")
+        r = client.get(
+            _divert_url("s3cret"),
+            params={
+                "mobile": "9121112233",
+                "messageText": "1",
+                "receiveReturnId": "1",
+                "secret": "s3cret",
+            },
+        )
+        assert r.status_code == 403
+        assert "query" in r.json().get("message", "").lower() or r.status_code == 403
+
+    def test_get_divert_confirm_with_path_token(self, client, patient, monkeypatch):
         from api import repo
         from api.config import settings
         from api.policies import SYSTEM
@@ -214,17 +234,17 @@ class TestSmsIrDivertEndpoint:
         _book(client)
         _mark_confirm_sent()
         r = client.get(
-            "/api/sms/inbound/smsir",
+            _divert_url(),
             params={
                 "mobile": "9121112233",
                 "messageText": "1",
                 "receiveReturnId": "555001",
-                "secret": "s3cret",
             },
         )
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["handled"] == "confirmed" and body["duplicate"] is False
+        assert "s3cret" not in r.text
         assert repo.select(SYSTEM, "appointments")[0]["attendance"] == "coming"
 
     def test_get_divert_decline_with_header_secret(self, client, patient, monkeypatch):
@@ -235,8 +255,9 @@ class TestSmsIrDivertEndpoint:
         monkeypatch.setattr(settings, "SMS_INBOUND_SECRET", "s3cret")
         _book(client)
         _mark_confirm_sent()
+        # Wrong path token rejected unless header matches.
         r = client.get(
-            "/api/sms/inbound/smsir",
+            _divert_url("not-the-path-token"),
             params={
                 "Mobile": "9121112233",
                 "MessageText": "2",
@@ -260,11 +281,10 @@ class TestSmsIrDivertEndpoint:
             "mobile": "9121112233",
             "messageText": "1",
             "receiveReturnId": "555003",
-            "secret": "s3cret",
         }
-        assert client.get("/api/sms/inbound/smsir", params=params).json()["handled"] == "confirmed"
+        assert client.get(_divert_url(), params=params).json()["handled"] == "confirmed"
         again = client.get(
-            "/api/sms/inbound/smsir",
+            _divert_url(),
             params={**params, "messageText": "2"},
         ).json()
         assert again["duplicate"] is True
@@ -277,12 +297,11 @@ class TestSmsIrDivertEndpoint:
 
         monkeypatch.setattr(settings, "SMS_INBOUND_SECRET", "s3cret")
         r = client.get(
-            "/api/sms/inbound/smsir",
+            _divert_url(),
             params={
                 "mobile": "12345",
                 "messageText": "1",
                 "receiveReturnId": "555004",
-                "secret": "s3cret",
             },
         )
         assert r.status_code == 400
@@ -292,12 +311,11 @@ class TestSmsIrDivertEndpoint:
 
         monkeypatch.setattr(settings, "SMS_INBOUND_SECRET", "s3cret")
         r = client.get(
-            "/api/sms/inbound/smsir",
+            _divert_url(),
             params={
                 "mobile": "9301112233",
                 "messageText": "1",
                 "receiveReturnId": "555005",
-                "secret": "s3cret",
             },
         )
         assert r.status_code == 200
@@ -309,12 +327,11 @@ class TestSmsIrDivertEndpoint:
         monkeypatch.setattr(settings, "SMS_INBOUND_SECRET", "s3cret")
         _book(client)  # no confirm_sent_at
         r = client.get(
-            "/api/sms/inbound/smsir",
+            _divert_url(),
             params={
                 "mobile": "9121112233",
                 "messageText": "1",
                 "receiveReturnId": "555006",
-                "secret": "s3cret",
             },
         )
         assert r.status_code == 200
@@ -336,3 +353,75 @@ class TestSmsIrDivertEndpoint:
         assert r.status_code == 200
         assert r.json()["handled"] == "confirmed"
         assert repo.select(SYSTEM, "sms_inbound")[0]["provider_msg_id"] == "json-1"
+
+
+class TestInboundConcurrencyAndSecurity:
+    def test_concurrent_same_receive_return_id_single_winner(self, client, patient):
+        """Two races with same ReceiveReturnId: only one mutates attendance."""
+        import threading
+
+        from api import reminders, repo
+        from api.policies import SYSTEM
+
+        _book(client)
+        _mark_confirm_sent()
+        pmid = "rr-race-1"
+        gate = threading.Barrier(2)
+        out: list[dict] = []
+
+        def worker(body: str) -> None:
+            gate.wait(timeout=5)
+            out.append(reminders.handle_inbound("09121112233", body, provider_msg_id=pmid))
+
+        t1 = threading.Thread(target=worker, args=("1",))
+        t2 = threading.Thread(target=worker, args=("2",))
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+        assert len(out) == 2
+        winners = [r for r in out if not r.get("duplicate")]
+        dupes = [r for r in out if r.get("duplicate")]
+        assert len(winners) == 1 and len(dupes) == 1
+        assert winners[0]["handled"] in ("confirmed", "declined")
+        assert dupes[0]["handled"] == winners[0]["handled"]
+        assert len(repo.select(SYSTEM, "sms_inbound")) == 1
+        attendance = repo.select(SYSTEM, "appointments")[0]["attendance"]
+        if winners[0]["handled"] == "confirmed":
+            assert attendance == "coming"
+        else:
+            assert attendance == "not_coming"
+
+    def test_query_secret_alone_never_authorizes(self, client, monkeypatch):
+        from api.config import settings
+
+        monkeypatch.setattr(settings, "SMS_INBOUND_SECRET", "s3cret")
+        # Legacy path without token + query secret must not authenticate.
+        r = client.get(
+            "/api/sms/inbound/smsir",
+            params={
+                "mobile": "9121112233",
+                "messageText": "1",
+                "receiveReturnId": "x",
+                "secret": "s3cret",
+            },
+        )
+        assert r.status_code in (403, 404, 405, 422)
+
+    def test_response_body_never_echoes_path_token(self, client, patient, monkeypatch):
+        from api.config import settings
+
+        monkeypatch.setattr(settings, "SMS_INBOUND_SECRET", "super-secret-token-xyz")
+        _book(client)
+        _mark_confirm_sent()
+        r = client.get(
+            _divert_url("super-secret-token-xyz"),
+            params={
+                "mobile": "9121112233",
+                "messageText": "1",
+                "receiveReturnId": "sec-echo-1",
+            },
+        )
+        assert r.status_code == 200
+        assert "super-secret-token-xyz" not in r.text
+        assert "s3cret" not in r.text

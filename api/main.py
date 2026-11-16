@@ -905,17 +905,20 @@ app.include_router(routes_doctor.router)
 # --------------------------------------------------------------------------
 # inbound SMS  (the patient replies "1" to confirm attendance)
 # --------------------------------------------------------------------------
-def _require_sms_inbound_secret(request: Request, *, query_secret: str | None = None) -> None:
-    """Shared-secret gate for inbound SMS gateways (header preferred; query for divert)."""
+def _require_sms_inbound_secret(request: Request, *, path_token: str | None = None) -> None:
+    """Shared-secret gate for inbound SMS gateways.
+
+    Prefer ``X-SMS-Secret`` header. Divert panels that cannot set headers may put the
+    same value in the URL *path* (``/api/sms/inbound/smsir/{token}``) — never as a
+    query parameter (query secrets leak via access logs, proxies, and Referer).
+    """
     secret = settings.SMS_INBOUND_SECRET
     if secret:
         header = request.headers.get("x-sms-secret", "")
-        # Constant-time compare against header; fall back to query only when header empty
-        # so SMS.ir divert URLs that cannot set custom headers still authenticate.
         ok_header = bool(header) and secrets.compare_digest(header, secret)
-        qs = query_secret or ""
-        ok_query = bool(qs) and secrets.compare_digest(qs, secret)
-        if not (ok_header or ok_query):
+        token = path_token or ""
+        ok_path = bool(token) and secrets.compare_digest(token, secret)
+        if not (ok_header or ok_path):
             raise Forbidden("توکن نامعتبر است.")
     elif settings.is_prod:
         raise Forbidden("SMS_INBOUND_SECRET is not configured.")
@@ -934,14 +937,23 @@ async def sms_inbound(
     )
 
 
-@app.api_route("/api/sms/inbound/smsir", methods=["GET", "POST"])
-async def sms_inbound_smsir(request: Request) -> dict[str, Any]:
+@app.api_route("/api/sms/inbound/smsir/{inbound_token}", methods=["GET", "POST"])
+async def sms_inbound_smsir(request: Request, inbound_token: str) -> dict[str, Any]:
     """SMS.ir «انتقال دریافتی‌ها به URL» adapter → ``handle_inbound``.
 
-    Accepts divert query/form fields (``mobile`` / ``messageText`` / ``receiveReturnId``)
-    and optional ``secret`` query when the panel cannot send ``X-SMS-Secret``.
+    Divert URL shape (path token, no query secret)::
+
+        /api/sms/inbound/smsir/<SMS_INBOUND_SECRET>?mobile=…&messageText=…&receiveReturnId=…
+
     Does not activate any real webhook by itself.
     """
+    # Reject legacy ?secret= so credentials are not accepted from the query string.
+    if "secret" in request.query_params:
+        raise Forbidden("توکن در query مجاز نیست؛ از path token استفاده کنید.")
+
+    _require_sms_inbound_secret(request, path_token=inbound_token)
+    ratelimit.enforce(ratelimit.ip_bucket("smsin", client_ip(request)), 120, 60)
+
     merged: dict[str, Any] = dict(request.query_params)
     if request.method == "POST":
         ctype = (request.headers.get("content-type") or "").lower()
@@ -955,14 +967,7 @@ async def sms_inbound_smsir(request: Request) -> dict[str, Any]:
         else:
             form = await request.form()
             merged = {**merged, **dict(form)}
-
-    query_secret = merged.pop("secret", None)
-    if isinstance(query_secret, list):
-        query_secret = query_secret[0] if query_secret else None
-    _require_sms_inbound_secret(
-        request, query_secret=str(query_secret) if query_secret is not None else None
-    )
-    ratelimit.enforce(ratelimit.ip_bucket("smsin", client_ip(request)), 120, 60)
+    merged.pop("secret", None)
 
     try:
         divert = schemas.SmsIrDivertIn.model_validate(merged)

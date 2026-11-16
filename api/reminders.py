@@ -152,106 +152,158 @@ def _find_confirm_target(patient_id: int) -> dict | None:
     return candidates[0] if candidates else None
 
 
+class _DuplicateInbound(Exception):
+    """Signal a concurrent/retry hit on the same provider_msg_id inside a transaction."""
+
+    def __init__(self, row: dict) -> None:
+        super().__init__("duplicate inbound")
+        self.row = row
+
+
+def _claim_provider_msg(
+    *,
+    phone: str,
+    body: str,
+    pmid: str,
+    handled: str,
+    patient_id: int | None,
+    owner_id: int | None,
+    appointment_id: int | None,
+) -> int:
+    """Insert the ReceiveReturnId row first (UNIQUE) so retries cannot race past us."""
+    existing = repo.select(
+        SYSTEM, "sms_inbound", where="provider_msg_id = ?", params=[pmid], limit=1
+    )
+    if existing:
+        raise _DuplicateInbound(existing[0])
+    try:
+        return repo.insert(
+            SYSTEM,
+            "sms_inbound",
+            {
+                "phone": phone,
+                "body": body[:300],
+                "handled": handled,
+                "patient_id": patient_id,
+                "owner_id": owner_id,
+                "appointment_id": appointment_id,
+                "provider_msg_id": pmid,
+            },
+        )
+    except sqlite3.IntegrityError as exc:
+        again = repo.select(
+            SYSTEM, "sms_inbound", where="provider_msg_id = ?", params=[pmid], limit=1
+        )
+        if again:
+            raise _DuplicateInbound(again[0]) from exc
+        raise
+
+
 def handle_inbound(
     phone: str, body: str, *, provider_msg_id: str | None = None
 ) -> dict[str, object]:
     """A patient texted back. '1' confirms attendance; '2' declines.
 
     Only appointments with ``confirm_sent_at`` (confirm_request already sent) are
-    eligible. Optional ``provider_msg_id`` (SMS.ir ReceiveReturnId) makes processing
-    idempotent across divert retries.
+    eligible. Optional ``provider_msg_id`` (SMS.ir ReceiveReturnId) is claimed
+    atomically *before* any attendance update so concurrent retries stay idempotent.
     """
     phone = _normalize_inbound_phone(phone)
     pmid = (provider_msg_id or "").strip() or None
-    if pmid:
-        existing = repo.select(
-            SYSTEM, "sms_inbound", where="provider_msg_id = ?", params=[pmid], limit=1
-        )
-        if existing:
-            return _duplicate_response(existing[0])
-
     decision = _decision_from_body(body)
 
-    rows = repo.select(SYSTEM, "patients", where="phone = ?", params=[phone], limit=1)
-    if not rows:
-        try:
-            repo.insert(
-                SYSTEM,
-                "sms_inbound",
-                {
-                    "phone": phone,
-                    "body": body[:300],
-                    "handled": "unknown_phone",
-                    "patient_id": None,
-                    "owner_id": None,
-                    "provider_msg_id": pmid,
-                },
-            )
-        except sqlite3.IntegrityError:
-            if pmid:
-                again = repo.select(
-                    SYSTEM, "sms_inbound", where="provider_msg_id = ?", params=[pmid], limit=1
-                )
-                if again:
-                    return _duplicate_response(again[0])
-            raise
-        warn("sms.inbound_unknown_phone", phone=fingerprint(phone))
-        return {"matched": False, "reason": "unknown_phone", "duplicate": False}
-
-    patient = rows[0]
-    patient_owner = patient.get("owner_id")
-    target = _find_confirm_target(int(patient["id"]))
-
-    handled = "ignored"
-    if target and decision:
-        repo.update(
-            SYSTEM,
-            "appointments",
-            {
-                "attendance": decision,
-                "confirmed_at": _now_utc() if decision == "coming" else None,
-                "updated_at": _now_utc(),
-            },
-            where="id = ?",
-            params=[target["id"]],
-        )
-        handled = "confirmed" if decision == "coming" else "declined"
-        if decision == "coming":
-            from . import metrics
-
-            metrics.record("attendance_confirmed")
-        cache.purge("admin:appointments")
-
     try:
-        repo.insert(
-            SYSTEM,
-            "sms_inbound",
-            {
-                "phone": phone,
-                "body": body[:300],
-                "appointment_id": target["id"] if target else None,
-                "handled": handled,
-                "patient_id": patient["id"],
-                "owner_id": patient_owner,
-                "provider_msg_id": pmid,
-            },
-        )
-    except sqlite3.IntegrityError:
-        if pmid:
-            again = repo.select(
-                SYSTEM, "sms_inbound", where="provider_msg_id = ?", params=[pmid], limit=1
-            )
-            if again:
-                return _duplicate_response(again[0])
-        raise
+        with repo.tx():
+            rows = repo.select(SYSTEM, "patients", where="phone = ?", params=[phone], limit=1)
+            if not rows:
+                if pmid:
+                    _claim_provider_msg(
+                        phone=phone,
+                        body=body,
+                        pmid=pmid,
+                        handled="unknown_phone",
+                        patient_id=None,
+                        owner_id=None,
+                        appointment_id=None,
+                    )
+                else:
+                    repo.insert(
+                        SYSTEM,
+                        "sms_inbound",
+                        {
+                            "phone": phone,
+                            "body": body[:300],
+                            "handled": "unknown_phone",
+                            "patient_id": None,
+                            "owner_id": None,
+                            "provider_msg_id": None,
+                        },
+                    )
+                warn("sms.inbound_unknown_phone", phone=fingerprint(phone))
+                return {"matched": False, "reason": "unknown_phone", "duplicate": False}
 
-    info("sms.inbound", handled=handled, has_appointment=bool(target), duplicate=False)
-    return {
-        "matched": bool(target),
-        "handled": handled,
-        "appointment": target["public_id"] if target else None,
-        "duplicate": False,
-    }
+            patient = rows[0]
+            patient_owner = patient.get("owner_id")
+            target = _find_confirm_target(int(patient["id"]))
+            handled = "ignored"
+            if target and decision:
+                handled = "confirmed" if decision == "coming" else "declined"
+
+            # Claim ReceiveReturnId before mutating appointment attendance.
+            appt_id = target["id"] if target else None
+            if pmid:
+                claim_id = _claim_provider_msg(
+                    phone=phone,
+                    body=body,
+                    pmid=pmid,
+                    handled=handled,
+                    patient_id=int(patient["id"]),
+                    owner_id=patient_owner,
+                    appointment_id=appt_id,
+                )
+            else:
+                claim_id = repo.insert(
+                    SYSTEM,
+                    "sms_inbound",
+                    {
+                        "phone": phone,
+                        "body": body[:300],
+                        "appointment_id": appt_id,
+                        "handled": handled,
+                        "patient_id": patient["id"],
+                        "owner_id": patient_owner,
+                        "provider_msg_id": None,
+                    },
+                )
+
+            if target and decision:
+                repo.update(
+                    SYSTEM,
+                    "appointments",
+                    {
+                        "attendance": decision,
+                        "confirmed_at": _now_utc() if decision == "coming" else None,
+                        "updated_at": _now_utc(),
+                    },
+                    where="id = ?",
+                    params=[target["id"]],
+                )
+                if decision == "coming":
+                    from . import metrics
+
+                    metrics.record("attendance_confirmed")
+                cache.purge("admin:appointments")
+
+            _ = claim_id
+            info("sms.inbound", handled=handled, has_appointment=bool(target), duplicate=False)
+            return {
+                "matched": bool(target),
+                "handled": handled,
+                "appointment": target["public_id"] if target else None,
+                "duplicate": False,
+            }
+    except _DuplicateInbound as dup:
+        return _duplicate_response(dup.row)
 
 
 if __name__ == "__main__":  # python -m api.reminders  (for cron)
