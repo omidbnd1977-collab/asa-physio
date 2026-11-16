@@ -279,6 +279,14 @@ REGISTER_BODY = """
       <label for="note">یادداشت <span class="muted">(اختیاری)</span></label>
       <p class="hint">توضیح کوتاه درباره مشکل یا درخواست شما؛ در مرحله رزرو برای پزشک ثبت می‌شود.</p>
     </div>
+    <div style="margin-top:20px;padding:14px 16px;border:1px solid rgba(45,212,191,.22);border-radius:14px;background:rgba(11,42,74,.28)">
+      <label for="sms_service_consent" style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;line-height:1.9">
+        <input type="checkbox" id="sms_service_consent" name="sms_service_consent" value="true"
+               style="width:18px;height:18px;flex:0 0 auto;margin-top:5px;accent-color:var(--teal)">
+        <span>مایلم پیامک‌های خدماتی آسا فیزیو درباره ثبت‌نام، ثبت یا تغییر و لغو نوبت و یادآوری زمان مراجعه را دریافت کنم. <span class="muted">(اختیاری)</span></span>
+      </label>
+      <p class="hint" style="margin:7px 3px 0">این رضایت شامل پیامک تبلیغاتی نیست و انتخاب نکردن آن مانع ثبت‌نام یا دریافت خدمات نمی‌شود.</p>
+    </div>
     </div>
 
     <div class="mrow" style="margin-top:22px;display:flex;gap:10px;flex-wrap:wrap">
@@ -289,7 +297,7 @@ REGISTER_BODY = """
       </button>
     </div>
     <p class="hint" style="text-align:center;margin-top:12px">
-      با ثبت این فرم، پیامک «اطلاعات شما ثبت شد» برای شما ارسال می‌شود.
+      در صورت انتخاب دریافت پیامک خدماتی، پیامک ثبت اطلاعات برای شما ارسال می‌شود.
     </p>
   </form>
 </div>
@@ -415,6 +423,7 @@ $('#regForm').addEventListener('submit',async e=>{
     fd.append('national_id',DIGITS($('#national_code').value.trim()));
     fd.append('birth_date',DIGITS(birth_date));
     fd.append('phone',DIGITS($('#mobile').value.trim()));
+    fd.append('sms_service_consent',$('#sms_service_consent').checked ? 'true' : 'false');
     fd.append('mri_link',$('#mri_url').value.trim());
     fd.append('ortho_doctor',$('#orthopedist').value.trim());
     fd.append('website',$('#website').value);
@@ -432,7 +441,10 @@ $('#regForm').addEventListener('submit',async e=>{
       return;
     }
     sessionStorage.removeItem(DRAFT_KEY);
-    flash(r.data.mri_warning ? 'ثبت شد؛ '+r.data.mri_warning : (r.data.sms_sent?'ثبت شد ✓ پیامک تأیید برای شما ارسال شد':'ثبت شد ✓ (ارسال پیامک با تأخیر انجام می‌شود)'), !!r.data.mri_warning);
+    const smsStatus = !r.data.sms_consent
+      ? 'ثبت شد ✓ پیامک خدماتی برای این شماره فعال نشد چون رضایت دریافت آن ثبت نشده است.'
+      : (r.data.sms_sent ? 'ثبت شد ✓ پیامک تأیید برای شما ارسال شد' : 'ثبت شد ✓ ارسال پیامک با مشکل روبه‌رو شد؛ ثبت‌نام شما انجام شده است.');
+    flash(r.data.mri_warning ? 'ثبت شد؛ '+r.data.mri_warning : smsStatus, !!r.data.mri_warning);
     setTimeout(()=>location.href=r.data.redirect||'/booking/reserve',1300);
   });
   sending=false;
