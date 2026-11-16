@@ -905,21 +905,76 @@ app.include_router(routes_doctor.router)
 # --------------------------------------------------------------------------
 # inbound SMS  (the patient replies "1" to confirm attendance)
 # --------------------------------------------------------------------------
+def _require_sms_inbound_secret(request: Request, *, query_secret: str | None = None) -> None:
+    """Shared-secret gate for inbound SMS gateways (header preferred; query for divert)."""
+    secret = settings.SMS_INBOUND_SECRET
+    if secret:
+        header = request.headers.get("x-sms-secret", "")
+        # Constant-time compare against header; fall back to query only when header empty
+        # so SMS.ir divert URLs that cannot set custom headers still authenticate.
+        ok_header = bool(header) and secrets.compare_digest(header, secret)
+        qs = query_secret or ""
+        ok_query = bool(qs) and secrets.compare_digest(qs, secret)
+        if not (ok_header or ok_query):
+            raise Forbidden("توکن نامعتبر است.")
+    elif settings.is_prod:
+        raise Forbidden("SMS_INBOUND_SECRET is not configured.")
+
+
 @app.post("/api/sms/inbound")
 async def sms_inbound(
     request: Request, payload: dict[str, Any] = Body(default={})
 ) -> dict[str, Any]:
-    """Called by the SMS gateway. Protected by a shared secret, not a session."""
-    secret = settings.SMS_INBOUND_SECRET
-    if secret:
-        given = request.headers.get("x-sms-secret", "")
-        if not secrets.compare_digest(given, secret):
-            raise Forbidden("توکن نامعتبر است.")
-    elif settings.is_prod:
-        raise Forbidden("SMS_INBOUND_SECRET is not configured.")
+    """JSON inbound used by tests and generic gateways. Protected by shared secret."""
+    _require_sms_inbound_secret(request)
     ratelimit.enforce(ratelimit.ip_bucket("smsin", client_ip(request)), 120, 60)
     data = schemas.SmsInboundIn.model_validate(payload)
-    return reminders.handle_inbound(data.phone, data.body)  # type: ignore[return-value]
+    return reminders.handle_inbound(  # type: ignore[return-value]
+        data.phone, data.body, provider_msg_id=data.provider_msg_id
+    )
+
+
+@app.api_route("/api/sms/inbound/smsir", methods=["GET", "POST"])
+async def sms_inbound_smsir(request: Request) -> dict[str, Any]:
+    """SMS.ir «انتقال دریافتی‌ها به URL» adapter → ``handle_inbound``.
+
+    Accepts divert query/form fields (``mobile`` / ``messageText`` / ``receiveReturnId``)
+    and optional ``secret`` query when the panel cannot send ``X-SMS-Secret``.
+    Does not activate any real webhook by itself.
+    """
+    merged: dict[str, Any] = dict(request.query_params)
+    if request.method == "POST":
+        ctype = (request.headers.get("content-type") or "").lower()
+        if "application/json" in ctype:
+            try:
+                body_json = await request.json()
+            except Exception as exc:  # noqa: BLE001
+                raise BadRequest("بدنه JSON نامعتبر است.") from exc
+            if isinstance(body_json, dict):
+                merged = {**merged, **body_json}
+        else:
+            form = await request.form()
+            merged = {**merged, **dict(form)}
+
+    query_secret = merged.pop("secret", None)
+    if isinstance(query_secret, list):
+        query_secret = query_secret[0] if query_secret else None
+    _require_sms_inbound_secret(
+        request, query_secret=str(query_secret) if query_secret is not None else None
+    )
+    ratelimit.enforce(ratelimit.ip_bucket("smsin", client_ip(request)), 120, 60)
+
+    try:
+        divert = schemas.SmsIrDivertIn.model_validate(merged)
+        phone = divert.resolved_phone()
+        body = divert.resolved_body()
+        pmid = divert.resolved_provider_msg_id()
+    except ValidationError as exc:
+        raise BadRequest("پارامترهای دریافتی SMS.ir نامعتبر است.") from exc
+    except ValueError as exc:
+        raise BadRequest(str(exc)) from exc
+
+    return reminders.handle_inbound(phone, body, provider_msg_id=pmid)  # type: ignore[return-value]
 
 
 @app.post("/api/admin/reminders/run")
