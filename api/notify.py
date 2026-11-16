@@ -50,11 +50,7 @@ def render(booking: dict) -> str:
 
 def render_appointment(*, name: str, phone: str, when: str, code: str) -> str:
     return (
-        "نوبت جدید — آسا فیزیو\n"
-        f"نام: {name}\n"
-        f"تلفن بیمار: {phone}\n"
-        f"زمان: {when}\n"
-        f"کد پیگیری: {code}"
+        f"نوبت جدید — آسا فیزیو\nنام: {name}\nتلفن بیمار: {phone}\nزمان: {when}\nکد پیگیری: {code}"
     )
 
 

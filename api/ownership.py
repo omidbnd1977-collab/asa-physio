@@ -74,10 +74,7 @@ def get_owned_appointment(actor: Actor, public_id: str) -> dict:
     rows = repo.select(
         SYSTEM,
         "appointments",
-        where=(
-            "public_id = ? AND patient_id IN "
-            "(SELECT id FROM patients WHERE owner_id = ?)"
-        ),
+        where=("public_id = ? AND patient_id IN (SELECT id FROM patients WHERE owner_id = ?)"),
         params=[public_id[:10], oid],
         limit=1,
     )

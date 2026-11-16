@@ -193,9 +193,7 @@ def send_smsir(phone: str, body: str) -> None:
         raise RuntimeError("sms.ir returned non-JSON body") from exc
     status = payload.get("status")
     if status != 1:
-        raise RuntimeError(
-            f"sms.ir status {status}: {payload.get('message') or payload!r}"
-        )
+        raise RuntimeError(f"sms.ir status {status}: {payload.get('message') or payload!r}")
     data = payload.get("data") or {}
     ids = data.get("messageIds")
     if isinstance(ids, list) and ids:
@@ -226,9 +224,7 @@ def dispatch(phone: str, body: str) -> None:
 # queue
 # --------------------------------------------------------------------------
 def _patient_has_service_sms_consent(patient_id: int) -> bool:
-    rows = repo.select(
-        SYSTEM, "patients", where="id = ?", params=[patient_id], limit=1
-    )
+    rows = repo.select(SYSTEM, "patients", where="id = ?", params=[patient_id], limit=1)
     return bool(rows and rows[0].get("sms_service_consent", 0))
 
 
@@ -281,8 +277,7 @@ def ensure_admin_appointment(
             (appointment_id, phone, body[:600], settings.SMS_PROVIDER, now, now),
         )
         row = conn.execute(
-            "SELECT id FROM sms_messages"
-            " WHERE appointment_id = ? AND kind = 'admin_appointment'",
+            "SELECT id FROM sms_messages WHERE appointment_id = ? AND kind = 'admin_appointment'",
             (appointment_id,),
         ).fetchone()
     if not row:
@@ -310,9 +305,7 @@ def claim_for_send(message_id: int) -> dict | None:
         )
         if cur.rowcount != 1:
             return None
-        row = conn.execute(
-            "SELECT * FROM sms_messages WHERE id = ?", (message_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM sms_messages WHERE id = ?", (message_id,)).fetchone()
     return dict(row) if row else None
 
 
@@ -447,10 +440,7 @@ def retry_failed(limit: int = 20) -> dict[str, int]:
     rows = repo.select(
         SYSTEM,
         "sms_messages",
-        where=(
-            "(status = 'failed' OR (status = 'sending' AND updated_at < ?))"
-            " AND attempts < 10"
-        ),
+        where=("(status = 'failed' OR (status = 'sending' AND updated_at < ?)) AND attempts < 10"),
         params=[stale],
         order_by="created_at",
         limit=limit,

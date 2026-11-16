@@ -54,13 +54,9 @@ def patient(client):
     from api import auth, repo
     from api.policies import SYSTEM
 
-    owners = repo.select(
-        SYSTEM, "admin_users", where="role = 'owner' AND is_active = 1", limit=2
-    )
+    owners = repo.select(SYSTEM, "admin_users", where="role = 'owner' AND is_active = 1", limit=2)
     if not owners:
-        auth.create_user(
-            "t_owner", "a-very-long-test-password", role="owner", full_name="پزشک تست"
-        )
+        auth.create_user("t_owner", "a-very-long-test-password", role="owner", full_name="پزشک تست")
     r = client.post(
         "/api/portal/register",
         data=reg_form(),
@@ -187,10 +183,15 @@ class TestRegistration:
         assert patient["sms_service_consent"] == 0
         assert patient["sms_service_consent_at"] is None
         assert patient["sms_service_consent_version"] == ""
-        assert repo.count(
-            SYSTEM, "sms_messages", where="patient_id = ? AND kind = 'registered'",
-            params=[patient["id"]],
-        ) == 0
+        assert (
+            repo.count(
+                SYSTEM,
+                "sms_messages",
+                where="patient_id = ? AND kind = 'registered'",
+                params=[patient["id"]],
+            )
+            == 0
+        )
 
         # Booking still succeeds, but every patient-facing SMS remains suppressed.
         booked = client.post(
@@ -199,10 +200,15 @@ class TestRegistration:
         )
         assert booked.status_code == 201, booked.text
         assert booked.json()["sms_sent"] is False
-        assert repo.count(
-            SYSTEM, "sms_messages", where="patient_id = ? AND kind = 'booked'",
-            params=[patient["id"]],
-        ) == 0
+        assert (
+            repo.count(
+                SYSTEM,
+                "sms_messages",
+                where="patient_id = ? AND kind = 'booked'",
+                params=[patient["id"]],
+            )
+            == 0
+        )
 
     def test_mri_url_is_saved_as_private_file_when_image_download_succeeds(
         self, client, monkeypatch
@@ -348,6 +354,7 @@ class TestRegistration:
         def fake_gai(hostname, port, *a, **kw):
             ip = "1.1.1.1" if hostname == "cdn.example" else "10.1.2.3"
             return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", (ip, port))]
+
         monkeypatch.setattr("api.routes_booking.socket.getaddrinfo", fake_gai)
 
         class FakeStream:
@@ -673,9 +680,7 @@ class TestSlots:
         from api.policies import SYSTEM
 
         day, slot = tomorrow(), "19:00"
-        first = client.post(
-            "/api/portal/appointments", json={"slot_date": day, "slot_time": slot}
-        )
+        first = client.post("/api/portal/appointments", json={"slot_date": day, "slot_time": slot})
         assert first.status_code == 201, first.text
         cabin = first.json()["cabin"]
         code = first.json()["code"]
@@ -683,9 +688,7 @@ class TestSlots:
         cancelled = client.post(f"/api/portal/appointments/{code}/cancel")
         assert cancelled.status_code == 200, cancelled.text
 
-        again = client.post(
-            "/api/portal/appointments", json={"slot_date": day, "slot_time": slot}
-        )
+        again = client.post("/api/portal/appointments", json={"slot_date": day, "slot_time": slot})
         assert again.status_code == 201, again.text
         assert again.json()["cabin"] == cabin
         assert again.json()["code"] != code
@@ -986,9 +989,7 @@ class TestDoctorPanel:
             == 0
         )
 
-    def test_dest_cabin_integrity_error_becomes_conflict(
-        self, owner_client, patient, monkeypatch
-    ):
+    def test_dest_cabin_integrity_error_becomes_conflict(self, owner_client, patient, monkeypatch):
         import sqlite3
 
         from api import repo, scheduling
@@ -1011,7 +1012,9 @@ class TestDoctorPanel:
         still = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[book["code"]])[0]
         assert still["status"] == "booked" and still["slot_time"] == "16:00"
 
-    def test_reschedule_real_unique_index_conflict_returns_409(self, owner_client, patient, monkeypatch):
+    def test_reschedule_real_unique_index_conflict_returns_409(
+        self, owner_client, patient, monkeypatch
+    ):
         """Real SQLite partial UNIQUE hit inside allocate_on_conn → HTTP 409; source stays booked.
 
         Under BEGIN IMMEDIATE, two writers cannot interleave SELECT+INSERT, so a true
@@ -1030,10 +1033,7 @@ class TestDoctorPanel:
 
             def execute(self, sql, parameters=()):
                 text = sql if isinstance(sql, str) else str(sql)
-                if (
-                    "SELECT cabin FROM appointments" in text
-                    and "status != 'cancelled'" in text
-                ):
+                if "SELECT cabin FROM appointments" in text and "status != 'cancelled'" in text:
 
                     class _Empty:
                         def fetchall(self_inner):
@@ -1364,7 +1364,9 @@ class TestReminders:
         reminders.run_once(lead_min=60 * 24 * 7)
         assert reminders.run_once(lead_min=60 * 24 * 7)["sent"] == 0
 
-    def test_run_once_skips_sms_when_claim_update_changes_no_rows(self, client, patient, monkeypatch):
+    def test_run_once_skips_sms_when_claim_update_changes_no_rows(
+        self, client, patient, monkeypatch
+    ):
         from api import reminders, sms
 
         client.post(
@@ -1641,10 +1643,14 @@ class TestPortalPolicies:
             " VALUES ('newnewnew1', ?, ?, '16:00', ?)",
             (pid, tomorrow(), a["cabin"]),
         )
-        rows = db.get_conn().execute(
-            "SELECT status FROM appointments WHERE slot_date = ? AND slot_time = '16:00' AND cabin = ?",
-            (tomorrow(), a["cabin"]),
-        ).fetchall()
+        rows = (
+            db.get_conn()
+            .execute(
+                "SELECT status FROM appointments WHERE slot_date = ? AND slot_time = '16:00' AND cabin = ?",
+                (tomorrow(), a["cabin"]),
+            )
+            .fetchall()
+        )
         assert sorted(r["status"] for r in rows) == ["booked", "cancelled"]
 
     def test_migration_0009_preserves_rows_on_existing_database(self, tmp_path):
@@ -1901,9 +1907,7 @@ class TestTreatmentHistory:
 
         bp, tx = self._ids(owner_client)
         p = repo.select(SYSTEM, "patients")[0]
-        owner_id = repo.select(
-            SYSTEM, "admin_users", where="role = 'owner'", limit=1
-        )[0]["id"]
+        owner_id = repo.select(SYSTEM, "admin_users", where="role = 'owner'", limit=1)[0]["id"]
         actor = Actor("owner", owner_id)
         clinical.record_session(
             actor, p["id"], body_part_ids=[bp], treatment_ids=tx[:1], session_date="2026-01-10"
@@ -2042,9 +2046,7 @@ class TestWelcomeBack:
 
         p = repo.select(SYSTEM, "patients")[0]
         long_ago = (now_tehran().date() - dt.timedelta(days=200)).isoformat()
-        owner_id = repo.select(
-            SYSTEM, "admin_users", where="role = 'owner'", limit=1
-        )[0]["id"]
+        owner_id = repo.select(SYSTEM, "admin_users", where="role = 'owner'", limit=1)[0]["id"]
         actor = Actor("owner", owner_id)
         c = clinical.catalog(actor)
         bp = c["body_parts"][0]["items"][0]["id"]

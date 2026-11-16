@@ -217,9 +217,7 @@ class TestLayer04Authz:
         from api.policies import SYSTEM
 
         oid = auth.create_user("plain_owner", "owner-password-long", role="owner")
-        auth.create_user(
-            "plain_staff", "staff-password-long", role="staff", created_by=oid
-        )
+        auth.create_user("plain_staff", "staff-password-long", role="staff", created_by=oid)
         r = client.post(
             "/api/admin/login", json={"username": "plain_staff", "password": "staff-password-long"}
         )
@@ -265,9 +263,7 @@ class TestLayer08Security:
         from api import auth
 
         oid = auth.create_user("realowner", "owner-password-longxx", role="owner")
-        auth.create_user(
-            "realuser", "the-real-password-x", role="staff", created_by=oid
-        )
+        auth.create_user("realuser", "the-real-password-x", role="staff", created_by=oid)
         a = client.post("/api/admin/login", json={"username": "realuser", "password": "wrong-pass"})
         b = client.post(
             "/api/admin/login", json={"username": "ghostuser", "password": "wrong-pass"}
@@ -279,9 +275,7 @@ class TestLayer08Security:
         from api import auth
 
         oid = auth.create_user("cookieowner", "owner-password-longxx", role="owner")
-        auth.create_user(
-            "cookieuser", "cookie-password-long", role="staff", created_by=oid
-        )
+        auth.create_user("cookieuser", "cookie-password-long", role="staff", created_by=oid)
         r = client.post(
             "/api/admin/login", json={"username": "cookieuser", "password": "cookie-password-long"}
         )
@@ -322,7 +316,7 @@ class TestLayer08Security:
         from api import repo
         from api.policies import SYSTEM
 
-        payload = '<img src=x onerror=alert(1)>'
+        payload = "<img src=x onerror=alert(1)>"
         r = client.post(
             "/api/sms/inbound",
             json={"phone": "09120001122", "body": payload},

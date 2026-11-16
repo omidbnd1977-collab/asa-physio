@@ -23,9 +23,7 @@ from .policies import SYSTEM
 router = APIRouter(prefix="/api/portal", tags=["portal"])
 
 _CGNAT_V4 = ipaddress.ip_network("100.64.0.0/10")
-_BLOCKED_MRI_HOSTS = frozenset(
-    {"localhost", "localhost.localdomain", "metadata.google.internal"}
-)
+_BLOCKED_MRI_HOSTS = frozenset({"localhost", "localhost.localdomain", "metadata.google.internal"})
 
 
 def _blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
@@ -113,9 +111,7 @@ def _pin_public_mri_url(raw: str) -> tuple[str, str, str]:
     if not resolved:
         raise BadRequest("آدرس MRI قابل دسترسی نیست.", code="unreachable_mri_url")
     if any(_blocked_ip(ip) for ip in resolved):
-        raise BadRequest(
-            "دریافت از شبکه داخلی یا آدرس خصوصی مجاز نیست.", code="blocked_mri_url"
-        )
+        raise BadRequest("دریافت از شبکه داخلی یا آدرس خصوصی مجاز نیست.", code="blocked_mri_url")
 
     # Prefer IPv4 when both families are public; pin exactly one validated address.
     resolved.sort(key=lambda ip: (ip.version != 4, str(ip)))
@@ -151,9 +147,7 @@ async def _download_remote_mri(url: str) -> tuple[bytes, str]:
                 raise BadRequest("لینک MRI قابل دریافت نیست.", code="mri_download_failed")
             content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
             if not content_type.startswith("image/"):
-                raise BadRequest(
-                    "لینک MRI باید به یک فایل تصویر اشاره کند.", code="bad_mri_type"
-                )
+                raise BadRequest("لینک MRI باید به یک فایل تصویر اشاره کند.", code="bad_mri_type")
             length = response.headers.get("content-length")
             if length and int(length) > settings.MRI_REMOTE_MAX_BYTES:
                 raise PayloadTooLarge("حجم فایل MRI از سقف فنی مجاز بیشتر است.")

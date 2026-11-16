@@ -168,9 +168,7 @@ async def list_appointments(
         rows.sort(key=lambda a: (a["slot_date"], a["slot_time"]))
         pmap = _patient_map(actor, [r["patient_id"] for r in rows])
         return {
-            "items": [
-                full_appt(a, pmap.get(a["patient_id"]), actor=actor) for a in rows
-            ],
+            "items": [full_appt(a, pmap.get(a["patient_id"]), actor=actor) for a in rows],
             "total": repo.count(SYSTEM, "appointments", where=where, params=params),
             "page": page,
             "per_page": per_page,
@@ -890,9 +888,7 @@ async def view_mri(public_id: str, request: Request) -> Response:
 # --------------------------------------------------------------------------
 def _can_open_sms_panel(actor: Actor) -> bool:
     return (
-        actor.role == "owner"
-        or actor.can(perms.RECEPTION_QUEUE)
-        or actor.can(perms.MESSAGES_VIEW)
+        actor.role == "owner" or actor.can(perms.RECEPTION_QUEUE) or actor.can(perms.MESSAGES_VIEW)
     )
 
 
@@ -908,9 +904,7 @@ async def sms_log(request: Request, page: int = 1, per_page: int = 30) -> dict[s
     # Outbound log stays owner-only (clinic-wide operational view).
     if actor.role == "owner":
         ow, oparams = ownership.owned_patients_where(actor)
-        sms_where = (
-            f"patient_id IS NULL OR patient_id IN (SELECT id FROM patients WHERE {ow})"  # noqa: S608
-        )
+        sms_where = f"patient_id IS NULL OR patient_id IN (SELECT id FROM patients WHERE {ow})"  # noqa: S608
         rows = repo.select(
             SYSTEM,
             "sms_messages",
@@ -1126,9 +1120,7 @@ async def create_patient(request: Request) -> dict[str, Any]:
     data = schemas.PatientRegisterIn.model_validate(payload)
     ip = request.client.host if request.client else ""
     # Store under a content-hash name (never the client filename). Prefix is opaque.
-    patient = patients.register(
-        data.model_dump(), med_photo=med_name, ip=ip, owner_id=oid
-    )
+    patient = patients.register(data.model_dump(), med_photo=med_name, ip=ip, owner_id=oid)
 
     audit.record(
         actor,
@@ -1159,9 +1151,7 @@ async def list_secretaries(request: Request) -> dict[str, Any]:
     actor = owner(request)
     return {
         "items": staff_users.list_secretaries(actor),
-        "permission_catalog": [
-            {"id": p, "label": perms.LABELS_FA[p]} for p in perms.ALL
-        ],
+        "permission_catalog": [{"id": p, "label": perms.LABELS_FA[p]} for p in perms.ALL],
     }
 
 
@@ -1221,9 +1211,7 @@ async def orphan_secretaries(request: Request) -> dict[str, Any]:
 
 
 @router.post("/orphan-secretaries/{secretary_id}/assign")
-async def assign_orphan_secretary(
-    secretary_id: int, request: Request
-) -> dict[str, Any]:
+async def assign_orphan_secretary(secretary_id: int, request: Request) -> dict[str, Any]:
     actor = owner(request)
     csrf(request, actor)
     return staff_users.assign_orphan_secretary(actor, secretary_id)
