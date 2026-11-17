@@ -181,6 +181,27 @@ VERIFY_TEMPLATES: dict[str, int] = {
     "rescheduled": SMSIR_TEMPLATE_STATUS,
 }
 
+# Patient-facing kinds that must never hit SMS.ir unless explicitly allowlisted.
+PATIENT_SMS_KINDS: frozenset[str] = frozenset(
+    {"booked", "confirm_request", "cancelled", "rescheduled"}
+)
+
+
+def sms_ir_allowed_kinds() -> frozenset[str]:
+    """Kinds permitted to use the live SMS.ir provider.
+
+    Default empty ⇒ fail-closed (no real SMS.ir traffic) even if SMS_PROVIDER=smsir.
+    """
+    raw = (settings.SMS_IR_ALLOWED_KINDS or "").strip()
+    if not raw:
+        return frozenset()
+    return frozenset(part.strip() for part in raw.split(",") if part.strip())
+
+
+def kind_may_use_smsir(kind: str | None) -> bool:
+    """Server-side gate: only allowlisted kinds may call SMS.ir APIs."""
+    return bool(kind) and kind in sms_ir_allowed_kinds()
+
 
 def verify_param(name: str, value: str) -> dict[str, str]:
     """Build one Verify parameter; refuse empty or overlong values (no silent trim)."""
@@ -367,6 +388,25 @@ def send_smsir(phone: str, body: str) -> None:
             raise RuntimeError("sms.ir rejected recipient (invalid number or text)")
 
 
+def _assert_admin_appointment_destination(msg: dict) -> None:
+    """Hard gate: admin_appointment may only go to ADMIN_NOTIFICATION_PHONE."""
+    admin = normalize_mobile(settings.ADMIN_NOTIFICATION_PHONE or "")
+    if not admin:
+        raise RuntimeError("ADMIN_NOTIFICATION_PHONE is empty")
+    dest = normalize_mobile(str(msg.get("phone") or ""))
+    if dest != admin:
+        raise RuntimeError("admin_appointment recipient is not ADMIN_NOTIFICATION_PHONE")
+    patient = _load_patient(msg.get("patient_id"))
+    if patient is None:
+        appt = _load_appointment(msg.get("appointment_id"))
+        if appt is not None:
+            patient = _load_patient(appt.get("patient_id"))
+    if patient:
+        patient_phone = normalize_mobile(str(patient.get("phone") or ""))
+        if patient_phone and patient_phone == admin:
+            raise RuntimeError("ADMIN_NOTIFICATION_PHONE must not equal the patient phone")
+
+
 def send_smsir_for_message(msg: dict) -> None:
     """Deliver one queued row via Verify when mapped, otherwise bulk text.
 
@@ -374,6 +414,10 @@ def send_smsir_for_message(msg: dict) -> None:
     patient/appointment rows fail the delivery attempt so retry can surface the error.
     """
     kind = msg.get("kind") or ""
+    if not kind_may_use_smsir(kind):
+        raise RuntimeError(f"sms.ir kind {kind!r} is not allowlisted")
+    if kind == "admin_appointment":
+        _assert_admin_appointment_destination(msg)
     if kind in VERIFY_TEMPLATES:
         built = verify_payload_for_message(msg)
         if built is None:
@@ -551,10 +595,18 @@ def deliver(message_id: int, *, attempts: int = 2) -> bool:
         return False
 
     last_err = ""
+    kind = msg.get("kind") or ""
+    use_smsir = settings.SMS_PROVIDER == "smsir" and kind_may_use_smsir(kind)
+    # Non-allowlisted kinds never touch SMS.ir — force the local file sink.
+    effective_provider = "smsir" if use_smsir else (
+        "file" if settings.SMS_PROVIDER == "smsir" else settings.SMS_PROVIDER
+    )
     for i in range(attempts):
         try:
-            if settings.SMS_PROVIDER == "smsir":
+            if use_smsir:
                 send_smsir_for_message(msg)
+            elif settings.SMS_PROVIDER == "smsir":
+                _send_file(msg["phone"], msg["body"])
             else:
                 send(msg["phone"], msg["body"])
             budget.record(RESOURCE, 1.0)
@@ -566,7 +618,7 @@ def deliver(message_id: int, *, attempts: int = 2) -> bool:
                     "sent_at": _now(),
                     "attempts": msg["attempts"] + i + 1,
                     "last_error": "",
-                    "provider": settings.SMS_PROVIDER,
+                    "provider": effective_provider,
                     "updated_at": _now(),
                 },
                 where="id = ?",
@@ -574,17 +626,16 @@ def deliver(message_id: int, *, attempts: int = 2) -> bool:
             )
             info(
                 "sms.sent",
-                sms_kind=msg["kind"],
-                provider=settings.SMS_PROVIDER,
+                sms_kind=kind,
+                provider=effective_provider,
                 to=fingerprint(msg["phone"]),
-                via_verify=bool(
-                    settings.SMS_PROVIDER == "smsir" and msg["kind"] in VERIFY_TEMPLATES
-                ),
+                via_verify=bool(use_smsir and kind in VERIFY_TEMPLATES),
+                smsir_allowlisted=use_smsir,
             )
             return True
         except Exception as exc:  # noqa: BLE001 — gateway failures are expected
             last_err = f"{type(exc).__name__}: {exc}"[:400]
-            warn("sms.attempt_failed", kind=msg["kind"], attempt=i + 1, exc_type=type(exc).__name__)
+            warn("sms.attempt_failed", kind=kind, attempt=i + 1, exc_type=type(exc).__name__)
 
     repo.update(
         SYSTEM,
