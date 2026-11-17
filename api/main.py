@@ -905,21 +905,83 @@ app.include_router(routes_doctor.router)
 # --------------------------------------------------------------------------
 # inbound SMS  (the patient replies "1" to confirm attendance)
 # --------------------------------------------------------------------------
+def _require_sms_inbound_secret(request: Request, *, path_token: str | None = None) -> None:
+    """Shared-secret gate for inbound SMS gateways (fail-closed).
+
+    Prefer ``X-SMS-Secret`` header. Divert panels that cannot set headers may put the
+    same value in the URL *path* (``/api/sms/inbound/smsir/{token}``) — never as a
+    query parameter (query secrets leak via access logs, proxies, and Referer).
+
+    If ``SMS_INBOUND_SECRET`` is missing/blank in *any* environment, refuse all
+    inbound traffic (staging/dev must not stay open when Preview omits the secret).
+    """
+    secret = (settings.SMS_INBOUND_SECRET or "").strip()
+    if not secret:
+        raise Forbidden("SMS_INBOUND_SECRET is not configured.")
+    header = request.headers.get("x-sms-secret", "")
+    ok_header = bool(header) and secrets.compare_digest(header, secret)
+    token = path_token or ""
+    ok_path = bool(token) and secrets.compare_digest(token, secret)
+    if not (ok_header or ok_path):
+        raise Forbidden("توکن نامعتبر است.")
+
+
 @app.post("/api/sms/inbound")
 async def sms_inbound(
     request: Request, payload: dict[str, Any] = Body(default={})
 ) -> dict[str, Any]:
-    """Called by the SMS gateway. Protected by a shared secret, not a session."""
-    secret = settings.SMS_INBOUND_SECRET
-    if secret:
-        given = request.headers.get("x-sms-secret", "")
-        if not secrets.compare_digest(given, secret):
-            raise Forbidden("توکن نامعتبر است.")
-    elif settings.is_prod:
-        raise Forbidden("SMS_INBOUND_SECRET is not configured.")
+    """JSON inbound used by tests and generic gateways. Protected by shared secret."""
+    _require_sms_inbound_secret(request)
     ratelimit.enforce(ratelimit.ip_bucket("smsin", client_ip(request)), 120, 60)
     data = schemas.SmsInboundIn.model_validate(payload)
-    return reminders.handle_inbound(data.phone, data.body)  # type: ignore[return-value]
+    return reminders.handle_inbound(  # type: ignore[return-value]
+        data.phone, data.body, provider_msg_id=data.provider_msg_id
+    )
+
+
+@app.api_route("/api/sms/inbound/smsir/{inbound_token}", methods=["GET", "POST"])
+async def sms_inbound_smsir(request: Request, inbound_token: str) -> dict[str, Any]:
+    """SMS.ir «انتقال دریافتی‌ها به URL» adapter → ``handle_inbound``.
+
+    Divert URL shape (path token, no query secret)::
+
+        /api/sms/inbound/smsir/<SMS_INBOUND_SECRET>?mobile=…&messageText=…&receiveReturnId=…
+
+    Does not activate any real webhook by itself.
+    """
+    # Reject legacy ?secret= so credentials are not accepted from the query string.
+    if "secret" in request.query_params:
+        raise Forbidden("توکن در query مجاز نیست؛ از path token استفاده کنید.")
+
+    _require_sms_inbound_secret(request, path_token=inbound_token)
+    ratelimit.enforce(ratelimit.ip_bucket("smsin", client_ip(request)), 120, 60)
+
+    merged: dict[str, Any] = dict(request.query_params)
+    if request.method == "POST":
+        ctype = (request.headers.get("content-type") or "").lower()
+        if "application/json" in ctype:
+            try:
+                body_json = await request.json()
+            except Exception as exc:  # noqa: BLE001
+                raise BadRequest("بدنه JSON نامعتبر است.") from exc
+            if isinstance(body_json, dict):
+                merged = {**merged, **body_json}
+        else:
+            form = await request.form()
+            merged = {**merged, **dict(form)}
+    merged.pop("secret", None)
+
+    try:
+        divert = schemas.SmsIrDivertIn.model_validate(merged)
+        phone = divert.resolved_phone()
+        body = divert.resolved_body()
+        pmid = divert.resolved_provider_msg_id()
+    except ValidationError as exc:
+        raise BadRequest("پارامترهای دریافتی SMS.ir نامعتبر است.") from exc
+    except ValueError as exc:
+        raise BadRequest(str(exc)) from exc
+
+    return reminders.handle_inbound(phone, body, provider_msg_id=pmid)  # type: ignore[return-value]
 
 
 @app.post("/api/admin/reminders/run")

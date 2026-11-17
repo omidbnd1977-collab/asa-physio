@@ -335,6 +335,7 @@ class SmsInboundIn(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     phone: str = Field(min_length=5, max_length=20)
     body: str = Field(default="", max_length=300)
+    provider_msg_id: str | None = Field(default=None, max_length=64)
 
     @field_validator("phone")
     @classmethod
@@ -345,6 +346,46 @@ class SmsInboundIn(BaseModel):
     @classmethod
     def _b(cls, v: str) -> str:
         return clean_text(v, max_len=300)
+
+    @field_validator("provider_msg_id")
+    @classmethod
+    def _pmid(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = clean_text(v, max_len=64)
+        return v or None
+
+
+class SmsIrDivertIn(BaseModel):
+    """SMS.ir «انتقال دریافتی‌ها به URL» query/form fields (aliases allowed)."""
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    mobile: str | None = Field(default=None, max_length=20)
+    Mobile: str | None = Field(default=None, max_length=20)
+    phone: str | None = Field(default=None, max_length=20)
+    messageText: str | None = Field(default=None, max_length=300)
+    MessageText: str | None = Field(default=None, max_length=300)
+    message: str | None = Field(default=None, max_length=300)
+    body: str | None = Field(default=None, max_length=300)
+    receiveReturnId: str | None = Field(default=None, max_length=64)
+    ReceiveReturnId: str | None = Field(default=None, max_length=64)
+    provider_msg_id: str | None = Field(default=None, max_length=64)
+
+    def resolved_phone(self) -> str:
+        raw = self.mobile or self.Mobile or self.phone or ""
+        return BookingIn._phone(raw)
+
+    def resolved_body(self) -> str:
+        raw = self.messageText or self.MessageText or self.message or self.body or ""
+        return clean_text(raw, max_len=300)
+
+    def resolved_provider_msg_id(self) -> str | None:
+        raw = self.receiveReturnId or self.ReceiveReturnId or self.provider_msg_id
+        if raw is None:
+            return None
+        v = clean_text(str(raw), max_len=64)
+        return v or None
 
 
 # ==========================================================================

@@ -1433,6 +1433,12 @@ class TestReminders:
         client.post(
             "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
         )
+        repo.update(
+            SYSTEM,
+            "appointments",
+            {"confirm_sent_at": "2026-01-01T00:00:00Z"},
+            where="status = 'booked'",
+        )
         out = reminders.handle_inbound("09121112233", reply)
         assert out["handled"] == "confirmed"
         a = repo.select(SYSTEM, "appointments")[0]
@@ -1445,15 +1451,33 @@ class TestReminders:
         client.post(
             "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
         )
+        repo.update(
+            SYSTEM,
+            "appointments",
+            {"confirm_sent_at": "2026-01-01T00:00:00Z"},
+            where="status = 'booked'",
+        )
         assert reminders.handle_inbound("09121112233", "2")["handled"] == "declined"
         assert repo.select(SYSTEM, "appointments")[0]["attendance"] == "not_coming"
+
+    def test_reply_without_confirm_sent_is_ignored(self, client, patient):
+        from api import reminders, repo
+        from api.policies import SYSTEM
+
+        client.post(
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
+        )
+        out = reminders.handle_inbound("09121112233", "1")
+        assert out["handled"] == "ignored"
+        assert out["matched"] is False
+        assert repo.select(SYSTEM, "appointments")[0]["attendance"] in (None, "", "unknown")
 
     def test_an_unknown_number_is_logged_not_crashed(self, client):
         from api import reminders, repo
         from api.policies import SYSTEM
 
         out = reminders.handle_inbound("09999999999", "1")
-        assert out == {"matched": False, "reason": "unknown_phone"}
+        assert out == {"matched": False, "reason": "unknown_phone", "duplicate": False}
         assert repo.select(SYSTEM, "sms_inbound")[0]["handled"] == "unknown_phone"
 
     def test_the_inbound_webhook_needs_the_shared_secret(self, client, monkeypatch):
@@ -1468,9 +1492,34 @@ class TestReminders:
             client.post(
                 "/api/sms/inbound",
                 json={"phone": "09121112233", "body": "1"},
+                headers={"X-SMS-Secret": "wrong"},
+            ).status_code
+            == 403
+        )
+        assert (
+            client.post(
+                "/api/sms/inbound",
+                json={"phone": "09121112233", "body": "1"},
                 headers={"X-SMS-Secret": "s3cret"},
             ).status_code
             == 200
+        )
+
+    def test_inbound_fails_closed_when_secret_unset(self, client, monkeypatch):
+        from api.config import settings
+
+        monkeypatch.setattr(settings, "SMS_INBOUND_SECRET", "")
+        assert (
+            client.post(
+                "/api/sms/inbound",
+                json={"phone": "09121112233", "body": "1"},
+                headers={"X-SMS-Secret": "anything"},
+            ).status_code
+            == 403
+        )
+        assert (
+            client.post("/api/sms/inbound", json={"phone": "09121112233", "body": "1"}).status_code
+            == 403
         )
 
 
