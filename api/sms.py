@@ -598,8 +598,10 @@ def deliver(message_id: int, *, attempts: int = 2) -> bool:
     kind = msg.get("kind") or ""
     use_smsir = settings.SMS_PROVIDER == "smsir" and kind_may_use_smsir(kind)
     # Non-allowlisted kinds never touch SMS.ir — force the local file sink.
-    effective_provider = "smsir" if use_smsir else (
-        "file" if settings.SMS_PROVIDER == "smsir" else settings.SMS_PROVIDER
+    effective_provider = (
+        "smsir"
+        if use_smsir
+        else ("file" if settings.SMS_PROVIDER == "smsir" else settings.SMS_PROVIDER)
     )
     for i in range(attempts):
         try:
