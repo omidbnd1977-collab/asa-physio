@@ -360,6 +360,8 @@ def send_smsir_verify(
                 "appointment_id": appointment_id,
             }
         )
+    elif kind == NOTIFY_BOOKING_ADMIN_KIND:
+        _assert_notify_booking_admin_destination(phone)
     mobile = normalize_mobile(phone)
     if not mobile:
         raise RuntimeError("SMS recipient phone is empty")

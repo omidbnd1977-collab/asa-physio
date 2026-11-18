@@ -248,3 +248,44 @@ class TestSmsIrCentralSendGuards:
         row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
         assert row["provider"] == "webhook"
         assert row["status"] == "sent"
+
+    def test_verify_notify_booking_admin_rejects_wrong_destination(self, monkeypatch):
+        monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
+        monkeypatch.setattr(settings, "ADMIN_NOTIFICATION_PHONE", "09127776655")
+        calls: list[str] = []
+        monkeypatch.setattr(sms.httpx, "post", lambda *a, **k: calls.append("hit") or _verify_ok())
+        with pytest.raises(RuntimeError, match="not ADMIN_NOTIFICATION_PHONE"):
+            sms.send_smsir_verify(
+                "09121112233",
+                753761,
+                [{"name": "FULLNAME", "value": "تست"}],
+                kind=sms.NOTIFY_BOOKING_ADMIN_KIND,
+            )
+        assert calls == []
+
+    def test_verify_rejects_empty_or_invalid_kind(self, monkeypatch):
+        monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
+        monkeypatch.setattr(settings, "ADMIN_NOTIFICATION_PHONE", "09127776655")
+        calls: list[str] = []
+        monkeypatch.setattr(sms.httpx, "post", lambda *a, **k: calls.append("hit") or _verify_ok())
+        with pytest.raises(TypeError):
+            sms.send_smsir_verify(  # type: ignore[call-arg]
+                "09127776655",
+                753761,
+                [{"name": "FULLNAME", "value": "تست"}],
+            )
+        with pytest.raises(RuntimeError, match="requires kind="):
+            sms.send_smsir_verify(
+                "09127776655",
+                753761,
+                [{"name": "FULLNAME", "value": "تست"}],
+                kind="",
+            )
+        with pytest.raises(RuntimeError, match="not permitted"):
+            sms.send_smsir_verify(
+                "09127776655",
+                753761,
+                [{"name": "FULLNAME", "value": "تست"}],
+                kind="not_a_real_kind",
+            )
+        assert calls == []
