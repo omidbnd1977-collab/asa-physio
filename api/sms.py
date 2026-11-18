@@ -176,17 +176,20 @@ VERIFY_TEMPLATES: dict[str, int] = {
     "rescheduled": SMSIR_TEMPLATE_STATUS,
 }
 
-# Patient-facing kinds: hard-denied for live SMS.ir (ENV cannot enable them).
+# Operational patient SMS kinds (confirm / remind / cancel / reschedule).
+# Live SMS.ir only when listed in SMS_IR_ALLOWED_KINDS ∩ SMSIR_HARD_ALLOWED_KINDS.
 PATIENT_SMS_KINDS: frozenset[str] = frozenset(
     {"booked", "confirm_request", "cancelled", "rescheduled"}
 )
 
-# Absolute ceiling for live SMS.ir via the queue/deliver path. ENV may only
-# subset this set; today that means admin_appointment alone.
-SMSIR_HARD_ALLOWED_KINDS: frozenset[str] = frozenset({"admin_appointment"})
+# Absolute ceiling for live SMS.ir (queue/deliver). ENV may only subset this set.
+# custom / registered / welcome_back / promo-like kinds are intentionally absent.
+SMSIR_HARD_ALLOWED_KINDS: frozenset[str] = frozenset(
+    {"admin_appointment", "booked", "confirm_request", "cancelled", "rescheduled"}
+)
 
-# Legacy clinic-booking notify channel (notify._send_smsir). Not a patient kind;
-# Phase C may fail-close this separately via ALLOW_NOTIFY_SMSIR.
+# Legacy clinic-booking notify channel (notify._send_smsir). Not a queue kind;
+# destination is still gated to ADMIN_NOTIFICATION_PHONE inside send_smsir.
 NOTIFY_BOOKING_ADMIN_KIND = "notify_booking_admin"
 
 
@@ -194,21 +197,18 @@ def sms_ir_allowed_kinds() -> frozenset[str]:
     """Kinds permitted to use the live SMS.ir provider.
 
     Default empty ⇒ fail-closed (no real SMS.ir traffic) even if SMS_PROVIDER=smsir.
-    Patient kinds are stripped even if present in ``SMS_IR_ALLOWED_KINDS``.
-    Result is always intersected with ``SMSIR_HARD_ALLOWED_KINDS``.
+    Result is always ``requested ∩ SMSIR_HARD_ALLOWED_KINDS`` — never widens the ceiling.
     """
     raw = (settings.SMS_IR_ALLOWED_KINDS or "").strip()
     if not raw:
         return frozenset()
     requested = frozenset(part.strip() for part in raw.split(",") if part.strip())
-    return (requested - PATIENT_SMS_KINDS) & SMSIR_HARD_ALLOWED_KINDS
+    return requested & SMSIR_HARD_ALLOWED_KINDS
 
 
 def kind_may_use_smsir(kind: str | None) -> bool:
-    """Server-side gate: allowlisted ∧ hard-allowed ∧ not a patient kind."""
-    if not kind or kind in PATIENT_SMS_KINDS:
-        return False
-    if kind not in SMSIR_HARD_ALLOWED_KINDS:
+    """Server-side gate: kind is in the ENV allowlist ∩ hard-allowed ceiling."""
+    if not kind:
         return False
     return kind in sms_ir_allowed_kinds()
 
@@ -216,14 +216,13 @@ def kind_may_use_smsir(kind: str | None) -> bool:
 def assert_smsir_send_kind_allowed(kind: str | None) -> str:
     """Central gate for every live SMS.ir HTTP call (queue or direct).
 
-    Patient kinds are always rejected. Queue kinds must pass ``kind_may_use_smsir``.
+    Queue/operational kinds must pass ``kind_may_use_smsir`` (allowlist ∩ hard ceiling).
     ``notify_booking_admin`` is the only non-queue exception (legacy notify path).
+    Kinds outside the hard ceiling (e.g. custom) are never permitted.
     """
     if not kind or not str(kind).strip():
         raise RuntimeError("sms.ir send requires kind=")
     normalized = str(kind).strip()
-    if normalized in PATIENT_SMS_KINDS:
-        raise RuntimeError(f"sms.ir kind {normalized!r} is hard-denied (patient)")
     if normalized in SMSIR_HARD_ALLOWED_KINDS:
         if not kind_may_use_smsir(normalized):
             raise RuntimeError(f"sms.ir kind {normalized!r} is not allowlisted")

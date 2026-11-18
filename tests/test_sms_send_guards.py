@@ -33,14 +33,10 @@ class TestSmsIrCentralSendGuards:
     """N1–N6: direct bypasses of hard-deny must not reach SMS.ir HTTP."""
 
     @pytest.mark.parametrize("kind", sorted(sms.PATIENT_SMS_KINDS))
-    def test_n1_send_smsir_rejects_patient_kinds(self, monkeypatch, kind: str):
+    def test_n1_send_smsir_rejects_patient_kinds_when_not_allowlisted(self, monkeypatch, kind: str):
         monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
         monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
-        monkeypatch.setattr(
-            settings,
-            "SMS_IR_ALLOWED_KINDS",
-            "admin_appointment,booked,confirm_request,cancelled,rescheduled",
-        )
+        monkeypatch.setattr(settings, "SMS_IR_ALLOWED_KINDS", "admin_appointment")
         calls: list[str] = []
 
         def fake_post(url, **kwargs):
@@ -48,18 +44,16 @@ class TestSmsIrCentralSendGuards:
             return _bulk_ok()
 
         monkeypatch.setattr(sms.httpx, "post", fake_post)
-        with pytest.raises(RuntimeError, match="hard-denied|not permitted|not allowlisted"):
+        with pytest.raises(RuntimeError, match="not allowlisted|not permitted"):
             sms.send_smsir("09121112233", "patient body", kind=kind)
         assert calls == []
 
     @pytest.mark.parametrize("kind", sorted(sms.PATIENT_SMS_KINDS))
-    def test_n2_send_smsir_verify_rejects_patient_kinds(self, monkeypatch, kind: str):
+    def test_n2_send_smsir_verify_rejects_patient_kinds_when_not_allowlisted(
+        self, monkeypatch, kind: str
+    ):
         monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
-        monkeypatch.setattr(
-            settings,
-            "SMS_IR_ALLOWED_KINDS",
-            "admin_appointment,booked,confirm_request,cancelled,rescheduled",
-        )
+        monkeypatch.setattr(settings, "SMS_IR_ALLOWED_KINDS", "admin_appointment")
         calls: list[str] = []
 
         def fake_post(url, **kwargs):
@@ -67,7 +61,7 @@ class TestSmsIrCentralSendGuards:
             return _verify_ok()
 
         monkeypatch.setattr(sms.httpx, "post", fake_post)
-        with pytest.raises(RuntimeError, match="hard-denied|not permitted|not allowlisted"):
+        with pytest.raises(RuntimeError, match="not allowlisted|not permitted"):
             sms.send_smsir_verify(
                 "09121112233",
                 371089,
@@ -76,28 +70,22 @@ class TestSmsIrCentralSendGuards:
             )
         assert calls == []
 
-    def test_n3_send_smsir_rejects_cancelled_and_rescheduled_explicitly(self, monkeypatch):
+    def test_n3_cancelled_rescheduled_blocked_without_allowlist(self, monkeypatch):
         monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
         monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
-        monkeypatch.setattr(
-            settings, "SMS_IR_ALLOWED_KINDS", "cancelled,rescheduled,admin_appointment"
-        )
+        monkeypatch.setattr(settings, "SMS_IR_ALLOWED_KINDS", "admin_appointment")
         calls: list[str] = []
         monkeypatch.setattr(sms.httpx, "post", lambda *a, **k: calls.append(k) or _bulk_ok())
         for kind in ("cancelled", "rescheduled"):
-            with pytest.raises(RuntimeError, match="hard-denied"):
+            with pytest.raises(RuntimeError, match="not allowlisted"):
                 sms.send_smsir("09121112233", "x", kind=kind)
         assert calls == []
 
-    def test_n4_send_now_patient_kind_stays_file_despite_env(self, monkeypatch, tmp_path):
+    def test_n4_send_now_patient_kind_stays_file_when_not_allowlisted(self, monkeypatch, tmp_path):
         monkeypatch.setattr(settings, "SMS_PROVIDER", "smsir")
         monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
         monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
-        monkeypatch.setattr(
-            settings,
-            "SMS_IR_ALLOWED_KINDS",
-            "admin_appointment,booked,confirm_request,cancelled,rescheduled",
-        )
+        monkeypatch.setattr(settings, "SMS_IR_ALLOWED_KINDS", "admin_appointment")
         out = tmp_path / "sms-out.txt"
         monkeypatch.setattr(settings, "SMS_FILE", out)
         calls: list[str] = []
@@ -116,12 +104,8 @@ class TestSmsIrCentralSendGuards:
         row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
         assert row["provider"] == "file"
 
-    def test_n5_send_smsir_for_message_patient_kind_rejected(self, monkeypatch):
-        monkeypatch.setattr(
-            settings,
-            "SMS_IR_ALLOWED_KINDS",
-            "admin_appointment,booked,confirm_request,cancelled,rescheduled",
-        )
+    def test_n5_send_smsir_for_message_patient_kind_rejected_without_allowlist(self, monkeypatch):
+        monkeypatch.setattr(settings, "SMS_IR_ALLOWED_KINDS", "admin_appointment")
         with pytest.raises(RuntimeError, match="not allowlisted"):
             sms.send_smsir_for_message(
                 {
@@ -133,16 +117,16 @@ class TestSmsIrCentralSendGuards:
                 }
             )
 
-    def test_n6_dispatch_requires_kind_and_blocks_patient(self, monkeypatch):
+    def test_n6_dispatch_requires_kind_and_blocks_non_allowlisted_patient(self, monkeypatch):
         monkeypatch.setattr(settings, "SMS_PROVIDER", "smsir")
         monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
         monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
-        monkeypatch.setattr(settings, "SMS_IR_ALLOWED_KINDS", "admin_appointment,booked")
+        monkeypatch.setattr(settings, "SMS_IR_ALLOWED_KINDS", "admin_appointment")
         calls: list[str] = []
         monkeypatch.setattr(sms.httpx, "post", lambda *a, **k: calls.append("hit") or _bulk_ok())
         with pytest.raises(TypeError):
             sms.dispatch("09121112233", "x")  # type: ignore[call-arg]
-        with pytest.raises(RuntimeError, match="hard-denied"):
+        with pytest.raises(RuntimeError, match="not allowlisted"):
             sms.dispatch("09121112233", "x", kind="booked")
         assert calls == []
 

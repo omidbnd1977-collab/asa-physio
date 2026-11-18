@@ -100,8 +100,9 @@ class Settings:
     SMS_WEBHOOK: str = os.getenv("SMS_WEBHOOK", "")
     # Comma-separated sms_messages.kind values allowed to hit SMS.ir when
     # SMS_PROVIDER=smsir. Empty (default) = fail-closed: no kind uses SMS.ir;
-    # non-allowlisted kinds fall back to the file sink. Code also hard-blocks
-    # patient kinds and only permits admin_appointment even if ENV lists more.
+    # non-allowlisted kinds fall back to the file sink. Empty = fail-closed.
+    # May only enable kinds in sms.SMSIR_HARD_ALLOWED_KINDS (admin + operational
+    # patient: booked/confirm_request/cancelled/rescheduled). Never custom/promo.
     SMS_IR_ALLOWED_KINDS: str = os.getenv("SMS_IR_ALLOWED_KINDS", "")
     SMS_INBOUND_SECRET: str = os.getenv("SMS_INBOUND_SECRET", "")
     SMS_UNIT_COST_USD: float = _f("SMS_UNIT_COST_USD", 0.0045)
