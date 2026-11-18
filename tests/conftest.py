@@ -32,6 +32,7 @@ os.environ.update(
         "SMS_FILE": str(TMP / "sms.txt"),
         "SMS_WEBHOOK": "",
         "SMS_API_KEY": "",
+        "SMS_IR_ALLOWED_KINDS": "",
         "SMS_INBOUND_SECRET": "",
         "REMINDER_BACKGROUND": "0",
         "UPLOAD_DIR": str(TMP / "uploads"),
