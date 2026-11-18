@@ -247,7 +247,7 @@ REGISTER_BODY = """
       <input type="tel" id="mobile" name="mobile" placeholder=" " required inputmode="numeric"
              maxlength="20" autocomplete="tel" dir="ltr" style="text-align:right">
       <label for="mobile">شماره موبایل <span class="req">*</span></label>
-      <p class="hint">پیامک تأیید نوبت به همین شماره ارسال می‌شود.</p>
+      <p class="hint">در صورت فعال بودن پیامک عملیاتی کلینیک، تأیید نوبت به همین شماره ارسال می‌شود.</p>
       <p class="err-msg" id="e-mobile"></p>
     </div>
     </div>
@@ -289,7 +289,7 @@ REGISTER_BODY = """
       </button>
     </div>
     <p class="hint" style="text-align:center;margin-top:12px">
-      با ثبت این فرم، پیامک «اطلاعات شما ثبت شد» برای شما ارسال می‌شود.
+      با ثبت این فرم، در صورت فعال بودن پیامک‌های عملیاتی، اطلاع‌رسانی به شماره شما ارسال می‌شود.
     </p>
   </form>
 </div>
@@ -574,7 +574,7 @@ RESERVE_BODY = """
       </button>
     </div>
     <p class="hint" style="text-align:center;margin-top:10px">
-      پس از ثبت، پیامک تأیید با کد پیگیری برای شما ارسال می‌شود.
+      پس از ثبت، در صورت فعال بودن پیامک عملیاتی، تأیید با کد پیگیری ارسال می‌شود.
     </p>
   </div>
   <div style="margin-top:16px">
@@ -835,7 +835,7 @@ DONE_BODY = """
 <div class="pcard ticket">
   <div class="mark"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></div>
   <h1 class="ptitle">نوبت شما ثبت شد</h1>
-  <p class="psub" id="doneSub">پیامک تأیید به شماره‌ی شما ارسال شد.</p>
+  <p class="psub" id="doneSub">نوبت شما ثبت شد؛ در صورت فعال بودن پیامک، تأیید به شماره‌ی شما می‌رسد.</p>
 
   <div id="dLoading"><div class="skel" style="height:80px"></div></div>
   <div id="dError" class="state error hidden"></div>
@@ -851,7 +851,7 @@ DONE_BODY = """
 
   <p class="psub" style="margin-top:26px">
     جزیره قشم، میدان ولایت (ساعت)، ساختمان محسنین، طبقه دوم<br>
-    دو ساعت قبل از نوبت، پیامک یادآوری برای شما ارسال می‌شود؛
+    در صورت فعال بودن یادآوری پیامکی، حدود دو ساعت قبل از نوبت اطلاع‌رسانی می‌شود؛
     با ارسال عدد <b>۱</b> حضور خود را قطعی کنید.
   </p>
   <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:8px">

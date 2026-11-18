@@ -12,8 +12,8 @@ from api import notify, repo, sms
 from api.config import settings
 from api.policies import SYSTEM
 
-# Queue/deliver may only use live SMS.ir for admin_appointment (hard ceiling).
-# Patient/custom kinds stay on the file sink even if ENV lists them.
+# Default suite allowlist: admin_appointment only (fail-closed for patient kinds).
+# Patient operational kinds need an explicit SMS_IR_ALLOWED_KINDS expansion.
 _LEGACY_SMSIR_ALLOWLIST = "admin_appointment"
 
 
