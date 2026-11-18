@@ -176,26 +176,37 @@ VERIFY_TEMPLATES: dict[str, int] = {
     "rescheduled": SMSIR_TEMPLATE_STATUS,
 }
 
-# Patient-facing kinds that must never hit SMS.ir unless explicitly allowlisted.
+# Patient-facing kinds: hard-denied for live SMS.ir (ENV cannot enable them).
 PATIENT_SMS_KINDS: frozenset[str] = frozenset(
     {"booked", "confirm_request", "cancelled", "rescheduled"}
 )
+
+# Absolute ceiling for live SMS.ir via the queue/deliver path. ENV may only
+# subset this set; today that means admin_appointment alone.
+SMSIR_HARD_ALLOWED_KINDS: frozenset[str] = frozenset({"admin_appointment"})
 
 
 def sms_ir_allowed_kinds() -> frozenset[str]:
     """Kinds permitted to use the live SMS.ir provider.
 
     Default empty ⇒ fail-closed (no real SMS.ir traffic) even if SMS_PROVIDER=smsir.
+    Patient kinds are stripped even if present in ``SMS_IR_ALLOWED_KINDS``.
+    Result is always intersected with ``SMSIR_HARD_ALLOWED_KINDS``.
     """
     raw = (settings.SMS_IR_ALLOWED_KINDS or "").strip()
     if not raw:
         return frozenset()
-    return frozenset(part.strip() for part in raw.split(",") if part.strip())
+    requested = frozenset(part.strip() for part in raw.split(",") if part.strip())
+    return (requested - PATIENT_SMS_KINDS) & SMSIR_HARD_ALLOWED_KINDS
 
 
 def kind_may_use_smsir(kind: str | None) -> bool:
-    """Server-side gate: only allowlisted kinds may call SMS.ir APIs."""
-    return bool(kind) and kind in sms_ir_allowed_kinds()
+    """Server-side gate: allowlisted ∧ hard-allowed ∧ not a patient kind."""
+    if not kind or kind in PATIENT_SMS_KINDS:
+        return False
+    if kind not in SMSIR_HARD_ALLOWED_KINDS:
+        return False
+    return kind in sms_ir_allowed_kinds()
 
 
 def verify_param(name: str, value: str) -> dict[str, str]:
