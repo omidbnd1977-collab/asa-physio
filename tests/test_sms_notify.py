@@ -62,6 +62,7 @@ class TestSmsIrProvider:
     def test_bulk_payload_matches_official_api(self, monkeypatch):
         monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
         monkeypatch.setattr(settings, "SMS_SENDER", "30004505000017")
+        monkeypatch.setattr(settings, "ADMIN_NOTIFICATION_PHONE", "09121111111")
         captured: dict = {}
 
         def fake_post(url, **kwargs):
@@ -71,7 +72,8 @@ class TestSmsIrProvider:
             return _smsir_ok()
 
         monkeypatch.setattr(sms.httpx, "post", fake_post)
-        sms.send_smsir("+989121111111", "سلام آزمون")
+        # Non-patient legacy notify kind — exercises bulk HTTP without queue allowlist.
+        sms.send_smsir("+989121111111", "سلام آزمون", kind=sms.NOTIFY_BOOKING_ADMIN_KIND)
 
         assert captured["url"] == "https://api.sms.ir/v1/send/bulk"
         assert captured["headers"]["X-API-KEY"] == "panel-key"
@@ -83,6 +85,7 @@ class TestSmsIrProvider:
     def test_rejects_logical_failure_status(self, monkeypatch):
         monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
         monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
+        monkeypatch.setattr(settings, "ADMIN_NOTIFICATION_PHONE", "09121111111")
 
         def fake_post(url, **kwargs):
             return httpx.Response(
@@ -93,18 +96,19 @@ class TestSmsIrProvider:
 
         monkeypatch.setattr(sms.httpx, "post", fake_post)
         with pytest.raises(RuntimeError, match="sms.ir status 10"):
-            sms.send_smsir("09121111111", "x")
+            sms.send_smsir("09121111111", "x", kind=sms.NOTIFY_BOOKING_ADMIN_KIND)
 
     def test_rejects_blacklist_message_id_zero(self, monkeypatch):
         monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
         monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
+        monkeypatch.setattr(settings, "ADMIN_NOTIFICATION_PHONE", "09121111111")
 
         def fake_post(url, **kwargs):
             return _smsir_ok(message_id=0)
 
         monkeypatch.setattr(sms.httpx, "post", fake_post)
         with pytest.raises(RuntimeError, match="blacklist"):
-            sms.send_smsir("09121111111", "x")
+            sms.send_smsir("09121111111", "x", kind=sms.NOTIFY_BOOKING_ADMIN_KIND)
 
     def test_queue_deliver_non_hard_allowed_kind_stays_file(self, monkeypatch, tmp_path):
         monkeypatch.setattr(settings, "SMS_PROVIDER", "smsir")

@@ -185,6 +185,10 @@ PATIENT_SMS_KINDS: frozenset[str] = frozenset(
 # subset this set; today that means admin_appointment alone.
 SMSIR_HARD_ALLOWED_KINDS: frozenset[str] = frozenset({"admin_appointment"})
 
+# Legacy clinic-booking notify channel (notify._send_smsir). Not a patient kind;
+# Phase C may fail-close this separately via ALLOW_NOTIFY_SMSIR.
+NOTIFY_BOOKING_ADMIN_KIND = "notify_booking_admin"
+
 
 def sms_ir_allowed_kinds() -> frozenset[str]:
     """Kinds permitted to use the live SMS.ir provider.
@@ -207,6 +211,26 @@ def kind_may_use_smsir(kind: str | None) -> bool:
     if kind not in SMSIR_HARD_ALLOWED_KINDS:
         return False
     return kind in sms_ir_allowed_kinds()
+
+
+def assert_smsir_send_kind_allowed(kind: str | None) -> str:
+    """Central gate for every live SMS.ir HTTP call (queue or direct).
+
+    Patient kinds are always rejected. Queue kinds must pass ``kind_may_use_smsir``.
+    ``notify_booking_admin`` is the only non-queue exception (legacy notify path).
+    """
+    if not kind or not str(kind).strip():
+        raise RuntimeError("sms.ir send requires kind=")
+    normalized = str(kind).strip()
+    if normalized in PATIENT_SMS_KINDS:
+        raise RuntimeError(f"sms.ir kind {normalized!r} is hard-denied (patient)")
+    if normalized in SMSIR_HARD_ALLOWED_KINDS:
+        if not kind_may_use_smsir(normalized):
+            raise RuntimeError(f"sms.ir kind {normalized!r} is not allowlisted")
+        return normalized
+    if normalized == NOTIFY_BOOKING_ADMIN_KIND:
+        return normalized
+    raise RuntimeError(f"sms.ir kind {normalized!r} is not permitted")
 
 
 def verify_param(name: str, value: str) -> dict[str, str]:
@@ -309,14 +333,35 @@ def _smsir_headers() -> dict[str, str]:
     }
 
 
-def send_smsir_verify(phone: str, template_id: int, parameters: list[dict[str, str]]) -> int | None:
+def send_smsir_verify(
+    phone: str,
+    template_id: int,
+    parameters: list[dict[str, str]],
+    *,
+    kind: str,
+    patient_id: int | None = None,
+    appointment_id: int | None = None,
+) -> int | None:
     """Official SMS.ir Verify send: POST https://api.sms.ir/v1/send/verify
 
     Auth: ``X-API-KEY``. Body: mobile, templateId (int), parameters[{name,value}].
     Parameter values max 25 chars. Success when HTTP 200 and JSON ``status == 1``.
     Returns provider messageId when present; never logs the API key.
+    Requires ``kind=``; patient kinds cannot bypass the central hard-deny gate.
     Docs: https://sms.ir/rest-api/
     """
+    kind = assert_smsir_send_kind_allowed(kind)
+    if kind == "admin_appointment":
+        _assert_admin_appointment_destination(
+            {
+                "kind": kind,
+                "phone": phone,
+                "patient_id": patient_id,
+                "appointment_id": appointment_id,
+            }
+        )
+    elif kind == NOTIFY_BOOKING_ADMIN_KIND:
+        _assert_notify_booking_admin_destination(phone)
     mobile = normalize_mobile(phone)
     if not mobile:
         raise RuntimeError("SMS recipient phone is empty")
@@ -355,14 +400,34 @@ def send_smsir_verify(phone: str, template_id: int, parameters: list[dict[str, s
     return message_id if isinstance(message_id, int) else None
 
 
-def send_smsir(phone: str, body: str) -> None:
+def send_smsir(
+    phone: str,
+    body: str,
+    *,
+    kind: str,
+    patient_id: int | None = None,
+    appointment_id: int | None = None,
+) -> None:
     """Official SMS.ir REST bulk send: POST https://api.sms.ir/v1/send/bulk
 
     Auth: ``X-API-KEY`` header. Body: lineNumber (long), messageText, mobiles[].
     Success when HTTP 200 and JSON ``status == 1``. messageIds entry ``0`` means
     blacklist; ``null`` means invalid number / oversized text.
+    Requires ``kind=``; patient kinds cannot bypass the central hard-deny gate.
     Docs: https://sms.ir/rest-api/
     """
+    kind = assert_smsir_send_kind_allowed(kind)
+    if kind == "admin_appointment":
+        _assert_admin_appointment_destination(
+            {
+                "kind": kind,
+                "phone": phone,
+                "patient_id": patient_id,
+                "appointment_id": appointment_id,
+            }
+        )
+    elif kind == NOTIFY_BOOKING_ADMIN_KIND:
+        _assert_notify_booking_admin_destination(phone)
     mobile = normalize_mobile(phone)
     if not mobile:
         raise RuntimeError("SMS recipient phone is empty")
@@ -413,6 +478,16 @@ def _assert_admin_appointment_destination(msg: dict) -> None:
             raise RuntimeError("ADMIN_NOTIFICATION_PHONE must not equal the patient phone")
 
 
+def _assert_notify_booking_admin_destination(phone: str) -> None:
+    """Hard gate: notify_booking_admin may only go to ADMIN_NOTIFICATION_PHONE."""
+    admin = normalize_mobile(settings.ADMIN_NOTIFICATION_PHONE or "")
+    if not admin:
+        raise RuntimeError("ADMIN_NOTIFICATION_PHONE is empty")
+    dest = normalize_mobile(phone or "")
+    if not dest or dest != admin:
+        raise RuntimeError("notify_booking_admin recipient is not ADMIN_NOTIFICATION_PHONE")
+
+
 def send_smsir_for_message(msg: dict) -> None:
     """Deliver one queued row via Verify when mapped, otherwise bulk text.
 
@@ -429,21 +504,48 @@ def send_smsir_for_message(msg: dict) -> None:
         if built is None:
             raise RuntimeError(f"sms.ir verify mapping missing for kind {kind!r}")
         template_id, parameters = built
-        send_smsir_verify(msg["phone"], template_id, parameters)
+        send_smsir_verify(
+            msg["phone"],
+            template_id,
+            parameters,
+            kind=kind,
+            patient_id=msg.get("patient_id"),
+            appointment_id=msg.get("appointment_id"),
+        )
         return
-    send_smsir(msg["phone"], msg["body"])
+    send_smsir(
+        msg["phone"],
+        msg["body"],
+        kind=kind,
+        patient_id=msg.get("patient_id"),
+        appointment_id=msg.get("appointment_id"),
+    )
+
+
+def _smsir_providers_entry_blocked(phone: str, body: str) -> None:
+    """PROVIDERS['smsir'] must not offer an unguarded (phone, body) send."""
+    raise RuntimeError(
+        "SMS_PROVIDER=smsir cannot send via PROVIDERS entry; "
+        "use send_smsir(..., kind=...) or sms.deliver()"
+    )
 
 
 PROVIDERS = {
     "file": _send_file,
     "webhook": _send_webhook,
     "kavenegar": _send_kavenegar,
-    "smsir": send_smsir,
+    "smsir": _smsir_providers_entry_blocked,
 }
 
 
-def dispatch(phone: str, body: str) -> None:
-    """Send via the configured ``SMS_PROVIDER`` without queueing a row."""
+def dispatch(phone: str, body: str, *, kind: str) -> None:
+    """Direct send via ``SMS_PROVIDER`` — still centrally gated for smsir.
+
+    Deprecated for new call sites; prefer ``queue``/``deliver``. Requires ``kind=``.
+    """
+    if settings.SMS_PROVIDER == "smsir":
+        send_smsir(phone, body, kind=kind)
+        return
     send = PROVIDERS.get(settings.SMS_PROVIDER)
     if send is None:
         raise RuntimeError(f"unknown SMS provider {settings.SMS_PROVIDER!r}")
