@@ -424,6 +424,8 @@ def send_smsir(
                 "appointment_id": appointment_id,
             }
         )
+    elif kind == NOTIFY_BOOKING_ADMIN_KIND:
+        _assert_notify_booking_admin_destination(phone)
     mobile = normalize_mobile(phone)
     if not mobile:
         raise RuntimeError("SMS recipient phone is empty")
@@ -472,6 +474,16 @@ def _assert_admin_appointment_destination(msg: dict) -> None:
         patient_phone = normalize_mobile(str(patient.get("phone") or ""))
         if patient_phone and patient_phone == admin:
             raise RuntimeError("ADMIN_NOTIFICATION_PHONE must not equal the patient phone")
+
+
+def _assert_notify_booking_admin_destination(phone: str) -> None:
+    """Hard gate: notify_booking_admin may only go to ADMIN_NOTIFICATION_PHONE."""
+    admin = normalize_mobile(settings.ADMIN_NOTIFICATION_PHONE or "")
+    if not admin:
+        raise RuntimeError("ADMIN_NOTIFICATION_PHONE is empty")
+    dest = normalize_mobile(phone or "")
+    if not dest or dest != admin:
+        raise RuntimeError("notify_booking_admin recipient is not ADMIN_NOTIFICATION_PHONE")
 
 
 def send_smsir_for_message(msg: dict) -> None:

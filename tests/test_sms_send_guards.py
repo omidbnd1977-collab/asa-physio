@@ -159,3 +159,92 @@ class TestSmsIrCentralSendGuards:
         monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
         with pytest.raises(TypeError):
             sms.send_smsir("09121112233", "x")  # type: ignore[call-arg]
+
+    def test_notify_booking_admin_rejects_arbitrary_destination(self, monkeypatch):
+        monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
+        monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
+        monkeypatch.setattr(settings, "ADMIN_NOTIFICATION_PHONE", "09127776655")
+        calls: list[str] = []
+        monkeypatch.setattr(sms.httpx, "post", lambda *a, **k: calls.append("hit") or _bulk_ok())
+        with pytest.raises(RuntimeError, match="not ADMIN_NOTIFICATION_PHONE"):
+            sms.send_smsir(
+                "09121112233",
+                "admin alert",
+                kind=sms.NOTIFY_BOOKING_ADMIN_KIND,
+            )
+        assert calls == []
+
+    def test_notify_booking_admin_rejects_empty_admin_phone(self, monkeypatch):
+        monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
+        monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
+        monkeypatch.setattr(settings, "ADMIN_NOTIFICATION_PHONE", "")
+        calls: list[str] = []
+        monkeypatch.setattr(sms.httpx, "post", lambda *a, **k: calls.append("hit") or _bulk_ok())
+        with pytest.raises(RuntimeError, match="ADMIN_NOTIFICATION_PHONE is empty"):
+            sms.send_smsir(
+                "09127776655",
+                "admin alert",
+                kind=sms.NOTIFY_BOOKING_ADMIN_KIND,
+            )
+        assert calls == []
+
+    def test_notify_booking_admin_allows_admin_destination(self, monkeypatch):
+        monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
+        monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
+        monkeypatch.setattr(settings, "ADMIN_NOTIFICATION_PHONE", "+98 912 777 6655")
+        captured: dict = {}
+
+        def fake_post(url, **kwargs):
+            captured["url"] = url
+            captured["json"] = kwargs.get("json")
+            return _bulk_ok()
+
+        monkeypatch.setattr(sms.httpx, "post", fake_post)
+        sms.send_smsir(
+            "09127776655",
+            "admin alert",
+            kind=sms.NOTIFY_BOOKING_ADMIN_KIND,
+        )
+        assert captured["url"] == "https://api.sms.ir/v1/send/bulk"
+        assert captured["json"]["mobiles"] == ["09127776655"]
+
+    def test_dispatch_cannot_bypass_notify_booking_admin_destination(self, monkeypatch):
+        monkeypatch.setattr(settings, "SMS_PROVIDER", "smsir")
+        monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
+        monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
+        monkeypatch.setattr(settings, "ADMIN_NOTIFICATION_PHONE", "09127776655")
+        calls: list[str] = []
+        monkeypatch.setattr(sms.httpx, "post", lambda *a, **k: calls.append("hit") or _bulk_ok())
+        with pytest.raises(RuntimeError, match="not ADMIN_NOTIFICATION_PHONE"):
+            sms.dispatch(
+                "09121112233",
+                "admin alert",
+                kind=sms.NOTIFY_BOOKING_ADMIN_KIND,
+            )
+        assert calls == []
+
+    def test_sms_webhook_provider_unaffected_by_smsir_guards(self, monkeypatch):
+        """Regression: SMS_PROVIDER=webhook still posts to SMS_WEBHOOK, not SMS.ir."""
+        monkeypatch.setattr(settings, "SMS_PROVIDER", "webhook")
+        monkeypatch.setattr(settings, "SMS_WEBHOOK", "https://hooks.example.test/sms")
+        monkeypatch.setattr(settings, "SMS_API_KEY", "")
+        monkeypatch.setattr(settings, "ADMIN_NOTIFICATION_PHONE", "")
+        monkeypatch.setattr(settings, "SMS_IR_ALLOWED_KINDS", "")
+        captured: dict = {}
+
+        def fake_post(url, **kwargs):
+            captured["url"] = url
+            captured["json"] = kwargs.get("json")
+            return httpx.Response(200, request=httpx.Request("POST", url))
+
+        monkeypatch.setattr(sms.httpx, "post", fake_post)
+        mid, ok = sms.send_now("09124445566", "webhook body", "booked")
+        assert ok and mid
+        assert captured["url"] == "https://hooks.example.test/sms"
+        assert captured["json"] == {"to": "09124445566", "text": "webhook body"}
+        from api import repo
+        from api.policies import SYSTEM
+
+        row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
+        assert row["provider"] == "webhook"
+        assert row["status"] == "sent"

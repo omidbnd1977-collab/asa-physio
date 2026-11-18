@@ -62,6 +62,7 @@ class TestSmsIrProvider:
     def test_bulk_payload_matches_official_api(self, monkeypatch):
         monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
         monkeypatch.setattr(settings, "SMS_SENDER", "30004505000017")
+        monkeypatch.setattr(settings, "ADMIN_NOTIFICATION_PHONE", "09121111111")
         captured: dict = {}
 
         def fake_post(url, **kwargs):
@@ -84,6 +85,7 @@ class TestSmsIrProvider:
     def test_rejects_logical_failure_status(self, monkeypatch):
         monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
         monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
+        monkeypatch.setattr(settings, "ADMIN_NOTIFICATION_PHONE", "09121111111")
 
         def fake_post(url, **kwargs):
             return httpx.Response(
@@ -99,6 +101,7 @@ class TestSmsIrProvider:
     def test_rejects_blacklist_message_id_zero(self, monkeypatch):
         monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
         monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
+        monkeypatch.setattr(settings, "ADMIN_NOTIFICATION_PHONE", "09121111111")
 
         def fake_post(url, **kwargs):
             return _smsir_ok(message_id=0)
