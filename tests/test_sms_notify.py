@@ -12,6 +12,15 @@ from api import notify, repo, sms
 from api.config import settings
 from api.policies import SYSTEM
 
+# Queue/deliver may only use live SMS.ir for admin_appointment (hard ceiling).
+# Patient/custom kinds stay on the file sink even if ENV lists them.
+_LEGACY_SMSIR_ALLOWLIST = "admin_appointment"
+
+
+@pytest.fixture(autouse=True)
+def _legacy_smsir_kind_allowlist(monkeypatch):
+    monkeypatch.setattr(settings, "SMS_IR_ALLOWED_KINDS", _LEGACY_SMSIR_ALLOWLIST)
+
 
 def _smsir_ok(message_id: int = 86522023) -> httpx.Response:
     return httpx.Response(
@@ -26,6 +35,18 @@ def _smsir_ok(message_id: int = 86522023) -> httpx.Response:
             },
         },
         request=httpx.Request("POST", "https://api.sms.ir/v1/send/bulk"),
+    )
+
+
+def _smsir_verify_ok(message_id: int = 89545112) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "status": 1,
+            "message": "موفق",
+            "data": {"messageId": message_id, "cost": 1.0},
+        },
+        request=httpx.Request("POST", "https://api.sms.ir/v1/send/verify"),
     )
 
 
@@ -85,41 +106,94 @@ class TestSmsIrProvider:
         with pytest.raises(RuntimeError, match="blacklist"):
             sms.send_smsir("09121111111", "x")
 
-    def test_queue_deliver_marks_sent(self, monkeypatch):
+    def test_queue_deliver_non_hard_allowed_kind_stays_file(self, monkeypatch, tmp_path):
         monkeypatch.setattr(settings, "SMS_PROVIDER", "smsir")
         monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
         monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
-        monkeypatch.setattr(sms.httpx, "post", lambda *a, **k: _smsir_ok())
+        out = tmp_path / "sms-out.txt"
+        monkeypatch.setattr(settings, "SMS_FILE", out)
+        calls: list[str] = []
 
-        mid, ok = sms.send_now("09123334444", "بدن تست", "booked")
+        def fake_post(url, **kwargs):
+            calls.append(url)
+            return _smsir_ok()
+
+        monkeypatch.setattr(sms.httpx, "post", fake_post)
+
+        # custom is outside SMSIR_HARD_ALLOWED_KINDS → file sink, never SMS.ir.
+        mid, ok = sms.send_now("09123334444", "بدن تست", "custom")
         assert ok is True
+        assert calls == []
         row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
         assert row["status"] == "sent"
-        assert row["provider"] == "smsir"
+        assert row["provider"] == "file"
 
     def test_deliver_failure_is_retryable(self, monkeypatch):
+        from api import scheduling
+        from tests.test_portal import nid, tomorrow
+
         monkeypatch.setattr(settings, "SMS_PROVIDER", "smsir")
+        monkeypatch.setattr(settings, "ADMIN_NOTIFICATION_PHONE", "09127776655")
         monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
         monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
 
         def boom(*a, **k):
             raise httpx.HTTPStatusError(
                 "401",
-                request=httpx.Request("POST", "https://api.sms.ir/v1/send/bulk"),
+                request=httpx.Request("POST", "https://api.sms.ir/v1/send/verify"),
                 response=httpx.Response(401),
             )
 
         monkeypatch.setattr(sms.httpx, "post", boom)
-        mid = sms.queue("09123334444", "بدن", "confirm_request")
+        pid = repo.insert(
+            SYSTEM,
+            "patients",
+            {
+                "public_id": "patretry0001",
+                "full_name": "بیمار",
+                "national_id": nid(48837090),
+                "birth_date": "1991-07-25",
+                "birth_jalali": "1370/05/03",
+                "phone": "09121112233",
+            },
+        )
+        appt = scheduling.allocate(pid, tomorrow(), "16:00")
+        mid = sms.queue(
+            "09127776655",
+            "admin",
+            "admin_appointment",
+            appointment_id=appt["id"],
+        )
         assert sms.deliver(mid, attempts=1) is False
         row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
         assert row["status"] == "failed"
         assert row["attempts"] >= 1
 
-        monkeypatch.setattr(sms.httpx, "post", lambda *a, **k: _smsir_ok())
+        monkeypatch.setattr(sms.httpx, "post", lambda *a, **k: _smsir_verify_ok())
         assert sms.deliver(mid, attempts=1) is True
         row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
         assert row["status"] == "sent"
+        assert row["provider"] == "smsir"
+
+    def test_patient_templated_kind_never_hits_smsir_queue(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(settings, "SMS_PROVIDER", "smsir")
+        monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
+        monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
+        out = tmp_path / "sms-out.txt"
+        monkeypatch.setattr(settings, "SMS_FILE", out)
+        calls = {"n": 0}
+
+        def counting_post(*a, **k):
+            calls["n"] += 1
+            return _smsir_ok()
+
+        monkeypatch.setattr(sms.httpx, "post", counting_post)
+        mid = sms.queue("09123334444", "should-not-hit-smsir", "booked")
+        assert sms.deliver(mid, attempts=1) is True
+        assert calls["n"] == 0
+        row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
+        assert row["status"] == "sent"
+        assert row["provider"] == "file"
 
 
 class TestAdminNotifySmsIr:
@@ -205,18 +279,34 @@ class TestAdminNotifySmsIr:
         assert d["status"] == "delivered"
 
     def test_alert_new_appointment_queues_admin_sms_only(self, monkeypatch):
+        from api import scheduling
+        from tests.test_portal import nid, tomorrow
+
+        pid = repo.insert(
+            SYSTEM,
+            "patients",
+            {
+                "public_id": "patadmin0001",
+                "full_name": "بیمار",
+                "national_id": nid(48837093),
+                "birth_date": "1991-07-25",
+                "birth_jalali": "1370/05/03",
+                "phone": "09121112233",
+            },
+        )
+        appt = scheduling.allocate(pid, tomorrow(), "16:00")
         monkeypatch.setattr(settings, "SMS_PROVIDER", "smsir")
         monkeypatch.setattr(settings, "ADMIN_NOTIFICATION_PHONE", "09127776655")
         monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
         monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
-        monkeypatch.setattr(sms.httpx, "post", lambda *a, **k: _smsir_ok())
+        monkeypatch.setattr(sms.httpx, "post", lambda *a, **k: _smsir_verify_ok())
 
         mid, ok = notify.alert_new_appointment(
             name="بیمار",
             phone="09121112233",
             when="شنبه ۱۲:۰۰",
-            code="appt000001",
-            appointment_id=None,
+            code=appt["public_id"],
+            appointment_id=appt["id"],
         )
         assert ok is True and mid is not None
         row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
@@ -321,8 +411,12 @@ class TestStaffFollowupAdminAlert:
         seen: list[str] = []
 
         def fake_post(url, **kwargs):
-            seen.extend(kwargs["json"]["mobiles"])
-            return _smsir_ok()
+            payload = kwargs["json"]
+            if "mobile" in payload:
+                seen.append(payload["mobile"])
+            else:
+                seen.extend(payload.get("mobiles") or [])
+            return _smsir_verify_ok() if "mobile" in payload else _smsir_ok()
 
         monkeypatch.setattr(sms.httpx, "post", fake_post)
         r = owner_client.post(
@@ -341,6 +435,7 @@ class TestStaffFollowupAdminAlert:
         assert len(admin_rows) == 1
         assert admin_rows[0]["phone"] == "09129990000"
         assert admin_rows[0]["status"] == "sent"
+        # Admin new-appointment template goes to the manager via Verify (not bulk mobiles[]).
         assert seen == ["09129990000"]
 
     def test_staff_followup_survives_admin_sms_failure(self, client, owner_client, monkeypatch):
@@ -623,3 +718,199 @@ class TestProductionConfigSmsIr:
         monkeypatch.setenv("NOTIFY_PROVIDER", "file")
         monkeypatch.setenv("SMS_PROVIDER", "file")
         importlib.reload(cfg)
+
+
+class TestSmsIrVerifyTemplates:
+    """Issue #27 — four panel templates via Verify API (HTTP mocked only)."""
+
+    def _patient_and_appt(self, *, phone: str = "09121110001"):
+        from api import scheduling
+        from api.jalali import to_jalali_str
+        from tests.test_portal import nid, tomorrow
+
+        pid = repo.insert(
+            SYSTEM,
+            "patients",
+            {
+                "public_id": "patverify001",
+                "full_name": "بیمار ساختگی",
+                "national_id": nid(48837091),
+                "birth_date": "1991-07-25",
+                "birth_jalali": "1370/05/03",
+                "phone": phone,
+            },
+        )
+        appt = scheduling.allocate(pid, tomorrow(), "16:00")
+        return pid, appt, to_jalali_str(appt["slot_date"])
+
+    def test_verify_param_rejects_overlong_values(self):
+        with pytest.raises(RuntimeError, match="exceeds 25"):
+            sms.verify_param("FULLNAME", "الف" * 20)
+
+    def test_four_template_payloads_and_destinations(self, monkeypatch, tmp_path):
+        pid, appt, date_s = self._patient_and_appt()
+        monkeypatch.setattr(settings, "SMS_PROVIDER", "smsir")
+        monkeypatch.setattr(settings, "ADMIN_NOTIFICATION_PHONE", "09129998877")
+        monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
+        monkeypatch.setattr(settings, "SMS_SENDER", "30004505000017")
+        out = tmp_path / "sms-out.txt"
+        monkeypatch.setattr(settings, "SMS_FILE", out)
+        captured: list[dict] = []
+
+        def fake_post(url, **kwargs):
+            captured.append(
+                {"url": url, "json": kwargs.get("json"), "headers": kwargs.get("headers")}
+            )
+            return _smsir_verify_ok()
+
+        monkeypatch.setattr(sms.httpx, "post", fake_post)
+
+        # 1) admin new appointment → only live SMS.ir Verify (753761)
+        mid_a, ok_a = notify.alert_new_appointment(
+            name="بیمار ساختگی",
+            phone="09121110001",
+            when="ignored-for-verify",
+            code=appt["public_id"],
+            appointment_id=appt["id"],
+        )
+        assert ok_a and mid_a
+        # 2–4) patient kinds: queue succeeds via file sink; no SMS.ir HTTP
+        for kind, body in (
+            ("booked", sms.body_booked("بیمار ساختگی", "x", appt["public_id"])),
+            ("confirm_request", sms.body_confirm("بیمار ساختگی", "x")),
+            ("cancelled", sms.body_cancelled("بیمار ساختگی", "x")),
+        ):
+            mid, ok = sms.send_now(
+                "09121110001",
+                body,
+                kind,
+                patient_id=pid,
+                appointment_id=appt["id"],
+            )
+            assert ok and mid
+            row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
+            assert row["provider"] == "file"
+
+        assert len(captured) == 1
+        admin = captured[0]
+        assert admin["url"] == "https://api.sms.ir/v1/send/verify"
+        assert admin["headers"]["X-API-KEY"] == "panel-key"
+        assert admin["json"]["templateId"] == 753761
+        assert admin["json"]["mobile"] == "09129998877"
+        assert {p["name"]: p["value"] for p in admin["json"]["parameters"]} == {
+            "FULLNAME": "بیمار ساختگی",
+            "PHONE": "09121110001",
+            "DATE": date_s,
+            "TIME": "16:00",
+            "CODE": appt["public_id"],
+        }
+        assert all("#" not in p["name"] for p in admin["json"]["parameters"])
+
+        # Patient Verify mappings remain available for unit checks (not via deliver).
+        booked_id, booked_params = sms.verify_payload_for_message(
+            {
+                "kind": "booked",
+                "patient_id": pid,
+                "appointment_id": appt["id"],
+            }
+        )
+        assert booked_id == 371089
+        assert {p["name"] for p in booked_params} == {"FULLNAME", "DATE", "TIME", "CODE"}
+        confirm_id, confirm_params = sms.verify_payload_for_message(
+            {
+                "kind": "confirm_request",
+                "patient_id": pid,
+                "appointment_id": appt["id"],
+            }
+        )
+        assert confirm_id == 666137
+        assert {p["name"] for p in confirm_params} == {"FULLNAME", "DATE", "TIME"}
+        cancelled_id, cancelled_params = sms.verify_payload_for_message(
+            {
+                "kind": "cancelled",
+                "patient_id": pid,
+                "appointment_id": appt["id"],
+            }
+        )
+        assert cancelled_id == 730888
+        assert cancelled_params == [{"name": "FULLNAME", "value": "بیمار ساختگی"}]
+
+    def test_unmapped_kind_stays_file_not_bulk(self, monkeypatch, tmp_path):
+        from tests.test_portal import nid
+
+        monkeypatch.setattr(settings, "SMS_PROVIDER", "smsir")
+        monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
+        monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
+        out = tmp_path / "sms-out.txt"
+        monkeypatch.setattr(settings, "SMS_FILE", out)
+        calls: list[str] = []
+
+        def fake_post(url, **kwargs):
+            calls.append(url)
+            return _smsir_ok()
+
+        monkeypatch.setattr(sms.httpx, "post", fake_post)
+        pid = repo.insert(
+            SYSTEM,
+            "patients",
+            {
+                "public_id": "patverify002",
+                "full_name": "بیمار",
+                "national_id": nid(48837092),
+                "birth_date": "1991-07-25",
+                "birth_jalali": "1370/05/03",
+                "phone": "09123334455",
+            },
+        )
+        mid, ok = sms.send_now(
+            "09123334455",
+            sms.body_registered("بیمار"),
+            "registered",
+            patient_id=pid,
+        )
+        assert ok and mid
+        assert calls == []
+        row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
+        assert row["provider"] == "file"
+
+    def test_rescheduled_mapping_exists_but_deliver_stays_file(self, monkeypatch, tmp_path):
+        pid, appt, _ = self._patient_and_appt(phone="09121110002")
+        monkeypatch.setattr(settings, "SMS_PROVIDER", "smsir")
+        monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
+        monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
+        out = tmp_path / "sms-out.txt"
+        monkeypatch.setattr(settings, "SMS_FILE", out)
+        calls: list[str] = []
+
+        def fake_post(url, **kwargs):
+            calls.append(url)
+            return _smsir_verify_ok()
+
+        monkeypatch.setattr(sms.httpx, "post", fake_post)
+        tid, params = sms.verify_payload_for_message(
+            {
+                "kind": "rescheduled",
+                "patient_id": pid,
+                "appointment_id": appt["id"],
+            }
+        )
+        assert tid == 730888
+        assert params == [{"name": "FULLNAME", "value": "بیمار ساختگی"}]
+
+        _, ok = sms.send_now(
+            "09121110002",
+            "text",
+            "rescheduled",
+            patient_id=pid,
+            appointment_id=appt["id"],
+        )
+        assert ok
+        assert calls == []
+        row = repo.select(
+            SYSTEM,
+            "sms_messages",
+            where="kind = ? AND appointment_id = ?",
+            params=["rescheduled", appt["id"]],
+            limit=1,
+        )[0]
+        assert row["provider"] == "file"

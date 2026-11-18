@@ -159,6 +159,202 @@ def _smsir_line_number() -> int:
         raise RuntimeError("SMS_SENDER must be a numeric sms.ir lineNumber") from exc
 
 
+# Official SMS.ir Verify parameter values are capped at 25 characters.
+VERIFY_PARAM_MAX_LEN = 25
+
+# Panel template IDs (Issue #27). Names must match the panel keys without #.
+SMSIR_TEMPLATE_ADMIN_NEW = 753761  # FULLNAME PHONE DATE TIME CODE → manager
+SMSIR_TEMPLATE_BOOKED = 371089  # FULLNAME DATE TIME CODE → patient
+SMSIR_TEMPLATE_CONFIRM = 666137  # FULLNAME DATE TIME → patient (reply 1/2)
+SMSIR_TEMPLATE_STATUS = 730888  # FULLNAME → patient (status change)
+
+VERIFY_TEMPLATES: dict[str, int] = {
+    "admin_appointment": SMSIR_TEMPLATE_ADMIN_NEW,
+    "booked": SMSIR_TEMPLATE_BOOKED,
+    "confirm_request": SMSIR_TEMPLATE_CONFIRM,
+    "cancelled": SMSIR_TEMPLATE_STATUS,
+    "rescheduled": SMSIR_TEMPLATE_STATUS,
+}
+
+# Patient-facing kinds: hard-denied for live SMS.ir (ENV cannot enable them).
+PATIENT_SMS_KINDS: frozenset[str] = frozenset(
+    {"booked", "confirm_request", "cancelled", "rescheduled"}
+)
+
+# Absolute ceiling for live SMS.ir via the queue/deliver path. ENV may only
+# subset this set; today that means admin_appointment alone.
+SMSIR_HARD_ALLOWED_KINDS: frozenset[str] = frozenset({"admin_appointment"})
+
+
+def sms_ir_allowed_kinds() -> frozenset[str]:
+    """Kinds permitted to use the live SMS.ir provider.
+
+    Default empty ⇒ fail-closed (no real SMS.ir traffic) even if SMS_PROVIDER=smsir.
+    Patient kinds are stripped even if present in ``SMS_IR_ALLOWED_KINDS``.
+    Result is always intersected with ``SMSIR_HARD_ALLOWED_KINDS``.
+    """
+    raw = (settings.SMS_IR_ALLOWED_KINDS or "").strip()
+    if not raw:
+        return frozenset()
+    requested = frozenset(part.strip() for part in raw.split(",") if part.strip())
+    return (requested - PATIENT_SMS_KINDS) & SMSIR_HARD_ALLOWED_KINDS
+
+
+def kind_may_use_smsir(kind: str | None) -> bool:
+    """Server-side gate: allowlisted ∧ hard-allowed ∧ not a patient kind."""
+    if not kind or kind in PATIENT_SMS_KINDS:
+        return False
+    if kind not in SMSIR_HARD_ALLOWED_KINDS:
+        return False
+    return kind in sms_ir_allowed_kinds()
+
+
+def verify_param(name: str, value: str) -> dict[str, str]:
+    """Build one Verify parameter; refuse empty or overlong values (no silent trim)."""
+    key = name.strip().strip("#")
+    if not key:
+        raise RuntimeError("sms.ir verify parameter name is empty")
+    text = (value or "").strip()
+    if not text:
+        raise RuntimeError(f"sms.ir verify parameter {key} is empty")
+    if len(text) > VERIFY_PARAM_MAX_LEN:
+        raise RuntimeError(
+            f"sms.ir verify parameter {key} exceeds {VERIFY_PARAM_MAX_LEN} characters"
+        )
+    return {"name": key, "value": text}
+
+
+def appointment_date_time(appt: dict) -> tuple[str, str]:
+    """Compact Jalali date + slot time for template DATE/TIME (fits 25-char limit)."""
+    from .jalali import to_jalali_str
+
+    return to_jalali_str(appt["slot_date"]), str(appt["slot_time"]).strip()
+
+
+def _load_appointment(appointment_id: int | None) -> dict | None:
+    if not appointment_id:
+        return None
+    rows = repo.select(SYSTEM, "appointments", where="id = ?", params=[appointment_id], limit=1)
+    return rows[0] if rows else None
+
+
+def _load_patient(patient_id: int | None) -> dict | None:
+    if not patient_id:
+        return None
+    rows = repo.select(SYSTEM, "patients", where="id = ?", params=[patient_id], limit=1)
+    return rows[0] if rows else None
+
+
+def build_verify_parameters(kind: str, *, patient: dict, appt: dict | None) -> list[dict[str, str]]:
+    """Map queued SMS kinds to SMS.ir Verify parameter lists."""
+    name = str(patient.get("full_name") or "").strip()
+    if kind == "admin_appointment":
+        if not appt:
+            raise RuntimeError("admin_appointment verify requires appointment row")
+        date_s, time_s = appointment_date_time(appt)
+        patient_phone = normalize_mobile(str(patient.get("phone") or ""))
+        return [
+            verify_param("FULLNAME", name),
+            verify_param("PHONE", patient_phone),
+            verify_param("DATE", date_s),
+            verify_param("TIME", time_s),
+            verify_param("CODE", str(appt.get("public_id") or "")),
+        ]
+    if kind == "booked":
+        if not appt:
+            raise RuntimeError("booked verify requires appointment row")
+        date_s, time_s = appointment_date_time(appt)
+        return [
+            verify_param("FULLNAME", name),
+            verify_param("DATE", date_s),
+            verify_param("TIME", time_s),
+            verify_param("CODE", str(appt.get("public_id") or "")),
+        ]
+    if kind == "confirm_request":
+        if not appt:
+            raise RuntimeError("confirm_request verify requires appointment row")
+        date_s, time_s = appointment_date_time(appt)
+        return [
+            verify_param("FULLNAME", name),
+            verify_param("DATE", date_s),
+            verify_param("TIME", time_s),
+        ]
+    if kind in {"cancelled", "rescheduled"}:
+        return [verify_param("FULLNAME", name)]
+    raise RuntimeError(f"no SMS.ir verify mapping for kind {kind!r}")
+
+
+def verify_payload_for_message(msg: dict) -> tuple[int, list[dict[str, str]]] | None:
+    """Return (templateId, parameters) for templated kinds, else None → bulk text."""
+    kind = msg.get("kind") or ""
+    template_id = VERIFY_TEMPLATES.get(kind)
+    if template_id is None:
+        return None
+    appt = _load_appointment(msg.get("appointment_id"))
+    patient = _load_patient(msg.get("patient_id"))
+    if patient is None and appt is not None:
+        patient = _load_patient(appt.get("patient_id"))
+    if patient is None:
+        raise RuntimeError(f"sms.ir verify for {kind} needs patient row")
+    return template_id, build_verify_parameters(kind, patient=patient, appt=appt)
+
+
+def _smsir_headers() -> dict[str, str]:
+    if not settings.SMS_API_KEY:
+        raise RuntimeError("SMS_API_KEY is empty")
+    return {
+        "X-API-KEY": settings.SMS_API_KEY,
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+
+def send_smsir_verify(phone: str, template_id: int, parameters: list[dict[str, str]]) -> int | None:
+    """Official SMS.ir Verify send: POST https://api.sms.ir/v1/send/verify
+
+    Auth: ``X-API-KEY``. Body: mobile, templateId (int), parameters[{name,value}].
+    Parameter values max 25 chars. Success when HTTP 200 and JSON ``status == 1``.
+    Returns provider messageId when present; never logs the API key.
+    Docs: https://sms.ir/rest-api/
+    """
+    mobile = normalize_mobile(phone)
+    if not mobile:
+        raise RuntimeError("SMS recipient phone is empty")
+    if not isinstance(template_id, int) or template_id <= 0:
+        raise RuntimeError("sms.ir templateId must be a positive integer")
+    if not parameters:
+        raise RuntimeError("sms.ir verify parameters are empty")
+    # Re-validate every value before the HTTP call.
+    safe_params = [verify_param(p["name"], p["value"]) for p in parameters]
+    r = httpx.post(
+        "https://api.sms.ir/v1/send/verify",
+        headers=_smsir_headers(),
+        json={
+            "mobile": mobile,
+            "templateId": template_id,
+            "parameters": safe_params,
+        },
+        timeout=10.0,
+    )
+    r.raise_for_status()
+    try:
+        payload = r.json()
+    except ValueError as exc:
+        raise RuntimeError("sms.ir verify returned non-JSON body") from exc
+    status = payload.get("status")
+    if status != 1:
+        raise RuntimeError(f"sms.ir verify status {status}: {payload.get('message') or 'error'}")
+    data = payload.get("data") or {}
+    message_id = data.get("messageId")
+    info(
+        "sms.verify_sent",
+        template_id=template_id,
+        to=fingerprint(mobile),
+        message_id=message_id if isinstance(message_id, int) else None,
+    )
+    return message_id if isinstance(message_id, int) else None
+
+
 def send_smsir(phone: str, body: str) -> None:
     """Official SMS.ir REST bulk send: POST https://api.sms.ir/v1/send/bulk
 
@@ -167,18 +363,12 @@ def send_smsir(phone: str, body: str) -> None:
     blacklist; ``null`` means invalid number / oversized text.
     Docs: https://sms.ir/rest-api/
     """
-    if not settings.SMS_API_KEY:
-        raise RuntimeError("SMS_API_KEY is empty")
     mobile = normalize_mobile(phone)
     if not mobile:
         raise RuntimeError("SMS recipient phone is empty")
     r = httpx.post(
         "https://api.sms.ir/v1/send/bulk",
-        headers={
-            "X-API-KEY": settings.SMS_API_KEY,
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        },
+        headers=_smsir_headers(),
         json={
             "lineNumber": _smsir_line_number(),
             "messageText": body,
@@ -193,7 +383,7 @@ def send_smsir(phone: str, body: str) -> None:
         raise RuntimeError("sms.ir returned non-JSON body") from exc
     status = payload.get("status")
     if status != 1:
-        raise RuntimeError(f"sms.ir status {status}: {payload.get('message') or payload!r}")
+        raise RuntimeError(f"sms.ir status {status}: {payload.get('message') or 'error'}")
     data = payload.get("data") or {}
     ids = data.get("messageIds")
     if isinstance(ids, list) and ids:
@@ -202,6 +392,46 @@ def send_smsir(phone: str, body: str) -> None:
             raise RuntimeError("sms.ir rejected recipient (blacklist)")
         if first is None:
             raise RuntimeError("sms.ir rejected recipient (invalid number or text)")
+
+
+def _assert_admin_appointment_destination(msg: dict) -> None:
+    """Hard gate: admin_appointment may only go to ADMIN_NOTIFICATION_PHONE."""
+    admin = normalize_mobile(settings.ADMIN_NOTIFICATION_PHONE or "")
+    if not admin:
+        raise RuntimeError("ADMIN_NOTIFICATION_PHONE is empty")
+    dest = normalize_mobile(str(msg.get("phone") or ""))
+    if dest != admin:
+        raise RuntimeError("admin_appointment recipient is not ADMIN_NOTIFICATION_PHONE")
+    patient = _load_patient(msg.get("patient_id"))
+    if patient is None:
+        appt = _load_appointment(msg.get("appointment_id"))
+        if appt is not None:
+            patient = _load_patient(appt.get("patient_id"))
+    if patient:
+        patient_phone = normalize_mobile(str(patient.get("phone") or ""))
+        if patient_phone and patient_phone == admin:
+            raise RuntimeError("ADMIN_NOTIFICATION_PHONE must not equal the patient phone")
+
+
+def send_smsir_for_message(msg: dict) -> None:
+    """Deliver one queued row via Verify when mapped, otherwise bulk text.
+
+    Templated kinds must not silently fall back to free-text bulk — incomplete
+    patient/appointment rows fail the delivery attempt so retry can surface the error.
+    """
+    kind = msg.get("kind") or ""
+    if not kind_may_use_smsir(kind):
+        raise RuntimeError(f"sms.ir kind {kind!r} is not allowlisted")
+    if kind == "admin_appointment":
+        _assert_admin_appointment_destination(msg)
+    if kind in VERIFY_TEMPLATES:
+        built = verify_payload_for_message(msg)
+        if built is None:
+            raise RuntimeError(f"sms.ir verify mapping missing for kind {kind!r}")
+        template_id, parameters = built
+        send_smsir_verify(msg["phone"], template_id, parameters)
+        return
+    send_smsir(msg["phone"], msg["body"])
 
 
 PROVIDERS = {
@@ -346,9 +576,22 @@ def deliver(message_id: int, *, attempts: int = 2) -> bool:
         return False
 
     last_err = ""
+    kind = msg.get("kind") or ""
+    use_smsir = settings.SMS_PROVIDER == "smsir" and kind_may_use_smsir(kind)
+    # Non-allowlisted kinds never touch SMS.ir — force the local file sink.
+    effective_provider = (
+        "smsir"
+        if use_smsir
+        else ("file" if settings.SMS_PROVIDER == "smsir" else settings.SMS_PROVIDER)
+    )
     for i in range(attempts):
         try:
-            send(msg["phone"], msg["body"])
+            if use_smsir:
+                send_smsir_for_message(msg)
+            elif settings.SMS_PROVIDER == "smsir":
+                _send_file(msg["phone"], msg["body"])
+            else:
+                send(msg["phone"], msg["body"])
             budget.record(RESOURCE, 1.0)
             repo.update(
                 SYSTEM,
@@ -358,7 +601,7 @@ def deliver(message_id: int, *, attempts: int = 2) -> bool:
                     "sent_at": _now(),
                     "attempts": msg["attempts"] + i + 1,
                     "last_error": "",
-                    "provider": settings.SMS_PROVIDER,
+                    "provider": effective_provider,
                     "updated_at": _now(),
                 },
                 where="id = ?",
@@ -366,14 +609,16 @@ def deliver(message_id: int, *, attempts: int = 2) -> bool:
             )
             info(
                 "sms.sent",
-                sms_kind=msg["kind"],
-                provider=settings.SMS_PROVIDER,
+                sms_kind=kind,
+                provider=effective_provider,
                 to=fingerprint(msg["phone"]),
+                via_verify=bool(use_smsir and kind in VERIFY_TEMPLATES),
+                smsir_allowlisted=use_smsir,
             )
             return True
         except Exception as exc:  # noqa: BLE001 — gateway failures are expected
             last_err = f"{type(exc).__name__}: {exc}"[:400]
-            warn("sms.attempt_failed", kind=msg["kind"], attempt=i + 1, exc_type=type(exc).__name__)
+            warn("sms.attempt_failed", kind=kind, attempt=i + 1, exc_type=type(exc).__name__)
 
     repo.update(
         SYSTEM,
