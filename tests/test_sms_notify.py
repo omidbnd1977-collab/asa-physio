@@ -12,6 +12,18 @@ from api import notify, repo, sms
 from api.config import settings
 from api.policies import SYSTEM
 
+# Legacy SMS.ir unit tests exercise Verify/bulk against mocks; they need an explicit
+# allowlist because the default is fail-closed (empty ⇒ no SMS.ir traffic).
+# Include template kinds + bulk-path kinds exercised by this module's mocks.
+_LEGACY_SMSIR_ALLOWLIST = (
+    "admin_appointment,booked,confirm_request,cancelled,rescheduled,custom,registered"
+)
+
+
+@pytest.fixture(autouse=True)
+def _legacy_smsir_kind_allowlist(monkeypatch):
+    monkeypatch.setattr(settings, "SMS_IR_ALLOWED_KINDS", _LEGACY_SMSIR_ALLOWLIST)
+
 
 def _smsir_ok(message_id: int = 86522023) -> httpx.Response:
     return httpx.Response(
@@ -249,7 +261,6 @@ class TestAdminNotifySmsIr:
                 "birth_date": "1991-07-25",
                 "birth_jalali": "1370/05/03",
                 "phone": "09121112233",
-                "sms_service_consent": 1,
             },
         )
         appt = scheduling.allocate(pid, tomorrow(), "16:00")
@@ -696,9 +707,6 @@ class TestSmsIrVerifyTemplates:
                 "birth_date": "1991-07-25",
                 "birth_jalali": "1370/05/03",
                 "phone": phone,
-                "sms_service_consent": 1,
-                "sms_service_consent_at": "2026-01-01T00:00:00Z",
-                "sms_service_consent_version": "service-sms-v1",
             },
         )
         appt = scheduling.allocate(pid, tomorrow(), "16:00")
@@ -817,7 +825,6 @@ class TestSmsIrVerifyTemplates:
                 "birth_date": "1991-07-25",
                 "birth_jalali": "1370/05/03",
                 "phone": "09123334455",
-                "sms_service_consent": 1,
             },
         )
         mid, ok = sms.send_now(
