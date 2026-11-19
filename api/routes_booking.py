@@ -218,6 +218,8 @@ async def register(
     website: str = Form(""),
     med_photo: UploadFile | None = File(None),
     mri_file: UploadFile | None = File(None),
+    consent_accepted: str = Form(""),
+    consent_version: str = Form(""),
 ) -> JSONResponse:
     ip = client_ip(request)
     ratelimit.enforce(
@@ -235,6 +237,8 @@ async def register(
         mri_link=mri_link,
         ortho_doctor=ortho_doctor,
         website=website,
+        consent_accepted=consent_accepted,
+        consent_version=consent_version,
     )
     if data.website.strip():  # honeypot
         return JSONResponse({"ok": True, "redirect": "/booking/reserve"}, status_code=201)

@@ -1120,7 +1120,14 @@ async def create_patient(request: Request) -> dict[str, Any]:
     data = schemas.PatientRegisterIn.model_validate(payload)
     ip = request.client.host if request.client else ""
     # Store under a content-hash name (never the client filename). Prefix is opaque.
-    patient = patients.register(data.model_dump(), med_photo=med_name, ip=ip, owner_id=oid)
+    # Staff-created patients are not portal self-registration; consent checkbox N/A.
+    patient = patients.register(
+        data.model_dump(),
+        med_photo=med_name,
+        ip=ip,
+        owner_id=oid,
+        enforce_consent=False,
+    )
 
     audit.record(
         actor,

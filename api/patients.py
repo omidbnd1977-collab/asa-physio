@@ -99,9 +99,30 @@ def register(
     ip: str,
     mri_file: str = "",
     owner_id: int | None = None,
+    enforce_consent: bool = True,
 ) -> dict:
-    from . import ownership
-    from .errors import Conflict
+    from . import legal_consent, ownership
+    from .errors import Conflict, ValidationFailed
+
+    version = ""
+    accepted_at = ""
+    text_hash = ""
+    if enforce_consent:
+        if not data.get("consent_accepted"):
+            raise ValidationFailed(
+                "پذیرش حریم خصوصی و قوانین استفاده الزامی است.",
+                code="consent_required",
+                fields={"consent_accepted": "پذیرش الزامی است."},
+            )
+        version = str(data.get("consent_version") or "").strip()
+        if version != legal_consent.REGISTRATION_CONSENT_VERSION:
+            raise ValidationFailed(
+                "نسخه رضایت‌نامه معتبر نیست؛ صفحه را تازه کنید و دوباره تلاش کنید.",
+                code="consent_version_mismatch",
+                fields={"consent_version": "نسخه رضایت‌نامه معتبر نیست."},
+            )
+        accepted_at = _iso(_now())
+        text_hash = legal_consent.consent_text_hash()
 
     existing = repo.select(
         SYSTEM, "patients", where="national_id = ?", params=[data["national_id"]], limit=1
@@ -139,9 +160,31 @@ def register(
             "mri_file": mri_file,
             "ip_fp": fingerprint(ip),
             "owner_id": resolved_owner,
+            "consent_version": version,
+            "consent_accepted_at": accepted_at,
+            "consent_text_hash": text_hash,
         },
     )
-    info("patient.registered", patient_id=pid, owner_id=resolved_owner)
+    if enforce_consent:
+        repo.insert(
+            SYSTEM,
+            "patient_consent_events",
+            {
+                "patient_id": pid,
+                "consent_version": version,
+                "consent_text_hash": text_hash,
+                "accepted_at": accepted_at,
+                "source": legal_consent.REGISTRATION_CONSENT_SOURCE,
+                "ip_fp": fingerprint(ip),
+            },
+        )
+    info(
+        "patient.registered",
+        patient_id=pid,
+        owner_id=resolved_owner,
+        consent_version=version or None,
+        consent_enforced=enforce_consent,
+    )
     return repo.select(SYSTEM, "patients", where="id = ?", params=[pid], limit=1)[0]
 
 

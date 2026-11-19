@@ -126,17 +126,19 @@ class TestSmsIrProvider:
 
         # custom is outside SMSIR_HARD_ALLOWED_KINDS → file sink, never SMS.ir.
         mid, ok = sms.send_now("09123334444", "بدن تست", "custom")
-        assert ok is True
+        assert ok is False
         assert calls == []
         row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
-        assert row["status"] == "sent"
+        assert row["status"] == "logged"
         assert row["provider"] == "file"
+        assert "not allowlisted" in row["last_error"]
 
     def test_deliver_failure_is_retryable(self, monkeypatch):
         from api import scheduling
         from tests.test_portal import nid, tomorrow
 
         monkeypatch.setattr(settings, "SMS_PROVIDER", "smsir")
+        monkeypatch.setattr(settings, "SMS_IR_ALLOWED_KINDS", "admin_appointment")
         monkeypatch.setattr(settings, "ADMIN_NOTIFICATION_PHONE", "09127776655")
         monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
         monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
@@ -193,10 +195,10 @@ class TestSmsIrProvider:
 
         monkeypatch.setattr(sms.httpx, "post", counting_post)
         mid = sms.queue("09123334444", "should-not-hit-smsir", "booked")
-        assert sms.deliver(mid, attempts=1) is True
+        assert sms.deliver(mid, attempts=1) is False
         assert calls["n"] == 0
         row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
-        assert row["status"] == "sent"
+        assert row["status"] == "logged"
         assert row["provider"] == "file"
 
 
@@ -754,6 +756,8 @@ class TestSmsIrVerifyTemplates:
     def test_four_template_payloads_and_destinations(self, monkeypatch, tmp_path):
         pid, appt, date_s = self._patient_and_appt()
         monkeypatch.setattr(settings, "SMS_PROVIDER", "smsir")
+        # Admin live; patient kinds intentionally off allowlist → local logged sink.
+        monkeypatch.setattr(settings, "SMS_IR_ALLOWED_KINDS", "admin_appointment")
         monkeypatch.setattr(settings, "ADMIN_NOTIFICATION_PHONE", "09129998877")
         monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
         monkeypatch.setattr(settings, "SMS_SENDER", "30004505000017")
@@ -778,7 +782,7 @@ class TestSmsIrVerifyTemplates:
             appointment_id=appt["id"],
         )
         assert ok_a and mid_a
-        # 2–4) patient kinds: queue succeeds via file sink; no SMS.ir HTTP
+        # 2–4) patient kinds: local file sink only (status logged); no SMS.ir HTTP
         for kind, body in (
             ("booked", sms.body_booked("بیمار ساختگی", "x", appt["public_id"])),
             ("confirm_request", sms.body_confirm("بیمار ساختگی", "x")),
@@ -791,9 +795,10 @@ class TestSmsIrVerifyTemplates:
                 patient_id=pid,
                 appointment_id=appt["id"],
             )
-            assert ok and mid
+            assert ok is False and mid
             row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
             assert row["provider"] == "file"
+            assert row["status"] == "logged"
 
         assert len(captured) == 1
         admin = captured[0]
@@ -872,10 +877,11 @@ class TestSmsIrVerifyTemplates:
             "registered",
             patient_id=pid,
         )
-        assert ok and mid
+        assert ok is False and mid
         assert calls == []
         row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
         assert row["provider"] == "file"
+        assert row["status"] == "logged"
 
     def test_rescheduled_mapping_exists_but_deliver_stays_file(self, monkeypatch, tmp_path):
         pid, appt, _ = self._patient_and_appt(phone="09121110002")
@@ -908,7 +914,7 @@ class TestSmsIrVerifyTemplates:
             patient_id=pid,
             appointment_id=appt["id"],
         )
-        assert ok
+        assert ok is False
         assert calls == []
         row = repo.select(
             SYSTEM,
@@ -918,3 +924,4 @@ class TestSmsIrVerifyTemplates:
             limit=1,
         )[0]
         assert row["provider"] == "file"
+        assert row["status"] == "logged"

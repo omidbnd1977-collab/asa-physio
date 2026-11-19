@@ -9,10 +9,8 @@ lint:            ## lint + format check
 	ruff check api tests build_static.py && ruff format --check api tests build_static.py
 fmt:             ## autoformat
 	ruff format api tests build_static.py && ruff check --fix api tests build_static.py
-build:           ## rebuild the site, the public/ bundle and the offline demo
-	python3 work/build_pages.py && python3 build_static.py && python3 work/build_demo.py
-demo:            ## rebuild only the offline booking demo
-	python3 work/build_demo.py
+build:           ## rebuild site/ validation then the fingerprinted public/ bundle
+	python3 work/build_pages.py && python3 build_static.py
 migrate:         ## apply pending migrations
 	python3 -m api.db
 serve:           ## run locally

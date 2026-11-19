@@ -638,6 +638,9 @@ def deliver(message_id: int, *, attempts: int = 2) -> bool:
         return False
     if rows[0]["status"] == "sent":
         return True
+    if rows[0]["status"] == "logged":
+        # Local file sink only — not a live delivery; do not reclaim/retry as sent.
+        return False
 
     msg = claim_for_send(message_id)
     if msg is None:
@@ -680,19 +683,43 @@ def deliver(message_id: int, *, attempts: int = 2) -> bool:
     kind = msg.get("kind") or ""
     use_smsir = settings.SMS_PROVIDER == "smsir" and kind_may_use_smsir(kind)
     # Non-allowlisted kinds never touch SMS.ir — force the local file sink.
+    # That path is NOT a live delivery: status becomes "logged" and deliver() returns False
+    # so API sms_sent stays honest.
+    sink_only = settings.SMS_PROVIDER == "smsir" and not use_smsir
     effective_provider = (
-        "smsir"
-        if use_smsir
-        else ("file" if settings.SMS_PROVIDER == "smsir" else settings.SMS_PROVIDER)
+        "smsir" if use_smsir else ("file" if sink_only else settings.SMS_PROVIDER)
     )
     for i in range(attempts):
         try:
             if use_smsir:
                 send_smsir_for_message(msg)
-            elif settings.SMS_PROVIDER == "smsir":
+            elif sink_only:
                 _send_file(msg["phone"], msg["body"])
             else:
                 send(msg["phone"], msg["body"])
+            if sink_only:
+                repo.update(
+                    SYSTEM,
+                    "sms_messages",
+                    {
+                        "status": "logged",
+                        "sent_at": None,
+                        "attempts": msg["attempts"] + i + 1,
+                        "last_error": "sms.ir skipped: kind not allowlisted (local file sink only)",
+                        "provider": "file",
+                        "updated_at": _now(),
+                    },
+                    where="id = ?",
+                    params=[message_id],
+                )
+                info(
+                    "sms.logged_local",
+                    sms_kind=kind,
+                    provider="file",
+                    to=fingerprint(msg["phone"]),
+                    smsir_allowlisted=False,
+                )
+                return False
             budget.record(RESOURCE, 1.0)
             repo.update(
                 SYSTEM,

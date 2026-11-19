@@ -87,12 +87,13 @@ class TestSmsIrKindAllowlist:
             "admin_appointment",
             appointment_id=aid,
         )
-        assert ok is True and mid
+        assert ok is False and mid  # file-sink only — not a live SMS.ir delivery
         assert calls == []  # no HTTP to SMS.ir
         assert out.is_file() and out.read_text(encoding="utf-8")
         row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
-        assert row["status"] == "sent"
+        assert row["status"] == "logged"
         assert row["provider"] == "file"
+        assert "not allowlisted" in row["last_error"]
 
     def test_admin_appointment_allowlisted_uses_verify_template_753761(self, monkeypatch):
         monkeypatch.setattr(settings, "SMS_PROVIDER", "smsir")
@@ -188,12 +189,14 @@ class TestSmsIrKindAllowlist:
             patient_id=pid,
             appointment_id=aid,
         )
-        assert ok is True and mid
+        assert ok is False and mid  # local sink only — not live SMS.ir
         assert calls == [], f"{kind} must not call SMS.ir"
         assert out.is_file()
         row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
         assert row["provider"] == "file"
+        assert row["status"] == "logged"
         assert row["kind"] == kind
+        assert "not allowlisted" in row["last_error"]
 
     @pytest.mark.parametrize("kind", sorted(sms.PATIENT_SMS_KINDS))
     def test_patient_kinds_use_smsir_when_allowlisted(self, monkeypatch, tmp_path, kind: str):
