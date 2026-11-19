@@ -686,9 +686,7 @@ def deliver(message_id: int, *, attempts: int = 2) -> bool:
     # That path is NOT a live delivery: status becomes "logged" and deliver() returns False
     # so API sms_sent stays honest.
     sink_only = settings.SMS_PROVIDER == "smsir" and not use_smsir
-    effective_provider = (
-        "smsir" if use_smsir else ("file" if sink_only else settings.SMS_PROVIDER)
-    )
+    effective_provider = "smsir" if use_smsir else ("file" if sink_only else settings.SMS_PROVIDER)
     for i in range(attempts):
         try:
             if use_smsir:

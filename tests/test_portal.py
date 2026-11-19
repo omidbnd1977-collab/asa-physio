@@ -167,7 +167,9 @@ class TestRegistration:
         assert p["consent_version"] == legal_consent.REGISTRATION_CONSENT_VERSION
         assert p["consent_accepted_at"]
         assert p["consent_text_hash"] == legal_consent.consent_text_hash()
-        events = repo.select(SYSTEM, "patient_consent_events", where="patient_id = ?", params=[p["id"]])
+        events = repo.select(
+            SYSTEM, "patient_consent_events", where="patient_id = ?", params=[p["id"]]
+        )
         assert len(events) == 1
         assert events[0]["consent_version"] == legal_consent.REGISTRATION_CONSENT_VERSION
         assert events[0]["source"] == "portal_register"
@@ -203,13 +205,32 @@ class TestRegistration:
         assert repo.select(SYSTEM, "patients") == []
 
     def test_register_page_includes_consent_checkbox_and_legal_links(self, client):
+        from api import legal_consent
+
         r = client.get("/booking/register")
         assert r.status_code == 200
         html = r.text
         assert 'id="consent_accepted"' in html
         assert 'href="/privacy.html"' in html
         assert 'href="/terms.html"' in html
-        assert "registration-consent-v1" in html
+        assert legal_consent.REGISTRATION_CONSENT_VERSION in html
+
+    def test_register_consent_ui_text_matches_hashed_canonical(self, client):
+        """Visible checkbox sentence and consent_text_hash() share one source string."""
+        import re
+
+        from api import legal_consent
+
+        r = client.get("/booking/register")
+        assert r.status_code == 200
+        # Strip tags so link wrappers do not change the visible sentence.
+        plain = re.sub(r"<[^>]+>", "", r.text)
+        plain = re.sub(r"\s+", " ", plain)
+        assert legal_consent.REGISTRATION_CONSENT_TEXT in plain
+        assert legal_consent.registration_consent_label_html().count("href=") == 2
+        assert legal_consent.consent_text_hash() == legal_consent.consent_text_hash(
+            legal_consent.REGISTRATION_CONSENT_TEXT
+        )
 
     def test_mri_url_is_saved_as_private_file_when_image_download_succeeds(
         self, client, monkeypatch

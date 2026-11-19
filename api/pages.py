@@ -282,14 +282,11 @@ REGISTER_BODY = """
     </div>
 
     <div class="field consent-box" id="consentBox">
-      <input type="hidden" id="consent_version" name="consent_version" value="registration-consent-v1">
+      <input type="hidden" id="consent_version" name="consent_version" value="__CONSENT_VERSION__">
       <label class="consent-label" for="consent_accepted">
         <input type="checkbox" id="consent_accepted" name="consent_accepted" value="1" required>
         <span>
-          <a href="/privacy.html" target="_blank" rel="noopener">حریم خصوصی</a>
-          و
-          <a href="/terms.html" target="_blank" rel="noopener">قوانین استفاده</a>
-          را خوانده‌ام و می‌پذیرم.
+          __CONSENT_LABEL_HTML__
           <span class="req">*</span>
         </span>
       </label>
@@ -309,7 +306,9 @@ REGISTER_BODY = """
     </p>
   </form>
 </div>
-""".replace("registration-consent-v1", legal_consent.REGISTRATION_CONSENT_VERSION)
+""".replace("__CONSENT_VERSION__", legal_consent.REGISTRATION_CONSENT_VERSION).replace(
+    "__CONSENT_LABEL_HTML__", legal_consent.registration_consent_label_html()
+)
 
 REGISTER_JS = r"""
 const UI_IDS=['full_name','national_code','birth_year','birth_month','birth_day','mobile','mri_url','orthopedist','note'];
