@@ -13,12 +13,15 @@ from __future__ import annotations
 import hashlib
 
 # Bump when REGISTRATION_CONSENT_TEXT changes.
-REGISTRATION_CONSENT_VERSION = "registration-consent-v1"
+REGISTRATION_CONSENT_VERSION = "registration-consent-v3"
 
 REGISTRATION_CONSENT_TEXT = (
     "با علامت‌گذاری این گزینه تأیید می‌کنم که صفحات «حریم خصوصی» و «قوانین استفاده» "
-    "سامانه آسا فیزیو را مطالعه کرده‌ام و با ثبت اطلاعات هویتی و پزشکی خود در این "
-    "سامانه موافقم."
+    "آسا فیزیو را خوانده‌ام؛ با نگهداری اطلاعات تا زمان فعالیت مطب و محرمانگی سوابق "
+    "پس از تعطیلی، رسیدگی توسط خانم دکتر رستمی‌راد، محرمانگی اطلاعات بیماران، "
+    "دسترسی فنی محدود میزبان و پیامک فقط برای ارائه خدمت، درخواست کتبی و حضوری "
+    "اصلاح یا حذف، و ضروری بودن پیامک‌های نوبت‌دهی و اطلاع‌رسانی موافقم و با ثبت "
+    "اطلاعات هویتی و پزشکی خود در این سامانه موافقت می‌کنم."
 )
 
 REGISTRATION_CONSENT_SOURCE = "portal_register"
