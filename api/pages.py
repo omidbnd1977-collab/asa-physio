@@ -12,6 +12,7 @@ import json
 import pathlib
 import re
 
+from . import legal_consent
 from .config import settings
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -279,6 +280,18 @@ REGISTER_BODY = """
       <label for="note">یادداشت <span class="muted">(اختیاری)</span></label>
       <p class="hint">توضیح کوتاه درباره مشکل یا درخواست شما؛ در مرحله رزرو برای پزشک ثبت می‌شود.</p>
     </div>
+
+    <div class="field consent-box" id="consentBox">
+      <input type="hidden" id="consent_version" name="consent_version" value="__CONSENT_VERSION__">
+      <label class="consent-label" for="consent_accepted">
+        <input type="checkbox" id="consent_accepted" name="consent_accepted" value="1" required>
+        <span>
+          __CONSENT_LABEL_HTML__
+          <span class="req">*</span>
+        </span>
+      </label>
+      <p class="err-msg" id="e-consent_accepted"></p>
+    </div>
     </div>
 
     <div class="mrow" style="margin-top:22px;display:flex;gap:10px;flex-wrap:wrap">
@@ -293,7 +306,9 @@ REGISTER_BODY = """
     </p>
   </form>
 </div>
-"""
+""".replace("__CONSENT_VERSION__", legal_consent.REGISTRATION_CONSENT_VERSION).replace(
+    "__CONSENT_LABEL_HTML__", legal_consent.registration_consent_label_html()
+)
 
 REGISTER_JS = r"""
 const UI_IDS=['full_name','national_code','birth_year','birth_month','birth_day','mobile','mri_url','orthopedist','note'];
@@ -381,6 +396,10 @@ function localCheck(){
   let first=localCheckStep1();
   const mri=$('#mri_url').value.trim();
   if(mri && !/^https?:\/\/\S+\.\S+/.test(mri)){markErr('mri_url','لینک باید با http:// یا https:// شروع شود.');first=first||'mri_url';}
+  if(!$('#consent_accepted').checked){
+    markErr('consent_accepted','پذیرش حریم خصوصی و قوانین استفاده الزامی است.');
+    first=first||'consent_accepted';
+  }
   return first;
 }
 $('#regNextBtn').onclick=()=>{
@@ -400,7 +419,7 @@ restoreDraft();
 let sending=false;
 $('#regForm').addEventListener('submit',async e=>{
   e.preventDefault(); if(sending)return;
-  clearErrs(UI_IDS.concat(['birth_date']));
+  clearErrs(UI_IDS.concat(['birth_date','consent_accepted']));
   const bad=localCheck();
   if(bad){
     if(['full_name','national_code','birth_year','birth_month','birth_day','mobile'].indexOf(bad)>=0) showRegStep(1);
@@ -418,6 +437,8 @@ $('#regForm').addEventListener('submit',async e=>{
     fd.append('mri_link',$('#mri_url').value.trim());
     fd.append('ortho_doctor',$('#orthopedist').value.trim());
     fd.append('website',$('#website').value);
+    fd.append('consent_accepted',$('#consent_accepted').checked?'1':'0');
+    fd.append('consent_version',$('#consent_version').value);
     sessionStorage.setItem('asa_booking_note',$('#note').value.trim());
     if(fileInput&&fileInput.files[0]) fd.append('med_photo',fileInput.files[0]);
     const r=await api('/api/portal/register',{method:'POST',body:fd});
@@ -428,6 +449,9 @@ $('#regForm').addEventListener('submit',async e=>{
         if(document.getElementById(mapped)){markErr(mapped,err.fields[k]);f=f||mapped;}}
         if(f)document.getElementById(f).focus();}
       if(err.code==='already_registered'){flash(err.message,true);setTimeout(()=>location.href='/booking/login',2200);}
+      else if(err.code==='consent_required'||err.code==='consent_version_mismatch'){
+        showRegStep(2);markErr('consent_accepted',err.message||'پذیرش الزامی است.');flash(err.message,true);
+      }
       else flash((err.message||'ثبت نشد.')+(err.trace_id?' (کد: '+err.trace_id+')':''),true);
       return;
     }

@@ -57,6 +57,7 @@ def _patient_for(owner_id: int, n: int, name: str = "بیمار تست") -> dict
         med_photo="",
         ip="127.0.0.1",
         owner_id=owner_id,
+        enforce_consent=False,
     )
     return dict(row)
 
@@ -246,6 +247,8 @@ class TestBookedByIdentity:
                 "phone": "۰۹۱۲۷۷۷۸۸۹۹",
                 "mri_link": "",
                 "ortho_doctor": "",
+                "consent_accepted": "1",
+                "consent_version": "registration-consent-v1",
             },
             files={"med_photo": ("m.png", io.BytesIO(PNG), "image/png")},
         )
@@ -435,6 +438,8 @@ class TestPortalRequiresClinicOwner:
                     "phone": "09121110000",
                     "mri_link": "",
                     "ortho_doctor": "",
+                    "consent_accepted": True,
+                    "consent_version": "registration-consent-v1",
                 },
                 med_photo="",
                 ip="127.0.0.1",
@@ -454,6 +459,8 @@ class TestPortalRequiresClinicOwner:
                 "phone": "۰۹۱۲۱۰۰۲۰۰۳",
                 "mri_link": "",
                 "ortho_doctor": "",
+                "consent_accepted": "1",
+                "consent_version": "registration-consent-v1",
             },
             files={"med_photo": ("m.png", io.BytesIO(PNG), "image/png")},
         )

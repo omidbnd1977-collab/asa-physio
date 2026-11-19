@@ -8,12 +8,12 @@
 
 | | |
 |---|---|
-| سایت | `/` — هفت صفحه، بدون تغییر |
+| سایت | `/` — صفحات بازاریابی در `site/` (پس از `make build` در `public/`) |
 | **رزرو نوبت** | `/booking` — ثبت‌نام، ورود بیماران قبلی، جدول نوبت‌ها |
 | **پیام‌ها** | `/booking/messages` — گفت‌وگوی مستقیم بیمار ↔ پزشک + اعلان رویدادهای نوبت |
 | پنل پزشک | `/admin` — نوبت‌ها، پرونده‌ی بالینی بیماران، صندوق پیام، پیامک‌ها، سامانه |
 
-ساعت کاری ۱۶:۰۰ تا ۲۲:۰۰، هر نوبت نیم‌ساعت، ۱۰ کابین ⇒ **۱۲ خانه × ۱۰ = ۱۲۰ نوبت در روز**.
+ساعت کاری ۱۶:۰۰ تا ۲۲:۰۰، هر نوبت **۹۰ دقیقه**، شروع‌ها در ۱۶:۰۰ / ۱۷:۳۰ / ۱۹:۰۰ / ۲۰:۳۰، ۱۰ کابین ⇒ **۴ خانه × ۱۰ = ۴۰ نوبت در روز** (مطابق `api/scheduling.py`).
 جزئیات کامل: `docs/BOOKING.md`.
 
 ```bash
@@ -29,7 +29,7 @@ make serve        # سایت: /   ·   پنل کارکنان: /admin
 
 | # | لایه | وضعیت | اثبات |
 |---|---|---|---|
-| ۰۱ | فرانت‌اند | ✅ | چهار حالت در فرم و در پنل · ۳۷۵px بدون اسکرول افقی · `work/e2e.py` |
+| ۰۱ | فرانت‌اند | ✅ | چهار حالت در فرم و در پنل · ۳۷۵px بدون اسکرول افقی · پوشش pytest پورتال/سایت |
 | ۰۲ | API و منطق بک‌اند | ✅ | `api/schemas.py`، `api/errors.py`، `Idempotency-Key` · `TestLayer02Api` |
 | ۰۳ | پایگاه‌داده | ✅ | `migrations/` رو به جلو با checksum · بدون trigger · `TestLayer03Db` |
 | ۰۴ | احراز هویت و مجوز | ✅ | `api/policies.py` + `api/repo.py` · `TestLayer04Authz` |
@@ -44,7 +44,7 @@ make serve        # سایت: /   ·   پنل کارکنان: /admin
 | ۱۳ | بکاپ و بازیابی | ✅ | بازیابی **واقعاً تمرین شد**، RTO ۳۸ms → `docs/RESTORE-DRILL.md` |
 | ۱۴ | سنجش نتیجه | ✅ | `booking_delivered` از migration ۰۰۰۱ → `docs/METRIC.md` |
 
-`make test` → **۱۸۴ تست**. `make lint` → تمیز.
+`make test` → حدود **۳۸۷** تست جمع‌آوری‌شده (با `pytest --collect-only` قابل راستی‌آزمایی). `make lint` → تمیز.
 
 ---
 
@@ -80,11 +80,11 @@ api/            برنامه‌ی FastAPI
   templates/      پنل کارکنان + پوسته‌ی سامانه‌ی نوبت
 migrations/     SQL نسخه‌دار، فقط رو به جلو
 ops/            deploy · rollback · backup · restore · serve · seed · loadtest
-tests/          ۶۳ تست، یکی به ازای هر ادعا
+tests/          مجموعهٔ pytest (API، پورتال، SMS، لایه‌ها)
 docs/           BOOKING (سامانه‌ی نوبت‌دهی) · RUNBOOK · SECURITY · CACHE
                 SCALE · COSTS · METRIC · ROLLBACK و RESTORE-DRILL (هر دو تمرین‌شده)
-work/           منبع سایت (template.html) + اسکریپت‌های ساخت و تست مرورگر
-site/ public/   خروجی سایت؛ public/ نسخه‌ی اثرانگشت‌دار برای سرو
+work/           اسکریپت‌های ساخت صفحات (`build_pages.py`) و ابزارهای کمکی
+site/ public/   منبع سایت و خروجی اثرانگشت‌دار برای سرو (`make build`)
 ```
 
 ---

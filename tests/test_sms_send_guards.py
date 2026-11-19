@@ -96,13 +96,15 @@ class TestSmsIrCentralSendGuards:
 
         monkeypatch.setattr(sms.httpx, "post", fake_post)
         mid, ok = sms.send_now("09124445566", "booked body", "booked")
-        assert ok and mid
+        assert ok is False and mid  # file sink ≠ live delivery
         assert calls == []
         from api import repo
         from api.policies import SYSTEM
 
         row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
         assert row["provider"] == "file"
+        assert row["status"] == "logged"
+        assert "not allowlisted" in row["last_error"]
 
     def test_n5_send_smsir_for_message_patient_kind_rejected_without_allowlist(self, monkeypatch):
         monkeypatch.setattr(settings, "SMS_IR_ALLOWED_KINDS", "admin_appointment")

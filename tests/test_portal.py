@@ -26,6 +26,8 @@ def tomorrow() -> str:
 
 
 def reg_form(**kw) -> dict:
+    from api import legal_consent
+
     base = {
         "full_name": "سارا کریمی",
         "national_id": NID_A,
@@ -33,6 +35,8 @@ def reg_form(**kw) -> dict:
         "phone": "۰۹۱۲۱۱۱۲۲۳۳",
         "mri_link": "https://drive.google.com/file/d/abc",
         "ortho_doctor": "دکتر رضایی",
+        "consent_accepted": "1",
+        "consent_version": legal_consent.REGISTRATION_CONSENT_VERSION,
     }
     base.update(kw)
     return base
@@ -149,6 +153,8 @@ class TestRegistration:
         body = r.json()
         assert body["ok"] and body["sms_sent"] and body["redirect"] == "/booking/reserve"
 
+        from api import legal_consent
+
         p = repo.select(SYSTEM, "patients")[0]
         assert p["full_name"] == "سارا کریمی"
         assert p["national_id"] == NID_A
@@ -158,10 +164,73 @@ class TestRegistration:
         assert p["ortho_doctor"] == "دکتر رضایی"
         assert p["med_photo"].endswith(".png")
         assert (settings.UPLOAD_DIR / p["med_photo"]).is_file()
+        assert p["consent_version"] == legal_consent.REGISTRATION_CONSENT_VERSION
+        assert p["consent_accepted_at"]
+        assert p["consent_text_hash"] == legal_consent.consent_text_hash()
+        events = repo.select(
+            SYSTEM, "patient_consent_events", where="patient_id = ?", params=[p["id"]]
+        )
+        assert len(events) == 1
+        assert events[0]["consent_version"] == legal_consent.REGISTRATION_CONSENT_VERSION
+        assert events[0]["source"] == "portal_register"
 
         sms = repo.select(SYSTEM, "sms_messages", where="kind = 'registered'")
         assert len(sms) == 1 and sms[0]["status"] == "sent"
         assert "اطلاعات شما" in sms[0]["body"]
+
+    def test_register_rejects_missing_consent(self, client):
+        from api import repo
+        from api.policies import SYSTEM
+
+        r = client.post(
+            "/api/portal/register",
+            data=reg_form(consent_accepted="0"),
+        )
+        assert r.status_code == 422, r.text
+        err = r.json()["error"]
+        assert err["code"] == "consent_required"
+        assert "consent_accepted" in err.get("fields", {})
+        assert repo.select(SYSTEM, "patients") == []
+
+    def test_register_rejects_wrong_consent_version(self, client):
+        from api import repo
+        from api.policies import SYSTEM
+
+        r = client.post(
+            "/api/portal/register",
+            data=reg_form(consent_version="stale-v0"),
+        )
+        assert r.status_code == 422, r.text
+        assert r.json()["error"]["code"] == "consent_version_mismatch"
+        assert repo.select(SYSTEM, "patients") == []
+
+    def test_register_page_includes_consent_checkbox_and_legal_links(self, client):
+        from api import legal_consent
+
+        r = client.get("/booking/register")
+        assert r.status_code == 200
+        html = r.text
+        assert 'id="consent_accepted"' in html
+        assert 'href="/privacy.html"' in html
+        assert 'href="/terms.html"' in html
+        assert legal_consent.REGISTRATION_CONSENT_VERSION in html
+
+    def test_register_consent_ui_text_matches_hashed_canonical(self, client):
+        """Visible checkbox sentence and consent_text_hash() share one source string."""
+        import re
+
+        from api import legal_consent
+
+        r = client.get("/booking/register")
+        assert r.status_code == 200
+        # Strip tags so link wrappers do not change the visible sentence.
+        plain = re.sub(r"<[^>]+>", "", r.text)
+        plain = re.sub(r"\s+", " ", plain)
+        assert legal_consent.REGISTRATION_CONSENT_TEXT in plain
+        assert legal_consent.registration_consent_label_html().count("href=") == 2
+        assert legal_consent.consent_text_hash() == legal_consent.consent_text_hash(
+            legal_consent.REGISTRATION_CONSENT_TEXT
+        )
 
     def test_mri_url_is_saved_as_private_file_when_image_download_succeeds(
         self, client, monkeypatch
