@@ -229,10 +229,13 @@ class TestRegistration:
         assert 'class="consent-check"' in html
         # Sibling pattern: label[for] outside the input (no nested input-in-label).
         assert 'for="consent_accepted"' in html
-        assert re.search(
-            r'<label[^>]*for="consent_accepted"[^>]*>[\s\S]*?<input[^>]*id="consent_accepted"',
-            html,
-        ) is None
+        assert (
+            re.search(
+                r'<label[^>]*for="consent_accepted"[^>]*>[\s\S]*?<input[^>]*id="consent_accepted"',
+                html,
+            )
+            is None
+        )
         assert 'type="checkbox" id="consent_accepted"' in html or 'id="consent_accepted"' in html
 
     def test_register_always_starts_on_step_one(self, client):
