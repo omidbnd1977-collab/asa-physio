@@ -181,6 +181,7 @@ class TestRegistration:
     def test_register_rejects_missing_consent(self, client):
         from api import repo
         from api.policies import SYSTEM
+        from api.portal_register_ui import REGISTRATION_CONSENT_REQUIRED_MSG
 
         r = client.post(
             "/api/portal/register",
@@ -190,6 +191,8 @@ class TestRegistration:
         err = r.json()["error"]
         assert err["code"] == "consent_required"
         assert "consent_accepted" in err.get("fields", {})
+        assert err["message"] == REGISTRATION_CONSENT_REQUIRED_MSG
+        assert err["fields"]["consent_accepted"] == REGISTRATION_CONSENT_REQUIRED_MSG
         assert repo.select(SYSTEM, "patients") == []
 
     def test_register_rejects_wrong_consent_version(self, client):
@@ -249,6 +252,80 @@ class TestRegistration:
         assert "showRegStep(1)" in html
         assert "data.step===2" not in html
         assert "step:REG_STEP" not in html
+
+    def test_register_page_uses_specific_consent_required_message(self, client):
+        """Missing-consent UX must use the dedicated message, not only a generic toast."""
+        import re
+
+        from api.portal_register_ui import REGISTRATION_CONSENT_REQUIRED_MSG
+
+        r = client.get("/booking/register")
+        assert r.status_code == 200
+        html = r.text
+        assert REGISTRATION_CONSENT_REQUIRED_MSG in html
+        assert "CONSENT_REQUIRED_MSG=" in html
+        assert "focusConsentCheckbox" in html
+        assert "presentRegClientErrors" in html
+        # Focus helper must not force step 2 (would hide step-1 field errors).
+        focus_fn = re.search(
+            r"function focusConsentCheckbox\(\)\{(.*?)\n\}",
+            html,
+            flags=re.S,
+        )
+        assert focus_fn, "focusConsentCheckbox definition missing"
+        assert "showRegStep" not in focus_fn.group(1)
+        # Checking the box clears the consent field error.
+        assert (
+            "clearErrs(['consent_accepted'])" in html or 'clearErrs(["consent_accepted"])' in html
+        )
+        # Consent-only path flashes the specific message.
+        assert "flash(CONSENT_REQUIRED_MSG,true)" in html
+
+    def test_register_client_error_plan_keeps_step1_when_consent_also_missing(self, client):
+        """Step-1 field error + missing consent must stay on step 1 with both signals."""
+        from api.portal_register_ui import (
+            REGISTRATION_CONSENT_REQUIRED_MSG,
+            registration_client_error_plan,
+        )
+
+        plan = registration_client_error_plan("national_code", consent_missing=True)
+        assert plan["step"] == 1
+        assert plan["focus"] == "national_code"
+        assert plan["flash"] == "fields_and_consent"
+        assert plan["scroll_consent"] is False
+        # Consent toast remains explicit even while step-1 field errors stay on screen.
+        assert plan["flash"] != "consent_only"
+
+        consent_only = registration_client_error_plan("consent_accepted", consent_missing=True)
+        assert consent_only == {
+            "step": 2,
+            "focus": "consent_accepted",
+            "flash": "consent_only",
+            "scroll_consent": True,
+        }
+
+        step2_and_consent = registration_client_error_plan("mri_url", consent_missing=True)
+        assert step2_and_consent["step"] == 2
+        assert step2_and_consent["focus"] == "mri_url"
+        assert step2_and_consent["flash"] == "fields_and_consent"
+        assert step2_and_consent["scroll_consent"] is False
+
+        step1_only = registration_client_error_plan("mobile", consent_missing=False)
+        assert step1_only == {
+            "step": 1,
+            "focus": "mobile",
+            "flash": "fields_only",
+            "scroll_consent": False,
+        }
+
+        # Portal JS must follow the same branching (not force step 2 for step-1 faults).
+        html = client.get("/booking/register").text
+        assert "presentRegClientErrors" in html
+        assert "REG_STEP1_IDS.indexOf(bad)>=0) showRegStep(1)" in html
+        assert "flash('لطفاً خطاهای فرم را برطرف کنید. '+CONSENT_REQUIRED_MSG,true)" in html
+        assert REGISTRATION_CONSENT_REQUIRED_MSG in html
+        # Consent-only branch still moves to step 2 explicitly in presentRegClientErrors.
+        assert "bad==='consent_accepted'" in html
 
     def test_register_consent_ui_text_matches_hashed_canonical(self, client):
         """Visible checkbox sentence and consent_text_hash() share one source string."""

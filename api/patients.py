@@ -109,10 +109,12 @@ def register(
     text_hash = ""
     if enforce_consent:
         if not data.get("consent_accepted"):
+            from .portal_register_ui import REGISTRATION_CONSENT_REQUIRED_MSG
+
             raise ValidationFailed(
-                "پذیرش حریم خصوصی و قوانین استفاده الزامی است.",
+                REGISTRATION_CONSENT_REQUIRED_MSG,
                 code="consent_required",
-                fields={"consent_accepted": "پذیرش الزامی است."},
+                fields={"consent_accepted": REGISTRATION_CONSENT_REQUIRED_MSG},
             )
         version = str(data.get("consent_version") or "").strip()
         if version != legal_consent.REGISTRATION_CONSENT_VERSION:
