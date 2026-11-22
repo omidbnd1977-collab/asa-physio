@@ -492,10 +492,25 @@ async def cancel(public_id: str, request: Request) -> dict[str, Any]:
         appointment_id=appt["id"],
         from_patient=True,
     )
+    # Patient cancel SMS is best-effort — never undo the cancellation.
+    sent = False
+    try:
+        _, sent = sms.send_now(
+            p["phone"],
+            sms.body_cancelled(p["full_name"], scheduling.describe(appt)),
+            "cancelled",
+            patient_id=p["id"],
+            appointment_id=appt["id"],
+        )
+    except Exception as exc:  # noqa: BLE001 — cancel must succeed even if SMS path explodes
+        from .logging_ import warn
+
+        warn("portal.cancel_sms_failed", appointment_id=appt["id"], error=type(exc).__name__)
+        sent = False
     from . import cache
 
     cache.purge("admin:appointments")
-    return {"ok": True}
+    return {"ok": True, "sms_sent": sent}
 
 
 # --------------------------------------------------------------------------

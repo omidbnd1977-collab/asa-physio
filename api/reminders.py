@@ -52,7 +52,8 @@ def run_once(lead_min: int | None = None) -> dict[str, int]:
         if not p:
             continue
         patient = p[0]
-        # claim first: only the winner of the UPDATE may send (crash- and race-safe)
+        # Claim first so two tickers cannot double-send. If SMS fails, release the
+        # claim so a later tick (or cron) can retry — booking itself is unaffected.
         claimed = repo.update(
             SYSTEM,
             "appointments",
@@ -73,6 +74,18 @@ def run_once(lead_min: int | None = None) -> dict[str, int]:
             sent += 1
         else:
             failed += 1
+            repo.update(
+                SYSTEM,
+                "appointments",
+                {"confirm_sent_at": None},
+                where="id = ? AND confirm_sent_at IS NOT NULL",
+                params=[a["id"]],
+            )
+            warn(
+                "reminder.send_failed_claim_released",
+                appointment_id=a["id"],
+                phone=fingerprint(patient["phone"]),
+            )
     if due:
         cache.purge("admin:appointments")
         info("reminder.tick", due=len(due), sent=sent, failed=failed)

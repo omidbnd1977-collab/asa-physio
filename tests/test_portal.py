@@ -936,15 +936,23 @@ class TestPatientCancel:
             == "booked"
         )
 
-    def test_cancel_does_not_send_sms(self, client, patient):
+    def test_cancel_queues_cancelled_sms_best_effort(self, client, patient):
         from api import repo
         from api.policies import SYSTEM
 
         code = self._book(client)["code"]
         before = repo.count(SYSTEM, "sms_messages")
-        assert client.post(f"/api/portal/appointments/{code}/cancel").status_code == 200
-        assert repo.count(SYSTEM, "sms_messages") == before
-        assert repo.count(SYSTEM, "sms_messages", where="kind = 'cancelled'") == 0
+        r = client.post(f"/api/portal/appointments/{code}/cancel")
+        assert r.status_code == 200
+        assert r.json().get("ok") is True
+        assert "sms_sent" in r.json()
+        assert repo.count(SYSTEM, "sms_messages") == before + 1
+        assert repo.count(SYSTEM, "sms_messages", where="kind = 'cancelled'") == 1
+        # Cancellation itself must not depend on SMS delivery success.
+        assert (
+            repo.select(SYSTEM, "appointments", where="public_id = ?", params=[code])[0]["status"]
+            == "cancelled"
+        )
 
 
 # ======================================================================
@@ -1520,6 +1528,27 @@ class TestReminders:
         out = reminders.run_once(lead_min=60 * 24 * 7)
         assert out["due"] == 1 and out["sent"] == 0 and out["failed"] == 0
         assert sends == []
+
+    def test_run_once_releases_claim_when_sms_fails(self, client, patient, monkeypatch):
+        from api import reminders, repo, sms
+        from api.policies import SYSTEM
+
+        client.post(
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
+        )
+
+        def _fail_send(*_a, **_k):
+            return ("", False)
+
+        monkeypatch.setattr(sms, "send_now", _fail_send)
+        out = reminders.run_once(lead_min=60 * 24 * 7)
+        assert out["due"] == 1 and out["sent"] == 0 and out["failed"] == 1
+        appt = repo.select(SYSTEM, "appointments")[0]
+        assert appt["confirm_sent_at"] is None
+        # A later tick can retry.
+        monkeypatch.setattr(sms, "send_now", lambda *a, **k: ("", True))
+        assert reminders.run_once(lead_min=60 * 24 * 7)["sent"] == 1
+        assert repo.select(SYSTEM, "appointments")[0]["confirm_sent_at"]
 
     def test_nothing_is_sent_outside_the_window(self, client, patient):
         from api import reminders

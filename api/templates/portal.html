@@ -9,8 +9,10 @@
 <link rel="stylesheet" href="{{CSS}}">
 <style>
 /* portal-only additions. Every token below is the one the site already uses. */
+html,body{overflow-x:hidden;max-width:100%}
 body{min-height:100vh}
-.pwrap{width:min(94%,980px);margin-inline:auto;padding:28px 0 90px;position:relative;z-index:2}
+.pwrap{width:min(94%,980px);margin-inline:auto;padding:28px 0 90px;position:relative;z-index:2;
+  overflow-x:clip;max-width:100%}
 .pnav{display:flex;align-items:center;gap:12px;padding:14px 0 26px;flex-wrap:wrap}
 .pnav .brand{gap:11px}
 .pnav .sp{flex:1}
@@ -28,7 +30,13 @@ body{min-height:100vh}
   background-clip:text;color:transparent}
 .psub{color:var(--muted);font-size:.9rem;line-height:1.9;margin-bottom:22px}
 .grid2{display:grid;gap:16px;grid-template-columns:1fr 1fr}
-@media(max-width:620px){.grid2{grid-template-columns:1fr}.pcard{padding:22px 18px}}
+@media(max-width:620px){
+  .grid2{grid-template-columns:1fr}
+  .pcard{padding:22px 18px}
+  .slotgrid{grid-template-columns:repeat(auto-fill,minmax(92px,1fr))}
+  .btn,.daybtn,.slot{min-height:44px}
+  .mrow .btn{width:100%}
+}
 .field+.field,.field+.grid2,.grid2+.field,.grid2+.grid2{margin-top:16px}
 .hint{font-size:.74rem;color:#7fa3bb;margin:7px 3px 0;line-height:1.8}
 .err-msg{display:none;margin:7px 3px 0;font-size:.75rem;color:#fca5a5;line-height:1.7}
@@ -176,6 +184,13 @@ body{min-height:100vh}
 .consent-box.is-bad,.consent-box.bad{border-color:rgba(248,113,113,.55)}
 .consent-box .err-msg{display:none;margin:7px 3px 0;font-size:.75rem;color:#fca5a5;line-height:1.7}
 .consent-box.is-bad .err-msg{display:block}
+/* Mobile: after base consent rules so size/touch overrides actually win */
+@media(max-width:620px){
+  .consent-check{width:1.75rem;height:1.75rem;min-width:1.75rem;min-height:1.75rem;margin-top:0.15rem}
+  .consent-check:checked::after{inset-inline-start:0.38rem;top:0.1rem;width:0.4rem;height:0.78rem}
+  .consent-text{font-size:.82rem;line-height:1.75}
+  .consent-row{gap:14px;padding-block:4px}
+}
 /* ---- chat (doctor <-> patient thread) ---- */
 .chat{display:grid;gap:10px;margin-top:6px}
 .bubble{max-width:82%;padding:12px 15px;border-radius:16px;font-size:.88rem;line-height:1.9;
