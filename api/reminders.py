@@ -52,14 +52,20 @@ def run_once(lead_min: int | None = None) -> dict[str, int]:
         if not p:
             continue
         patient = p[0]
-        # Claim first so two tickers cannot double-send. If SMS fails, release the
-        # claim so a later tick (or cron) can retry — booking itself is unaffected.
+        # Atomic claim: still booked, never reminded, and the slot we are about to
+        # describe has not been moved. Cancel/reschedule between due-scan and here
+        # must make this UPDATE change 0 rows so no SMS goes out. Two workers racing
+        # the same row also collapse to a single winner via confirm_sent_at IS NULL.
+        # If SMS fails, release the claim so a later tick (or cron) can retry.
         claimed = repo.update(
             SYSTEM,
             "appointments",
             {"confirm_sent_at": _now_utc()},
-            where="id = ? AND confirm_sent_at IS NULL",
-            params=[a["id"]],
+            where=(
+                "id = ? AND status = 'booked' AND confirm_sent_at IS NULL "
+                "AND slot_date = ? AND slot_time = ?"
+            ),
+            params=[a["id"], a["slot_date"], a["slot_time"]],
         )
         if claimed == 0:
             continue
