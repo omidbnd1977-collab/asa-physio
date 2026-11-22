@@ -396,15 +396,18 @@ function localCheckStep1(){
   if(!/^(09\d{9}|\+989\d{9}|9\d{9})$/.test(ph)){markErr('mobile','شماره موبایل باید ۱۱ رقم و با ۰۹ شروع شود.');first=first||'mobile';}
   return first;
 }
+const CONSENT_REQUIRED_MSG='لطفاً برای ادامه ثبت‌نام، ابتدا گزینه تأیید مطالعه قوانین و حریم خصوصی و موافقت با ثبت اطلاعات را علامت بزنید.';
 function localCheck(){
   let first=localCheckStep1();
   const mri=$('#mri_url').value.trim();
   if(mri && !/^https?:\/\/\S+\.\S+/.test(mri)){markErr('mri_url','لینک باید با http:// یا https:// شروع شود.');first=first||'mri_url';}
+  let consentMissing=false;
   if(!$('#consent_accepted').checked){
-    markErr('consent_accepted','پذیرش حریم خصوصی و قوانین استفاده الزامی است.');
+    markErr('consent_accepted',CONSENT_REQUIRED_MSG);
+    consentMissing=true;
     first=first||'consent_accepted';
   }
-  return first;
+  return {first:first, consentMissing:consentMissing};
 }
 $('#regNextBtn').onclick=()=>{
   clearErrs(UI_IDS.concat(['birth_date']));
@@ -423,16 +426,42 @@ restoreDraft();
 // Always open on step 1 (ignore any legacy draft.step from older clients).
 showRegStep(1);
 const consentEl=$('#consent_accepted');
-if(consentEl) consentEl.checked=false;
+if(consentEl){
+  consentEl.checked=false;
+  consentEl.addEventListener('change',()=>{
+    if(consentEl.checked) clearErrs(['consent_accepted']);
+  });
+}
+function focusConsentError(){
+  showRegStep(2);
+  const box=$('#consentBox');
+  if(box && box.scrollIntoView) box.scrollIntoView({behavior:'smooth',block:'center'});
+  const cb=$('#consent_accepted');
+  if(cb) cb.focus();
+}
 let sending=false;
 $('#regForm').addEventListener('submit',async e=>{
   e.preventDefault(); if(sending)return;
   clearErrs(UI_IDS.concat(['birth_date','consent_accepted']));
-  const bad=localCheck();
+  const checked=localCheck();
+  const bad=checked.first;
   if(bad){
     if(['full_name','national_code','birth_year','birth_month','birth_day','mobile'].indexOf(bad)>=0) showRegStep(1);
     else showRegStep(2);
-    document.getElementById(bad).focus();flash('لطفاً خطاهای فرم را برطرف کنید.',true);return;
+    if(checked.consentMissing && bad==='consent_accepted'){
+      focusConsentError();
+      flash(CONSENT_REQUIRED_MSG,true);
+      return;
+    }
+    if(checked.consentMissing){
+      // Other field errors + missing consent: keep both visible; focus the first field error.
+      document.getElementById(bad).focus();
+      flash('لطفاً خطاهای فرم را برطرف کنید. همچنین گزینه تأیید قوانین و حریم خصوصی را علامت بزنید.',true);
+      return;
+    }
+    document.getElementById(bad).focus();
+    flash('لطفاً خطاهای فرم را برطرف کنید.',true);
+    return;
   }
   sending=true;
   await withBtn($('#regBtn'),'در حال ثبت…',async()=>{
@@ -458,7 +487,9 @@ $('#regForm').addEventListener('submit',async e=>{
         if(f)document.getElementById(f).focus();}
       if(err.code==='already_registered'){flash(err.message,true);setTimeout(()=>location.href='/booking/login',2200);}
       else if(err.code==='consent_required'||err.code==='consent_version_mismatch'){
-        showRegStep(2);markErr('consent_accepted',err.message||'پذیرش الزامی است.');flash(err.message,true);
+        markErr('consent_accepted', err.code==='consent_required' ? CONSENT_REQUIRED_MSG : (err.message||'نسخه رضایت‌نامه معتبر نیست.'));
+        focusConsentError();
+        flash(err.code==='consent_required' ? CONSENT_REQUIRED_MSG : (err.message||'نسخه رضایت‌نامه معتبر نیست.'),true);
       }
       else flash((err.message||'ثبت نشد.')+(err.trace_id?' (کد: '+err.trace_id+')':''),true);
       return;

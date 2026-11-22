@@ -182,6 +182,10 @@ class TestRegistration:
         from api import repo
         from api.policies import SYSTEM
 
+        expected = (
+            "لطفاً برای ادامه ثبت‌نام، ابتدا گزینه تأیید مطالعه قوانین "
+            "و حریم خصوصی و موافقت با ثبت اطلاعات را علامت بزنید."
+        )
         r = client.post(
             "/api/portal/register",
             data=reg_form(consent_accepted="0"),
@@ -190,6 +194,8 @@ class TestRegistration:
         err = r.json()["error"]
         assert err["code"] == "consent_required"
         assert "consent_accepted" in err.get("fields", {})
+        assert err["message"] == expected
+        assert err["fields"]["consent_accepted"] == expected
         assert repo.select(SYSTEM, "patients") == []
 
     def test_register_rejects_wrong_consent_version(self, client):
@@ -249,6 +255,25 @@ class TestRegistration:
         assert "showRegStep(1)" in html
         assert "data.step===2" not in html
         assert "step:REG_STEP" not in html
+
+    def test_register_page_uses_specific_consent_required_message(self, client):
+        """Missing-consent UX must use the dedicated message, not only a generic toast."""
+        expected = (
+            "لطفاً برای ادامه ثبت‌نام، ابتدا گزینه تأیید مطالعه قوانین "
+            "و حریم خصوصی و موافقت با ثبت اطلاعات را علامت بزنید."
+        )
+        r = client.get("/booking/register")
+        assert r.status_code == 200
+        html = r.text
+        assert expected in html
+        assert "CONSENT_REQUIRED_MSG=" in html
+        assert "focusConsentError" in html
+        # Checking the box clears the consent field error.
+        assert (
+            "clearErrs(['consent_accepted'])" in html or 'clearErrs(["consent_accepted"])' in html
+        )
+        # Consent-only path flashes the specific message.
+        assert "flash(CONSENT_REQUIRED_MSG,true)" in html
 
     def test_register_consent_ui_text_matches_hashed_canonical(self, client):
         """Visible checkbox sentence and consent_text_hash() share one source string."""

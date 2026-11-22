@@ -110,9 +110,14 @@ def register(
     if enforce_consent:
         if not data.get("consent_accepted"):
             raise ValidationFailed(
-                "پذیرش حریم خصوصی و قوانین استفاده الزامی است.",
+                "لطفاً برای ادامه ثبت‌نام، ابتدا گزینه تأیید مطالعه قوانین و حریم خصوصی و موافقت با ثبت اطلاعات را علامت بزنید.",
                 code="consent_required",
-                fields={"consent_accepted": "پذیرش الزامی است."},
+                fields={
+                    "consent_accepted": (
+                        "لطفاً برای ادامه ثبت‌نام، ابتدا گزینه تأیید مطالعه قوانین "
+                        "و حریم خصوصی و موافقت با ثبت اطلاعات را علامت بزنید."
+                    )
+                },
             )
         version = str(data.get("consent_version") or "").strip()
         if version != legal_consent.REGISTRATION_CONSENT_VERSION:
