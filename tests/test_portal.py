@@ -215,6 +215,38 @@ class TestRegistration:
         assert 'href="/terms.html"' in html
         assert legal_consent.REGISTRATION_CONSENT_VERSION in html
 
+    def test_register_consent_checkbox_is_clickable_markup(self, client):
+        """Sibling checkbox + label[for]; never nest inside .field floating-label CSS."""
+        import re
+
+        r = client.get("/booking/register")
+        assert r.status_code == 200
+        html = r.text
+        # Consent wrapper must not use site .field floating-label rules.
+        assert re.search(r'class="[^"]*\bfield\b[^"]*\bconsent-box\b', html) is None
+        assert 'id="consentBox"' in html and 'class="consent-box"' in html
+        assert 'class="consent-row"' in html
+        assert 'class="consent-check"' in html
+        # Sibling pattern: label[for] outside the input (no nested input-in-label).
+        assert 'for="consent_accepted"' in html
+        assert re.search(
+            r'<label[^>]*for="consent_accepted"[^>]*>[\s\S]*?<input[^>]*id="consent_accepted"',
+            html,
+        ) is None
+        assert 'type="checkbox" id="consent_accepted"' in html or 'id="consent_accepted"' in html
+
+    def test_register_always_starts_on_step_one(self, client):
+        """Page HTML + JS must open on step 1; draft must not resume step 2."""
+        r = client.get("/booking/register")
+        assert r.status_code == 200
+        html = r.text
+        assert 'id="regStep1"' in html
+        assert 'id="regStep2" class="hidden"' in html
+        # Boot path forces step 1 after any draft restore; never resume wizard step.
+        assert "showRegStep(1)" in html
+        assert "data.step===2" not in html
+        assert "step:REG_STEP" not in html
+
     def test_register_consent_ui_text_matches_hashed_canonical(self, client):
         """Visible checkbox sentence and consent_text_hash() share one source string."""
         import re
