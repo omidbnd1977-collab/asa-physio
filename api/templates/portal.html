@@ -159,11 +159,23 @@ body{min-height:100vh}
 .filebox span{font-size:.72rem;color:var(--muted)}
 .filebox.has{border-color:var(--teal);background:rgba(45,212,191,.1)}
 .consent-box{margin-top:18px;padding:14px 16px;border-radius:14px;border:1px solid rgba(94,234,212,.28);
-  background:rgba(11,42,74,.4)}
-.consent-label{display:flex;gap:12px;align-items:flex-start;cursor:pointer;font-size:.86rem;line-height:1.85;color:var(--ink)}
-.consent-label input{width:auto;min-height:auto;margin-top:5px;flex:none;accent-color:var(--teal)}
-.consent-label a{color:var(--glow);text-decoration:underline;text-underline-offset:3px}
-.consent-box.bad{border-color:rgba(248,113,113,.55)}
+  background:rgba(11,42,74,.4);position:relative;z-index:1}
+.consent-row{display:flex;gap:12px;align-items:flex-start;position:relative;z-index:1}
+.consent-check{appearance:none;-webkit-appearance:none;-moz-appearance:none;box-sizing:border-box;
+  width:1.35rem;height:1.35rem;min-width:1.35rem;min-height:1.35rem;margin:0.4rem 0 0;padding:0;
+  flex:0 0 auto;align-self:flex-start;cursor:pointer;pointer-events:auto;position:relative;z-index:2;
+  border:2px solid var(--teal);border-radius:5px;background:rgba(4,18,34,.95);
+  box-shadow:none;accent-color:var(--teal)}
+.consent-check:checked{background:linear-gradient(135deg,var(--teal),var(--aqua));border-color:var(--glow)}
+.consent-check:checked::after{content:"";position:absolute;inset-inline-start:0.28rem;top:0.05rem;
+  width:0.34rem;height:0.68rem;border:solid #042027;border-width:0 2.5px 2.5px 0;transform:rotate(45deg)}
+.consent-check:focus-visible{outline:2px solid var(--glow);outline-offset:3px}
+.consent-text{flex:1;min-width:0;cursor:pointer;font-size:.86rem;line-height:1.85;color:var(--ink);
+  position:static;pointer-events:auto;inset:auto;top:auto}
+.consent-text a{color:var(--glow);text-decoration:underline;text-underline-offset:3px;pointer-events:auto}
+.consent-box.is-bad,.consent-box.bad{border-color:rgba(248,113,113,.55)}
+.consent-box .err-msg{display:none;margin:7px 3px 0;font-size:.75rem;color:#fca5a5;line-height:1.7}
+.consent-box.is-bad .err-msg{display:block}
 /* ---- chat (doctor <-> patient thread) ---- */
 .chat{display:grid;gap:10px;margin-top:6px}
 .bubble{max-width:82%;padding:12px 15px;border-radius:16px;font-size:.88rem;line-height:1.9;

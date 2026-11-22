@@ -88,10 +88,10 @@ async function api(path,opts={}){
   return {ok:true,data:body};
 }
 function clearErrs(ids){ids.forEach(id=>{const f=document.getElementById(id);
-  if(f&&f.closest('.field'))f.closest('.field').classList.remove('is-bad');
+  if(f){const w=f.closest('.field,.consent-box'); if(w)w.classList.remove('is-bad');}
   const m=document.getElementById('e-'+id); if(m)m.textContent='';});}
 function markErr(id,msg){const f=document.getElementById(id); if(!f)return;
-  const w=f.closest('.field'); if(w)w.classList.add('is-bad');
+  const w=f.closest('.field,.consent-box'); if(w)w.classList.add('is-bad');
   const m=document.getElementById('e-'+id); if(m)m.textContent=msg;}
 async function withBtn(btn,label,fn){
   const old=btn.innerHTML; btn.classList.add('is-loading'); btn.disabled=true;
@@ -281,15 +281,18 @@ REGISTER_BODY = """
       <p class="hint">توضیح کوتاه درباره مشکل یا درخواست شما؛ در مرحله رزرو برای پزشک ثبت می‌شود.</p>
     </div>
 
-    <div class="field consent-box" id="consentBox">
+    <div class="consent-box" id="consentBox">
       <input type="hidden" id="consent_version" name="consent_version" value="__CONSENT_VERSION__">
-      <label class="consent-label" for="consent_accepted">
-        <input type="checkbox" id="consent_accepted" name="consent_accepted" value="1" required>
-        <span>
+      <!-- Sibling checkbox + label[for]: one click = one toggle.
+           Do not nest the input inside the label, and do not use class "field"
+           (site CSS: .field label{pointer-events:none}; .field input{width:100%}). -->
+      <div class="consent-row">
+        <input type="checkbox" id="consent_accepted" name="consent_accepted" value="1" required class="consent-check" autocomplete="off">
+        <label for="consent_accepted" class="consent-text">
           __CONSENT_LABEL_HTML__
           <span class="req">*</span>
-        </span>
-      </label>
+        </label>
+      </div>
       <p class="err-msg" id="e-consent_accepted"></p>
     </div>
     </div>
@@ -334,7 +337,8 @@ UI_IDS.forEach(id=>{
   el.addEventListener('input',saveDraft); el.addEventListener('change',saveDraft);
 });
 function saveDraft(){
-  const data={step:REG_STEP};
+  // Persist field values only — never resume mid-wizard after reload.
+  const data={};
   UI_IDS.forEach(id=>{ const el=document.getElementById(id); if(el) data[id]=el.value; });
   sessionStorage.setItem(DRAFT_KEY, JSON.stringify(data));
 }
@@ -343,7 +347,6 @@ function restoreDraft(){
     const raw=sessionStorage.getItem(DRAFT_KEY); if(!raw) return;
     const data=JSON.parse(raw);
     UI_IDS.forEach(id=>{ if(data[id]!=null && document.getElementById(id)) document.getElementById(id).value=data[id]; });
-    if(data.step===2) showRegStep(2);
   }catch(_e){}
 }
 function showRegStep(n){
@@ -354,6 +357,7 @@ function showRegStep(n){
   $('#regBtn').classList.toggle('hidden', n!==2);
   $$('[data-step-dot]').forEach(i=>i.classList.toggle('on', +i.dataset.stepDot<=n));
   $('#regStepLabel').textContent = n===1 ? 'مرحله ۱ از ۲ — مشخصات اصلی' : 'مرحله ۲ از ۲ — اطلاعات تکمیلی';
+  // Keep draft field values in sync; step is never restored on reload.
   saveDraft();
 }
 function wireFile(inputId,boxId,labelId,hintId,idleLabel){
@@ -416,6 +420,10 @@ $('#regBackBtn').onclick=()=>{
   location.href='/booking';
 };
 restoreDraft();
+// Always open on step 1 (ignore any legacy draft.step from older clients).
+showRegStep(1);
+const consentEl=$('#consent_accepted');
+if(consentEl) consentEl.checked=false;
 let sending=false;
 $('#regForm').addEventListener('submit',async e=>{
   e.preventDefault(); if(sending)return;
