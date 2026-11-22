@@ -936,15 +936,23 @@ class TestPatientCancel:
             == "booked"
         )
 
-    def test_cancel_does_not_send_sms(self, client, patient):
+    def test_cancel_queues_cancelled_sms_best_effort(self, client, patient):
         from api import repo
         from api.policies import SYSTEM
 
         code = self._book(client)["code"]
         before = repo.count(SYSTEM, "sms_messages")
-        assert client.post(f"/api/portal/appointments/{code}/cancel").status_code == 200
-        assert repo.count(SYSTEM, "sms_messages") == before
-        assert repo.count(SYSTEM, "sms_messages", where="kind = 'cancelled'") == 0
+        r = client.post(f"/api/portal/appointments/{code}/cancel")
+        assert r.status_code == 200
+        assert r.json().get("ok") is True
+        assert "sms_sent" in r.json()
+        assert repo.count(SYSTEM, "sms_messages") == before + 1
+        assert repo.count(SYSTEM, "sms_messages", where="kind = 'cancelled'") == 1
+        # Cancellation itself must not depend on SMS delivery success.
+        assert (
+            repo.select(SYSTEM, "appointments", where="public_id = ?", params=[code])[0]["status"]
+            == "cancelled"
+        )
 
 
 # ======================================================================
@@ -1520,6 +1528,153 @@ class TestReminders:
         out = reminders.run_once(lead_min=60 * 24 * 7)
         assert out["due"] == 1 and out["sent"] == 0 and out["failed"] == 0
         assert sends == []
+
+    def test_run_once_releases_claim_when_sms_fails(self, client, patient, monkeypatch):
+        from api import reminders, repo, sms
+        from api.policies import SYSTEM
+
+        client.post(
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
+        )
+
+        def _fail_send(*_a, **_k):
+            return ("", False)
+
+        monkeypatch.setattr(sms, "send_now", _fail_send)
+        out = reminders.run_once(lead_min=60 * 24 * 7)
+        assert out["due"] == 1 and out["sent"] == 0 and out["failed"] == 1
+        appt = repo.select(SYSTEM, "appointments")[0]
+        assert appt["confirm_sent_at"] is None
+        # A later tick can retry.
+        monkeypatch.setattr(sms, "send_now", lambda *a, **k: ("", True))
+        assert reminders.run_once(lead_min=60 * 24 * 7)["sent"] == 1
+        assert repo.select(SYSTEM, "appointments")[0]["confirm_sent_at"]
+
+    def test_claim_skips_sms_when_appointment_cancelled_after_due_scan(
+        self, client, patient, monkeypatch
+    ):
+        from api import reminders, repo, sms
+        from api.policies import SYSTEM
+
+        client.post(
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
+        )
+        real_due = reminders.due_appointments
+        sends: list[str] = []
+
+        def _due_then_cancel(lead_min=None):
+            rows = real_due(lead_min)
+            assert rows
+            repo.update(
+                SYSTEM,
+                "appointments",
+                {"status": "cancelled"},
+                where="id = ?",
+                params=[rows[0]["id"]],
+            )
+            return rows
+
+        monkeypatch.setattr(reminders, "due_appointments", _due_then_cancel)
+        monkeypatch.setattr(
+            sms, "send_now", lambda *a, **k: sends.append(k.get("kind") or a[2]) or ("", True)
+        )
+        out = reminders.run_once(lead_min=60 * 24 * 7)
+        assert out["due"] == 1 and out["sent"] == 0 and out["failed"] == 0
+        assert sends == []
+        assert repo.select(SYSTEM, "appointments")[0]["confirm_sent_at"] is None
+
+    def test_claim_skips_sms_when_slot_moved_after_due_scan(self, client, patient, monkeypatch):
+        from api import reminders, repo, sms
+        from api.policies import SYSTEM
+
+        client.post(
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
+        )
+        real_due = reminders.due_appointments
+        bodies: list[str] = []
+
+        def _due_then_move(lead_min=None):
+            rows = real_due(lead_min)
+            assert rows and rows[0]["slot_time"] == "16:00"
+            repo.update(
+                SYSTEM,
+                "appointments",
+                {"slot_time": "20:30"},
+                where="id = ?",
+                params=[rows[0]["id"]],
+            )
+            return rows  # stale snapshot still says 16:00
+
+        monkeypatch.setattr(reminders, "due_appointments", _due_then_move)
+        monkeypatch.setattr(
+            sms,
+            "send_now",
+            lambda phone, body, kind, **k: bodies.append(body) or ("", True),
+        )
+        out = reminders.run_once(lead_min=60 * 24 * 7)
+        assert out["due"] == 1 and out["sent"] == 0 and out["failed"] == 0
+        assert bodies == []
+        moved = repo.select(SYSTEM, "appointments")[0]
+        assert moved["slot_time"] == "20:30"
+        assert moved["confirm_sent_at"] is None
+        assert moved["status"] == "booked"
+
+    def test_claim_succeeds_for_still_booked_matching_slot(self, client, patient, monkeypatch):
+        from api import reminders, repo, sms
+        from api.policies import SYSTEM
+
+        client.post(
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
+        )
+        kinds: list[str] = []
+        monkeypatch.setattr(sms, "send_now", lambda *a, **k: kinds.append(a[2]) or ("", True))
+        out = reminders.run_once(lead_min=60 * 24 * 7)
+        assert out["due"] == 1 and out["sent"] == 1 and out["failed"] == 0
+        assert kinds == ["confirm_request"]
+        appt = repo.select(SYSTEM, "appointments")[0]
+        assert appt["status"] == "booked"
+        assert appt["confirm_sent_at"]
+
+    def test_concurrent_run_once_sends_only_one_reminder(self, client, patient, monkeypatch):
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+
+        from api import reminders, repo, sms
+        from api.policies import SYSTEM
+
+        client.post(
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
+        )
+        barrier = threading.Barrier(2)
+        real_update = repo.update
+        sends: list[str] = []
+        lock = threading.Lock()
+
+        def _gated_update(actor, table, data, *, where, params=()):
+            # Synchronize both workers just before the atomic claim UPDATE.
+            if (
+                table == "appointments"
+                and isinstance(data, dict)
+                and data.get("confirm_sent_at")
+                and "confirm_sent_at IS NULL" in where
+            ):
+                barrier.wait(timeout=5)
+            return real_update(actor, table, data, where=where, params=params)
+
+        def _track_send(phone, body, kind, **kwargs):
+            with lock:
+                sends.append(kind)
+            return ("", True)
+
+        monkeypatch.setattr(reminders.repo, "update", _gated_update)
+        monkeypatch.setattr(sms, "send_now", _track_send)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: reminders.run_once(lead_min=60 * 24 * 7), range(2)))
+        assert sum(r["sent"] for r in results) == 1
+        assert sum(r["failed"] for r in results) == 0
+        assert sends == ["confirm_request"]
+        assert repo.select(SYSTEM, "appointments")[0]["confirm_sent_at"]
 
     def test_nothing_is_sent_outside_the_window(self, client, patient):
         from api import reminders
