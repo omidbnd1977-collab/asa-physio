@@ -138,7 +138,10 @@ def _send_kavenegar(phone: str, body: str) -> None:
 
 
 def normalize_mobile(phone: str) -> str:
-    """Normalize Iranian mobiles to ``09xxxxxxxxx`` for SMS.ir bulk payloads."""
+    """Normalize Iranian mobiles to ``09xxxxxxxxx`` for SMS.ir bulk/inbound payloads.
+
+    SMS.ir receive payloads often send ``912…`` (10 digits, no leading zero).
+    """
     p = phone.strip().replace(" ", "").replace("-", "")
     if p.startswith("+98"):
         p = "0" + p[3:]
@@ -146,6 +149,8 @@ def normalize_mobile(phone: str) -> str:
         p = "0" + p[4:]
     elif p.startswith("98") and len(p) >= 12:
         p = "0" + p[2:]
+    elif p.startswith("9") and len(p) == 10 and p.isdigit():
+        p = "0" + p
     return p
 
 

@@ -1768,6 +1768,13 @@ class TestReminders:
         client.post(
             "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
         )
+        # Inbound only acts on appointments that already received confirm_request.
+        repo.update(
+            SYSTEM,
+            "appointments",
+            {"confirm_sent_at": "2026-01-01T10:00:00Z"},
+            where="status = 'booked'",
+        )
         out = reminders.handle_inbound("09121112233", reply)
         assert out["handled"] == "confirmed"
         a = repo.select(SYSTEM, "appointments")[0]
@@ -1780,6 +1787,12 @@ class TestReminders:
         client.post(
             "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
         )
+        repo.update(
+            SYSTEM,
+            "appointments",
+            {"confirm_sent_at": "2026-01-01T10:00:00Z"},
+            where="status = 'booked'",
+        )
         assert reminders.handle_inbound("09121112233", "2")["handled"] == "declined"
         assert repo.select(SYSTEM, "appointments")[0]["attendance"] == "not_coming"
 
@@ -1788,7 +1801,7 @@ class TestReminders:
         from api.policies import SYSTEM
 
         out = reminders.handle_inbound("09999999999", "1")
-        assert out == {"matched": False, "reason": "unknown_phone"}
+        assert out == {"matched": False, "reason": "unknown_phone", "duplicate": False}
         assert repo.select(SYSTEM, "sms_inbound")[0]["handled"] == "unknown_phone"
 
     def test_the_inbound_webhook_needs_the_shared_secret(self, client, monkeypatch):
