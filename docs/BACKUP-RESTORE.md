@@ -57,8 +57,24 @@ ops/restore.sh data/backups/asa-YYYYMMDDTHHMMSSZ
 ops/restore.sh data/backups/asa-YYYYMMDDTHHMMSSZ /tmp/asa-drill
 
 # 3) only after verification, promote onto live paths (parks previous DB/uploads)
+#    Production: stop the app service FIRST (manual). Never promote while SQLite is open.
 ops/restore.sh data/backups/asa-YYYYMMDDTHHMMSSZ /tmp/asa-drill --promote
 ```
+
+### Production promote (SQLite safety)
+
+**Do not promote onto a live database that the app still has open.** SQLite file
+replace while the process is running can corrupt WAL/shm state or leave the app
+on a closed handle.
+
+Required order on Production (all steps are **manual** — these scripts never stop
+or start systemd/docker for you):
+
+1. Stop the application service (operator action).
+2. Run experimental restore and verify counts/integrity offline.
+3. Promote only after verification.
+4. Spot-check restored DB + uploads.
+5. Start the application service again (operator action).
 
 Promotion parks:
 
@@ -86,6 +102,7 @@ python3 -m ops.backup_core verify data/backups/asa-YYYYMMDDTHHMMSSZ
 
 1. Keep SMS/reminder settings unchanged when running backup.
 2. Prefer a pre-deploy bundle before every release.
-3. After restore/promote, restart the app process so it reopens SQLite handles.
+3. **Stop the app before Production promote; start it again only after checks.** Promoting
+   while the DB is in use is not allowed. Scripts do not automate stop/start.
 4. Uploads live under `UPLOAD_DIR` (default `data/uploads`) and are included in v2 bundles.
 5. Do not treat a directory as valid unless `OK` + matching SHA256 files are present.

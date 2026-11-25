@@ -514,6 +514,63 @@ def _swap_dir_keep_previous(new_dir: Path, live_dir: Path, park_dir: Path) -> No
         raise
 
 
+def _unlink_sqlite_sidecars(db_path: Path) -> None:
+    for suffix in ("-wal", "-shm"):
+        Path(str(db_path) + suffix).unlink(missing_ok=True)
+
+
+def _rollback_file_swap(live_file: Path, park_path: Path, *, existed_before: bool) -> None:
+    """Restore pre-swap file state (previous content, or absence)."""
+    if park_path.exists():
+        os.replace(park_path, live_file)
+        _secure_file(live_file)
+        return
+    if not existed_before:
+        live_file.unlink(missing_ok=True)
+        _unlink_sqlite_sidecars(live_file)
+
+
+def _rollback_dir_swap(live_dir: Path, park_dir: Path, *, existed_before: bool) -> None:
+    """Restore pre-swap directory state (previous tree, or absence)."""
+    if park_dir.exists():
+        if live_dir.exists():
+            shutil.rmtree(live_dir, ignore_errors=True)
+        park_dir.rename(live_dir)
+        _chmod(live_dir, 0o700)
+        return
+    if not existed_before and live_dir.exists():
+        shutil.rmtree(live_dir, ignore_errors=True)
+
+
+def _upload_file_map(root: Path) -> dict[str, str]:
+    """Map relative posix paths -> sha256 for regular files under root."""
+    if not root.is_dir():
+        raise BackupError(f"uploads directory missing: {root}")
+    root_res = root.resolve()
+    mapping: dict[str, str] = {}
+    for p in sorted(root_res.rglob("*")):
+        if p.is_dir():
+            continue
+        if p.is_symlink() or not p.is_file():
+            raise BackupError(f"non-regular upload entry not allowed: {p.name}")
+        rel = p.relative_to(root_res).as_posix()
+        mapping[rel] = _sha256_file(p)
+    return mapping
+
+
+def _assert_upload_maps_equal(expected: dict[str, str], actual: dict[str, str]) -> None:
+    """Fail if relative paths or per-file hashes diverge (no file contents logged)."""
+    if expected == actual:
+        return
+    missing = len(set(expected) - set(actual))
+    extra = len(set(actual) - set(expected))
+    changed = sum(1 for k, digest in expected.items() if k in actual and actual[k] != digest)
+    raise BackupError(
+        "experimental uploads mismatch: "
+        f"missing={missing}, extra={extra}, content_changed={changed}"
+    )
+
+
 def restore_bundle(
     bundle: Path,
     dest_dir: Path,
@@ -556,6 +613,8 @@ def restore_bundle(
 
         final_db = dest_dir / "asa.db"
         final_uploads = dest_dir / "uploads"
+        had_db = final_db.exists()
+        had_uploads = final_uploads.exists()
         incoming_db = dest_dir / f".asa.db.incoming-{stamp}"
         incoming_up = dest_dir / f".uploads.incoming-{stamp}"
         if incoming_db.exists():
@@ -567,14 +626,25 @@ def restore_bundle(
 
         park_db = dest_dir / f"asa.db.before-restore-{stamp}"
         park_up = dest_dir / f"uploads.before-restore-{stamp}"
+        db_swapped = False
         try:
             _swap_file_keep_previous(incoming_db, final_db, park_db)
+            db_swapped = True
             _swap_dir_keep_previous(incoming_up, final_uploads, park_up)
         except Exception:
-            # Best-effort cleanup of incoming leftovers; parked previous stays.
             incoming_db.unlink(missing_ok=True)
             if incoming_up.exists():
                 shutil.rmtree(incoming_up, ignore_errors=True)
+            # Full rollback: never leave dest half-applied.
+            if db_swapped:
+                try:
+                    _rollback_file_swap(final_db, park_db, existed_before=had_db)
+                except OSError:
+                    pass
+            try:
+                _rollback_dir_swap(final_uploads, park_up, existed_before=had_uploads)
+            except OSError:
+                pass
             raise
 
         ok_path = dest_dir / RESTORE_OK_NAME
@@ -635,29 +705,18 @@ def promote_restore(
     if meta.get("uploads_sha256") and meta["uploads_sha256"] != manifest["uploads"]["sha256"]:
         raise BackupError("experimental restore no longer matches bundle uploads hash")
 
-    # Re-materialize bundle DB and compare bytes with experimental before any live swap.
+    # Re-materialize bundle and compare DB bytes + per-file upload path/hash maps
+    # before any live path is touched.
     with tempfile.TemporaryDirectory(prefix="asa-promote-check-") as tmp:
         expected_db = Path(tmp) / "expected.sqlite"
         _gunzip_file(bundle_path / DB_GZ_NAME, expected_db)
         if _sha256_file(expected_db) != _sha256_file(src_db):
             raise BackupError("experimental restore no longer matches bundle database bytes")
         expected_up = Path(tmp) / "expected-uploads"
-        expected_count = unpack_uploads(bundle_path / UPLOADS_TAR_NAME, expected_up)
+        unpack_uploads(bundle_path / UPLOADS_TAR_NAME, expected_up)
         if not src_up.is_dir():
             raise BackupError("experimental uploads directory missing")
-        upload_files = [p for p in src_up.rglob("*") if p.is_file()]
-        for p in upload_files:
-            if p.is_symlink():
-                raise BackupError(f"symlink in experimental uploads: {p}")
-        if expected_count != len(upload_files):
-            raise BackupError(
-                f"experimental upload count mismatch: expected {expected_count}, got {len(upload_files)}"
-            )
-        manifest_count = manifest.get("uploads", {}).get("file_count")
-        if manifest_count is not None and int(manifest_count) != len(upload_files):
-            raise BackupError(
-                f"experimental upload count mismatch: expected {manifest_count}, got {len(upload_files)}"
-            )
+        _assert_upload_maps_equal(_upload_file_map(expected_up), _upload_file_map(src_up))
 
     conn = sqlite3.connect(str(src_db))
     try:
@@ -671,6 +730,8 @@ def promote_restore(
     parked: dict[str, str] = {}
     _secure_dir(live_db.parent)
     _secure_dir(live_uploads.parent)
+    had_db = live_db.exists()
+    had_uploads = live_uploads.exists()
 
     incoming_db = live_db.with_name(f".promote-db-incoming-{stamp}")
     incoming_up = live_uploads.with_name(f".promote-uploads-incoming-{stamp}")
@@ -698,19 +759,17 @@ def promote_restore(
         incoming_db.unlink(missing_ok=True)
         if incoming_up.exists():
             shutil.rmtree(incoming_up, ignore_errors=True)
-        # Restore previous live paths so a failed promote does not leave a half-applied state.
-        if db_swapped and park_db.exists():
+        if db_swapped:
             try:
-                os.replace(park_db, live_db)
+                _rollback_file_swap(live_db, park_db, existed_before=had_db)
                 parked.pop("db", None)
             except OSError:
                 pass
-        if park_up.exists() and not live_uploads.exists():
-            try:
-                park_up.rename(live_uploads)
-                parked.pop("uploads", None)
-            except OSError:
-                pass
+        try:
+            _rollback_dir_swap(live_uploads, park_up, existed_before=had_uploads)
+            parked.pop("uploads", None)
+        except OSError:
+            pass
         raise
 
     return {

@@ -279,9 +279,112 @@ def test_promote_rejects_tampered_experimental_before_swap(tmp_path: Path):
     restore_bundle(result.bundle_dir, exp)
     # Tamper after restore, before promote.
     (exp / "uploads" / "extra-evil.bin").write_bytes(b"evil")
-    with pytest.raises(BackupError, match="upload count mismatch|no longer matches"):
+    with pytest.raises(BackupError, match="uploads mismatch|no longer matches"):
         promote_restore(exp, live_db=live_db, live_uploads=live_up, bundle=result.bundle_dir)
     assert live_db.read_bytes() == original_live
+
+
+def test_promote_rejects_content_change_same_file_count(tmp_path: Path):
+    bak = tmp_path / "backups"
+    seed_db = tmp_path / "seed" / "asa.db"
+    seed_up = tmp_path / "seed" / "uploads"
+    live_db = tmp_path / "prod" / "asa.db"
+    live_up = tmp_path / "prod" / "uploads"
+    _seed_db(seed_db)
+    names = _seed_uploads(seed_up)
+    _seed_db(live_db)
+    _seed_uploads(live_up)
+    original_live = live_db.read_bytes()
+    result = create_backup(db_path=seed_db, upload_dir=seed_up, backup_dir=bak, keep=5)
+    exp = tmp_path / "exp"
+    restore_bundle(result.bundle_dir, exp)
+    target = exp / "uploads" / names[0]
+    target.write_bytes(b"mutated-same-name-same-count")
+    with pytest.raises(BackupError, match="content_changed"):
+        promote_restore(exp, live_db=live_db, live_uploads=live_up, bundle=result.bundle_dir)
+    assert live_db.read_bytes() == original_live
+    assert live_up.is_dir()
+
+
+def test_promote_rejects_delete_add_and_rename_paths(tmp_path: Path):
+    bak = tmp_path / "backups"
+    seed_db = tmp_path / "seed" / "asa.db"
+    seed_up = tmp_path / "seed" / "uploads"
+    live_db = tmp_path / "prod" / "asa.db"
+    live_up = tmp_path / "prod" / "uploads"
+    _seed_db(seed_db)
+    names = _seed_uploads(seed_up)
+    _seed_db(live_db)
+    _seed_uploads(live_up)
+    original_live = live_db.read_bytes()
+    result = create_backup(db_path=seed_db, upload_dir=seed_up, backup_dir=bak, keep=5)
+
+    exp_del = tmp_path / "exp-del"
+    restore_bundle(result.bundle_dir, exp_del)
+    (exp_del / "uploads" / names[0]).unlink()
+    with pytest.raises(BackupError, match="missing="):
+        promote_restore(exp_del, live_db=live_db, live_uploads=live_up, bundle=result.bundle_dir)
+
+    exp_add = tmp_path / "exp-add"
+    restore_bundle(result.bundle_dir, exp_add)
+    (exp_add / "uploads" / "brand-new.bin").write_bytes(b"x")
+    with pytest.raises(BackupError, match="extra="):
+        promote_restore(exp_add, live_db=live_db, live_uploads=live_up, bundle=result.bundle_dir)
+
+    exp_ren = tmp_path / "exp-ren"
+    restore_bundle(result.bundle_dir, exp_ren)
+    src = exp_ren / "uploads" / names[0]
+    src.rename(exp_ren / "uploads" / "renamed-away.bin")
+    with pytest.raises(BackupError, match="uploads mismatch"):
+        promote_restore(exp_ren, live_db=live_db, live_uploads=live_up, bundle=result.bundle_dir)
+    assert live_db.read_bytes() == original_live
+
+
+def test_restore_uploads_failure_rolls_back_db(tmp_path: Path, monkeypatch):
+    bak = tmp_path / "backups"
+    seed_db = tmp_path / "seed" / "asa.db"
+    seed_up = tmp_path / "seed" / "uploads"
+    _seed_db(seed_db)
+    _seed_uploads(seed_up)
+    result = create_backup(db_path=seed_db, upload_dir=seed_up, backup_dir=bak, keep=5)
+
+    dest = tmp_path / "restore-work" / "dest"
+    restore_bundle(result.bundle_dir, dest)
+    original_db = (dest / "asa.db").read_bytes()
+    original_marker = b"prior-upload-marker"
+    (dest / "uploads" / "keep-prior.bin").write_bytes(original_marker)
+
+    def flaky(new_dir, live_dir, park_dir):
+        if live_dir.exists():
+            live_dir.rename(park_dir)
+        raise BackupError("forced restore uploads failure")
+
+    monkeypatch.setattr("ops.backup_core._swap_dir_keep_previous", flaky)
+    with pytest.raises(BackupError, match="forced restore uploads failure"):
+        restore_bundle(result.bundle_dir, dest)
+    assert (dest / "asa.db").read_bytes() == original_db
+    assert (dest / "uploads" / "keep-prior.bin").read_bytes() == original_marker
+
+
+def test_restore_failure_on_empty_dest_leaves_absent(tmp_path: Path, monkeypatch):
+    bak = tmp_path / "backups"
+    seed_db = tmp_path / "seed" / "asa.db"
+    seed_up = tmp_path / "seed" / "uploads"
+    _seed_db(seed_db)
+    _seed_uploads(seed_up)
+    result = create_backup(db_path=seed_db, upload_dir=seed_up, backup_dir=bak, keep=5)
+    dest = tmp_path / "restore-work" / "empty"
+    dest.mkdir(parents=True)
+
+    def boom_db(*_a, **_k):
+        raise BackupError("forced restore db failure")
+
+    monkeypatch.setattr("ops.backup_core._swap_file_keep_previous", boom_db)
+    with pytest.raises(BackupError, match="forced restore db failure"):
+        restore_bundle(result.bundle_dir, dest)
+    assert not (dest / "asa.db").exists()
+    assert not (dest / "uploads").exists()
+    assert not (dest / "RESTORE_OK").exists()
 
 
 def test_promote_rejects_tampered_bundle_after_restore(tmp_path: Path):
