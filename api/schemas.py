@@ -141,6 +141,9 @@ class PatientRegisterIn(BaseModel):
     mri_link: str = Field(default="", max_length=500)
     ortho_doctor: str = Field(default="", max_length=80)
     website: str = Field(default="", max_length=100)  # honeypot
+    # Portal consent: required for real registrations (honeypot path may skip).
+    consent_accepted: bool = False
+    consent_version: str = Field(default="", max_length=64)
 
     @field_validator("full_name")
     @classmethod
@@ -178,6 +181,18 @@ class PatientRegisterIn(BaseModel):
     @classmethod
     def _phone(cls, v: str) -> str:
         return BookingIn._phone(v)
+
+    @field_validator("consent_accepted", mode="before")
+    @classmethod
+    def _consent_accepted(cls, v: object) -> bool:
+        from .legal_consent import is_truthy_accepted
+
+        return is_truthy_accepted(v)  # type: ignore[arg-type]
+
+    @field_validator("consent_version")
+    @classmethod
+    def _consent_version(cls, v: str) -> str:
+        return clean_text(v, max_len=64)
 
     @field_validator("mri_link")
     @classmethod

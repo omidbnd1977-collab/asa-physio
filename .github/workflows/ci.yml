@@ -42,7 +42,6 @@ jobs:
       - name: Format check
         run: ruff format --check api tests build_static.py
 
-
       - name: Secret scan
         run: |
           ! grep -rInE '(sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|BEGIN [A-Z ]*PRIVATE KEY)' \

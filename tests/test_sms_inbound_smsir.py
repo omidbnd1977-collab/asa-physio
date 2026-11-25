@@ -39,21 +39,14 @@ def day_after_tomorrow() -> str:
 def patient(client):
     from api import auth, repo
     from api.policies import SYSTEM
+    from tests.test_portal import reg_form
 
     owners = repo.select(SYSTEM, "admin_users", where="role = 'owner' AND is_active = 1", limit=2)
     if not owners:
         auth.create_user("t_owner", "a-very-long-test-password", role="owner", full_name="پزشک تست")
     r = client.post(
         "/api/portal/register",
-        data={
-            "full_name": "سارا کریمی",
-            "national_id": NID,
-            "birth_date": "۱۳۷۰/۰۵/۰۳",
-            "phone": "۰۹۱۲۱۱۱۲۲۳۳",
-            "sms_service_consent": "true",
-            "mri_link": "https://drive.google.com/file/d/abc",
-            "ortho_doctor": "دکتر رضایی",
-        },
+        data=reg_form(national_id=NID),
         files={"med_photo": ("m.png", io.BytesIO(PNG), "image/png")},
     )
     assert r.status_code == 201, r.text

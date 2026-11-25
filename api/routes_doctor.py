@@ -534,10 +534,22 @@ async def remind(public_id: str, request: Request) -> dict[str, Any]:
     actor = owner(request)
     csrf(request, actor)
     appt = ownership.get_owned_appointment(actor, public_id)
+    if appt.get("status") != "booked":
+        raise Conflict("فقط برای نوبت‌های فعال می‌توان یادآور فرستاد.")
     p = repo.select(SYSTEM, "patients", where="id = ?", params=[appt["patient_id"]], limit=1)
     if not p:
         raise NotFound("بیمار پیدا نشد.")
     ownership.assert_patient_row_owned(actor, p[0])
+    # Same claim semantics as reminders.run_once — no duplicate confirm_request.
+    claimed = repo.update(
+        SYSTEM,
+        "appointments",
+        {"confirm_sent_at": _now()},
+        where="id = ? AND confirm_sent_at IS NULL AND status = 'booked'",
+        params=[appt["id"]],
+    )
+    if claimed == 0:
+        raise Conflict("یادآور تأیید حضور قبلاً برای این نوبت ثبت شده است.")
     _, sent = sms.send_now(
         p[0]["phone"],
         sms.body_confirm(p[0]["full_name"], scheduling.describe(appt)),
@@ -545,9 +557,14 @@ async def remind(public_id: str, request: Request) -> dict[str, Any]:
         patient_id=p[0]["id"],
         appointment_id=appt["id"],
     )
-    repo.update(
-        SYSTEM, "appointments", {"confirm_sent_at": _now()}, where="id = ?", params=[appt["id"]]
-    )
+    if not sent:
+        repo.update(
+            SYSTEM,
+            "appointments",
+            {"confirm_sent_at": None},
+            where="id = ? AND confirm_sent_at IS NOT NULL",
+            params=[appt["id"]],
+        )
     cache.purge("admin:appointments")
     return {"ok": True, "sms_sent": sent}
 
@@ -1120,7 +1137,14 @@ async def create_patient(request: Request) -> dict[str, Any]:
     data = schemas.PatientRegisterIn.model_validate(payload)
     ip = request.client.host if request.client else ""
     # Store under a content-hash name (never the client filename). Prefix is opaque.
-    patient = patients.register(data.model_dump(), med_photo=med_name, ip=ip, owner_id=oid)
+    # Staff-created patients are not portal self-registration; consent checkbox N/A.
+    patient = patients.register(
+        data.model_dump(),
+        med_photo=med_name,
+        ip=ip,
+        owner_id=oid,
+        enforce_consent=False,
+    )
 
     audit.record(
         actor,

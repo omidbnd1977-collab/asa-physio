@@ -413,6 +413,7 @@ class TestSecretaryPermissionsStrict:
             med_photo="",
             ip="127.0.0.1",
             owner_id=oid,
+            enforce_consent=False,
         )
         # Bypass slot race: stamp booked_by_user_id on an allocated row.
         days = [d for d in scheduling.open_days() if not d.get("closed")]
