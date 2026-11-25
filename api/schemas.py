@@ -236,6 +236,14 @@ class PatientLoginIn(BaseModel):
         return parse_jalali(v).isoformat()
 
 
+class PortalSmsConsentIn(BaseModel):
+    """Patient self-service opt-in/out for service SMS (own dossier only)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+
+
 class AppointmentIn(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 

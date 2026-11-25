@@ -46,7 +46,8 @@ def body_registered(name: str) -> str:
 
 def body_booked(name: str, when: str, code: str) -> str:
     return (
-        f"{name} عزیز، نوبت شما در {CLINIC} ثبت شد.\n"
+        f"نوبت جدید در {CLINIC} ثبت شد. مشخصات:\n"
+        f"نام: {name}\n"
         f"زمان: {when}\n"
         f"کد پیگیری: {code}\n"
         "جزیره قشم، میدان ولایت، ساختمان محسنین، طبقه دوم"
