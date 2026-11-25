@@ -666,6 +666,23 @@ RESERVE_BODY = """
   </div>
 </div>
 
+<div class="pcard" id="smsConsentCard">
+  <h2 class="ptitle" style="font-size:1.05rem">پیامک‌های خدماتی</h2>
+  <p class="psub" id="smsConsentStatus" style="margin-bottom:12px">در حال خواندن وضعیت رضایت…</p>
+  <p class="hint" style="margin:0 0 14px">
+    پیامک تأیید نوبت، یادآوری و لغو فقط در صورت رضایت شما ارسال می‌شود و شامل تبلیغات نیست.
+  </p>
+  <div class="mrow" style="display:flex;gap:10px;flex-wrap:wrap">
+    <button class="btn btn-primary" type="button" id="smsConsentEnable" style="flex:1;min-width:140px;padding:12px">
+      فعال‌کردن رضایت پیامکی
+    </button>
+    <button class="btn btn-ghost" type="button" id="smsConsentRevoke" style="flex:1;min-width:140px;padding:12px">
+      لغو رضایت
+    </button>
+  </div>
+  <p class="err-msg hidden" id="smsConsentErr" style="margin-top:10px"></p>
+</div>
+
 <div class="pcard" id="myCard" style="display:none">
   <h2 class="ptitle" style="font-size:1.05rem">نوبت‌های شما</h2>
   <div class="mylist" id="myList"></div>
@@ -721,9 +738,40 @@ document.addEventListener('who',e=>{
   if(!e.detail){ location.href='/booking'; return; }
   ME=e.detail;
   $('#rName').textContent=ME.patient.full_name;
+  renderSmsConsent();
   renderMine();
   loadDays();
 });
+
+function renderSmsConsent(){
+  const on=!!(ME&&ME.patient&&ME.patient.sms_service_consent);
+  const st=$('#smsConsentStatus');
+  const en=$('#smsConsentEnable');
+  const rv=$('#smsConsentRevoke');
+  if(st) st.textContent=on
+    ? 'وضعیت فعلی: رضایت پیامکی خدماتی فعال است.'
+    : 'وضعیت فعلی: رضایت پیامکی خدماتی فعال نیست؛ پیامک تأیید نوبت ارسال نمی‌شود.';
+  if(en){ en.disabled=on; en.style.opacity=on?'0.55':'1'; }
+  if(rv){ rv.disabled=!on; rv.style.opacity=on?'1':'0.55'; }
+}
+
+async function setSmsConsent(enabled){
+  const err=$('#smsConsentErr');
+  if(err){ err.classList.add('hidden'); err.textContent=''; }
+  const btn=enabled?$('#smsConsentEnable'):$('#smsConsentRevoke');
+  await withBtn(btn, enabled?'در حال ذخیره…':'در حال لغو…', async()=>{
+    const r=await api('/api/portal/sms-consent',{method:'POST',body:{enabled:!!enabled}});
+    if(!r.ok){
+      if(err){ err.textContent=(r.error&&r.error.message)||'ذخیره نشد.'; err.classList.remove('hidden'); }
+      return;
+    }
+    if(ME&&ME.patient) ME.patient.sms_service_consent=!!r.data.sms_service_consent;
+    renderSmsConsent();
+    flash(enabled?'رضایت پیامکی فعال شد.':'رضایت پیامکی لغو شد.');
+  });
+}
+if($('#smsConsentEnable')) $('#smsConsentEnable').onclick=()=>setSmsConsent(true);
+if($('#smsConsentRevoke')) $('#smsConsentRevoke').onclick=()=>setSmsConsent(false);
 
 function renderMine(){
   const list=(ME&&ME.appointments)||[];
