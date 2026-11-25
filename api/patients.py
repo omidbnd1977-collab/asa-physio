@@ -22,6 +22,7 @@ from .logging_ import fingerprint, info, warn
 from .policies import SYSTEM, Actor
 
 PATIENT_COOKIE = "asa_patient"
+SERVICE_SMS_CONSENT_VERSION = "service-sms-v1"
 
 ALLOWED_IMAGE = {"jpeg", "png", "webp"}
 MAGIC = {
@@ -163,7 +164,7 @@ def register(
                 else None
             ),
             "sms_service_consent_version": (
-                "service-sms-v1" if data.get("sms_service_consent", False) else ""
+                SERVICE_SMS_CONSENT_VERSION if data.get("sms_service_consent", False) else ""
             ),
             "mri_link": data.get("mri_link", ""),
             "ortho_doctor": data.get("ortho_doctor", ""),
@@ -265,10 +266,34 @@ def patient_actor(patient: dict) -> Actor:
     return Actor(role="anon", user_id=None)
 
 
+def set_service_sms_consent(patient_id: int, *, enabled: bool) -> dict:
+    """Opt-in/out for service SMS; scoped to the authenticated patient's own row."""
+    if enabled:
+        patch = {
+            "sms_service_consent": 1,
+            "sms_service_consent_at": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "sms_service_consent_version": SERVICE_SMS_CONSENT_VERSION,
+            "updated_at": _iso(_now()),
+        }
+    else:
+        patch = {
+            "sms_service_consent": 0,
+            "sms_service_consent_at": None,
+            "sms_service_consent_version": "",
+            "updated_at": _iso(_now()),
+        }
+    n = repo.update(SYSTEM, "patients", patch, where="id = ?", params=[patient_id])
+    if n != 1:
+        raise RuntimeError("patient sms consent update failed")
+    rows = repo.select(SYSTEM, "patients", where="id = ?", params=[patient_id], limit=1)
+    return rows[0]
+
+
 def public_view(p: dict) -> dict:
     return {
         "public_id": p["public_id"],
         "full_name": p["full_name"],
         "phone": p["phone"][:4] + "***" + p["phone"][-2:],
         "birth_jalali": p["birth_jalali"],
+        "sms_service_consent": bool(p.get("sms_service_consent")),
     }

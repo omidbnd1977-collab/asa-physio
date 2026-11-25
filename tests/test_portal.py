@@ -224,6 +224,125 @@ class TestRegistration:
             == 0
         )
 
+    def test_me_exposes_sms_service_consent(self, client, patient):
+        r = client.get("/api/portal/me")
+        assert r.status_code == 200
+        assert r.json()["patient"]["sms_service_consent"] is True
+
+    def test_enable_sms_consent_from_dossier_then_booked_sms(self, client):
+        from api import repo
+        from api.policies import SYSTEM
+
+        r = client.post(
+            "/api/portal/register",
+            data=reg_form(national_id=NID_C, sms_service_consent="false"),
+            files={"med_photo": ("m.png", io.BytesIO(PNG), "image/png")},
+        )
+        assert r.status_code == 201, r.text
+        me = client.get("/api/portal/me")
+        assert me.status_code == 200
+        assert me.json()["patient"]["sms_service_consent"] is False
+
+        enable = client.post("/api/portal/sms-consent", json={"enabled": True})
+        assert enable.status_code == 200, enable.text
+        assert enable.json()["ok"] is True
+        assert enable.json()["sms_service_consent"] is True
+        assert enable.json()["patient"]["sms_service_consent"] is True
+        row = repo.select(SYSTEM, "patients", where="national_id = ?", params=[NID_C])[0]
+        assert row["sms_service_consent"] == 1
+        assert row["sms_service_consent_at"]
+        assert row["sms_service_consent_version"] == "service-sms-v1"
+
+        booked = client.post(
+            "/api/portal/appointments",
+            json={"slot_date": tomorrow(), "slot_time": "17:30"},
+        )
+        assert booked.status_code == 201, booked.text
+        assert booked.json()["sms_sent"] is True
+        sms_rows = repo.select(
+            SYSTEM,
+            "sms_messages",
+            where="patient_id = ? AND kind = 'booked'",
+            params=[row["id"]],
+        )
+        assert len(sms_rows) == 1
+        assert sms_rows[0]["body"].startswith("نوبت جدید در آسا فیزیو ثبت شد. مشخصات:")
+
+    def test_revoke_sms_consent_stops_later_booked_sms(self, client, patient):
+        from api import repo
+        from api.policies import SYSTEM
+
+        revoke = client.post("/api/portal/sms-consent", json={"enabled": False})
+        assert revoke.status_code == 200, revoke.text
+        assert revoke.json()["sms_service_consent"] is False
+        row = repo.select(SYSTEM, "patients", where="national_id = ?", params=[NID_A])[0]
+        assert row["sms_service_consent"] == 0
+        assert row["sms_service_consent_at"] is None
+        assert row["sms_service_consent_version"] == ""
+
+        booked = client.post(
+            "/api/portal/appointments",
+            json={"slot_date": tomorrow(), "slot_time": "17:30"},
+        )
+        assert booked.status_code == 201, booked.text
+        assert booked.json()["sms_sent"] is False
+        assert (
+            repo.count(
+                SYSTEM,
+                "sms_messages",
+                where="patient_id = ? AND kind = 'booked'",
+                params=[row["id"]],
+            )
+            == 0
+        )
+
+    def test_patient_cannot_change_another_patients_sms_consent(self, client):
+        from api import repo
+        from api.policies import SYSTEM
+
+        a = client.post(
+            "/api/portal/register",
+            data=reg_form(national_id=NID_A, sms_service_consent="false"),
+            files={"med_photo": ("m.png", io.BytesIO(PNG), "image/png")},
+        )
+        assert a.status_code == 201, a.text
+        a_id = repo.select(SYSTEM, "patients", where="national_id = ?", params=[NID_A])[0]["id"]
+
+        client.post("/api/portal/logout")
+        b = client.post(
+            "/api/portal/register",
+            data=reg_form(
+                national_id=NID_B,
+                full_name="علی رضایی",
+                phone="09123334455",
+                sms_service_consent="false",
+            ),
+            files={"med_photo": ("m.png", io.BytesIO(PNG), "image/png")},
+        )
+        assert b.status_code == 201, b.text
+
+        # Session is B; body has no patient_id — only B's own row can change.
+        r = client.post("/api/portal/sms-consent", json={"enabled": True})
+        assert r.status_code == 200, r.text
+        assert r.json()["sms_service_consent"] is True
+        a_row = repo.select(SYSTEM, "patients", where="id = ?", params=[a_id])[0]
+        b_row = repo.select(SYSTEM, "patients", where="national_id = ?", params=[NID_B])[0]
+        assert a_row["sms_service_consent"] == 0
+        assert b_row["sms_service_consent"] == 1
+
+        # Extra fields that might try to target another patient are rejected.
+        bad = client.post(
+            "/api/portal/sms-consent",
+            json={"enabled": True, "patient_id": a_id},
+        )
+        assert bad.status_code == 422
+        a_row2 = repo.select(SYSTEM, "patients", where="id = ?", params=[a_id])[0]
+        assert a_row2["sms_service_consent"] == 0
+
+    def test_sms_consent_requires_login(self, client):
+        r = client.post("/api/portal/sms-consent", json={"enabled": True})
+        assert r.status_code == 401
+
     def test_register_rejects_missing_consent(self, client):
         from api import repo
         from api.policies import SYSTEM
@@ -1018,6 +1137,8 @@ class TestBooking:
         assert body["ok"] and body["sms_sent"] and body["cabin"] == 1
         sms = repo.select(SYSTEM, "sms_messages", where="kind = 'booked'")[0]
         assert body["code"] in sms["body"] and "17:30" in sms["body"]
+        assert sms["body"].startswith("نوبت جدید در آسا فیزیو ثبت شد. مشخصات:")
+        assert "سارا کریمی" in sms["body"]
 
     def test_the_same_patient_cannot_double_book_one_slot(self, client, patient):
         client.post(

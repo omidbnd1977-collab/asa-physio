@@ -349,6 +349,26 @@ async def me(request: Request) -> dict[str, Any]:
     }
 
 
+@router.post("/sms-consent")
+async def sms_consent(
+    request: Request, payload: dict[str, Any] = Body(default={})
+) -> dict[str, Any]:
+    """Enable or revoke service-SMS consent for the authenticated patient only."""
+    p = patients.require(current_patient(request))
+    data = schemas.PortalSmsConsentIn.model_validate(payload)
+    updated = patients.set_service_sms_consent(p["id"], enabled=data.enabled)
+    info(
+        "portal.sms_consent",
+        patient_id=p["id"],
+        enabled=bool(updated.get("sms_service_consent")),
+    )
+    return {
+        "ok": True,
+        "patient": patients.public_view(updated),
+        "sms_service_consent": bool(updated.get("sms_service_consent")),
+    }
+
+
 # --------------------------------------------------------------------------
 # the slot grid
 # --------------------------------------------------------------------------
