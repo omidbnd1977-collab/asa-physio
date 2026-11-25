@@ -1,30 +1,53 @@
 #!/usr/bin/env bash
-# Layer 13 — restore a backup into a target database and verify it.
-# usage: ops/restore.sh <backup.db.gz> [target.db]
+# Restore a verified backup bundle into an experimental directory by default.
+# Usage:
+#   ops/restore.sh <bundle-dir> [dest_dir]
+#   ops/restore.sh <bundle-dir> --promote
+#   ops/restore.sh <asa-*.db.gz> <target.db> [--confirm-live-overwrite]
 set -euo pipefail
 cd "$(dirname "$0")/.."
-SRC="${1:?usage: ops/restore.sh <backup.db.gz> [target.db]}"
-DST="${2:-data/asa.db}"
-[ -f "$SRC" ] || { echo "no such backup: $SRC" >&2; exit 1; }
-START=$(date +%s)
 
-if [ -f "$DST" ]; then
-  SAFE="$DST.before-restore-$(date -u +%Y%m%dT%H%M%SZ)"
-  cp "$DST" "$SAFE"; echo "current db parked at $SAFE"
+SRC="${1:?usage: ops/restore.sh <bundle-dir|asa-*.db.gz> [dest_dir|--promote]}"
+shift || true
+
+if [[ -f "$SRC" && "$SRC" == *.db.gz ]]; then
+  DEST="${1:-}"
+  shift || true
+  CONFIRM=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --confirm-live-overwrite) CONFIRM+=(--confirm-live-overwrite); shift ;;
+      *) echo "unknown legacy flag: $1" >&2; exit 2 ;;
+    esac
+  done
+  if [[ -z "$DEST" ]]; then
+    echo "legacy restore requires an explicit target.db path" >&2
+    echo "refusing default live overwrite; pass dest and --confirm-live-overwrite if intentional" >&2
+    exit 2
+  fi
+  exec python3 -m ops.backup_core restore-legacy "$SRC" "$DEST" "${CONFIRM[@]}"
 fi
-mkdir -p "$(dirname "$DST")"
-gunzip -c "$SRC" > "$DST"
-rm -f "$DST-wal" "$DST-shm"
 
-python3 - "$DST" <<'PY'
-import sqlite3, sys
-c = sqlite3.connect(sys.argv[1])
-assert c.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-fk = c.execute("PRAGMA foreign_key_check").fetchall()
-assert not fk, f"foreign key violations: {fk}"
-t = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")]
-b = c.execute("SELECT COUNT(*) FROM bookings").fetchone()[0]
-m = c.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0]
-print(f"restored: {len(t)} tables, {b} bookings, {m} migrations applied")
-PY
-echo "restore completed in $(( $(date +%s) - START ))s"
+ARGS=(restore "$SRC")
+PROMOTE=0
+DEST=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --promote) PROMOTE=1; shift ;;
+    --live-db) ARGS+=(--live-db "$2"); shift 2 ;;
+    --live-uploads) ARGS+=(--live-uploads "$2"); shift 2 ;;
+    -*)
+      echo "unknown flag: $1" >&2
+      exit 2
+      ;;
+    *)
+      if [[ -z "$DEST" ]]; then DEST="$1"; shift; else echo "unexpected arg: $1" >&2; exit 2; fi
+      ;;
+  esac
+done
+[[ -n "$DEST" ]] && ARGS+=("$DEST")
+[[ "$PROMOTE" -eq 1 ]] && ARGS+=(--promote)
+[[ -n "${DB_PATH:-}" ]] && ARGS+=(--live-db "$DB_PATH")
+[[ -n "${UPLOAD_DIR:-}" ]] && ARGS+=(--live-uploads "$UPLOAD_DIR")
+
+exec python3 -m ops.backup_core "${ARGS[@]}"

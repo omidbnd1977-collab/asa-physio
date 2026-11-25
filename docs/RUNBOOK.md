@@ -19,8 +19,10 @@ make serve                        # اجرا روی PORT
 |---|---|
 | انتشار | `make deploy ENV=production` |
 | بازگشت به نسخه‌ی قبل | `make rollback` |
-| پشتیبان‌گیری | `make backup` |
-| بازیابی | `ops/restore.sh data/backups/asa-<stamp>.db.gz` |
+| پشتیبان‌گیری | `make backup` (باندل DB+uploads در `data/backups/asa-<stamp>/`) |
+| بازیابی آزمایشی | `ops/restore.sh data/backups/asa-<stamp>` |
+| بازیابی روی مسیر زنده | پس از بررسی: `ops/restore.sh data/backups/asa-<stamp> <dir> --promote` |
+| جزئیات Backup/Restore | `docs/BACKUP-RESTORE.md` |
 | تست‌ها | `make test` |
 | سنجش گلوگاه | `make loadtest` |
 
