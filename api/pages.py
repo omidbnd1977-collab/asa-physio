@@ -12,7 +12,9 @@ import json
 import pathlib
 import re
 
+from . import legal_consent
 from .config import settings
+from .portal_register_ui import REGISTRATION_CONSENT_REQUIRED_MSG
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -87,10 +89,10 @@ async function api(path,opts={}){
   return {ok:true,data:body};
 }
 function clearErrs(ids){ids.forEach(id=>{const f=document.getElementById(id);
-  if(f&&f.closest('.field'))f.closest('.field').classList.remove('is-bad');
+  if(f){const w=f.closest('.field,.consent-box'); if(w)w.classList.remove('is-bad');}
   const m=document.getElementById('e-'+id); if(m)m.textContent='';});}
 function markErr(id,msg){const f=document.getElementById(id); if(!f)return;
-  const w=f.closest('.field'); if(w)w.classList.add('is-bad');
+  const w=f.closest('.field,.consent-box'); if(w)w.classList.add('is-bad');
   const m=document.getElementById('e-'+id); if(m)m.textContent=msg;}
 async function withBtn(btn,label,fn){
   const old=btn.innerHTML; btn.classList.add('is-loading'); btn.disabled=true;
@@ -247,7 +249,7 @@ REGISTER_BODY = """
       <input type="tel" id="mobile" name="mobile" placeholder=" " required inputmode="numeric"
              maxlength="20" autocomplete="tel" dir="ltr" style="text-align:right">
       <label for="mobile">شماره موبایل <span class="req">*</span></label>
-      <p class="hint">پیامک تأیید نوبت به همین شماره ارسال می‌شود.</p>
+      <p class="hint">در صورت فعال بودن پیامک عملیاتی کلینیک، تأیید نوبت به همین شماره ارسال می‌شود.</p>
       <p class="err-msg" id="e-mobile"></p>
     </div>
     </div>
@@ -279,6 +281,21 @@ REGISTER_BODY = """
       <label for="note">یادداشت <span class="muted">(اختیاری)</span></label>
       <p class="hint">توضیح کوتاه درباره مشکل یا درخواست شما؛ در مرحله رزرو برای پزشک ثبت می‌شود.</p>
     </div>
+
+    <div class="consent-box" id="consentBox">
+      <input type="hidden" id="consent_version" name="consent_version" value="__CONSENT_VERSION__">
+      <!-- Sibling checkbox + label[for]: one click = one toggle.
+           Do not nest the input inside the label, and do not use class "field"
+           (site CSS: .field label{pointer-events:none}; .field input{width:100%}). -->
+      <div class="consent-row">
+        <input type="checkbox" id="consent_accepted" name="consent_accepted" value="1" required class="consent-check" autocomplete="off">
+        <label for="consent_accepted" class="consent-text">
+          __CONSENT_LABEL_HTML__
+          <span class="req">*</span>
+        </label>
+      </div>
+      <p class="err-msg" id="e-consent_accepted"></p>
+    </div>
     <div style="margin-top:20px;padding:14px 16px;border:1px solid rgba(45,212,191,.22);border-radius:14px;background:rgba(11,42,74,.28)">
       <label for="sms_service_consent" style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;line-height:1.9">
         <input type="checkbox" id="sms_service_consent" name="sms_service_consent" value="true"
@@ -297,11 +314,13 @@ REGISTER_BODY = """
       </button>
     </div>
     <p class="hint" style="text-align:center;margin-top:12px">
-      در صورت انتخاب دریافت پیامک خدماتی، پیامک ثبت اطلاعات برای شما ارسال می‌شود.
+      رضایت قانونی ثبت‌نام الزامی است. پیامک خدماتی فقط در صورت انتخاب اختیاری شما ارسال می‌شود.
     </p>
   </form>
 </div>
-"""
+""".replace("__CONSENT_VERSION__", legal_consent.REGISTRATION_CONSENT_VERSION).replace(
+    "__CONSENT_LABEL_HTML__", legal_consent.registration_consent_label_html()
+)
 
 REGISTER_JS = r"""
 const UI_IDS=['full_name','national_code','birth_year','birth_month','birth_day','mobile','mri_url','orthopedist','note'];
@@ -327,7 +346,8 @@ UI_IDS.forEach(id=>{
   el.addEventListener('input',saveDraft); el.addEventListener('change',saveDraft);
 });
 function saveDraft(){
-  const data={step:REG_STEP};
+  // Persist field values only — never resume mid-wizard after reload.
+  const data={};
   UI_IDS.forEach(id=>{ const el=document.getElementById(id); if(el) data[id]=el.value; });
   sessionStorage.setItem(DRAFT_KEY, JSON.stringify(data));
 }
@@ -336,7 +356,6 @@ function restoreDraft(){
     const raw=sessionStorage.getItem(DRAFT_KEY); if(!raw) return;
     const data=JSON.parse(raw);
     UI_IDS.forEach(id=>{ if(data[id]!=null && document.getElementById(id)) document.getElementById(id).value=data[id]; });
-    if(data.step===2) showRegStep(2);
   }catch(_e){}
 }
 function showRegStep(n){
@@ -347,6 +366,7 @@ function showRegStep(n){
   $('#regBtn').classList.toggle('hidden', n!==2);
   $$('[data-step-dot]').forEach(i=>i.classList.toggle('on', +i.dataset.stepDot<=n));
   $('#regStepLabel').textContent = n===1 ? 'مرحله ۱ از ۲ — مشخصات اصلی' : 'مرحله ۲ از ۲ — اطلاعات تکمیلی';
+  // Keep draft field values in sync; step is never restored on reload.
   saveDraft();
 }
 function wireFile(inputId,boxId,labelId,hintId,idleLabel){
@@ -385,11 +405,19 @@ function localCheckStep1(){
   if(!/^(09\d{9}|\+989\d{9}|9\d{9})$/.test(ph)){markErr('mobile','شماره موبایل باید ۱۱ رقم و با ۰۹ شروع شود.');first=first||'mobile';}
   return first;
 }
+const CONSENT_REQUIRED_MSG='__CONSENT_REQUIRED_MSG__';
+const REG_STEP1_IDS=['full_name','national_code','birth_year','birth_month','birth_day','mobile'];
 function localCheck(){
   let first=localCheckStep1();
   const mri=$('#mri_url').value.trim();
   if(mri && !/^https?:\/\/\S+\.\S+/.test(mri)){markErr('mri_url','لینک باید با http:// یا https:// شروع شود.');first=first||'mri_url';}
-  return first;
+  let consentMissing=false;
+  if(!$('#consent_accepted').checked){
+    markErr('consent_accepted',CONSENT_REQUIRED_MSG);
+    consentMissing=true;
+    first=first||'consent_accepted';
+  }
+  return {first:first, consentMissing:consentMissing};
 }
 $('#regNextBtn').onclick=()=>{
   clearErrs(UI_IDS.concat(['birth_date']));
@@ -405,16 +433,49 @@ $('#regBackBtn').onclick=()=>{
   location.href='/booking';
 };
 restoreDraft();
+// Always open on step 1 (ignore any legacy draft.step from older clients).
+showRegStep(1);
+const consentEl=$('#consent_accepted');
+if(consentEl){
+  consentEl.checked=false;
+  consentEl.addEventListener('change',()=>{
+    if(consentEl.checked) clearErrs(['consent_accepted']);
+  });
+}
+function focusConsentCheckbox(){
+  // Does NOT change wizard step — callers choose step so step-1 errors stay visible.
+  const box=$('#consentBox');
+  if(box && box.scrollIntoView) box.scrollIntoView({behavior:'smooth',block:'center'});
+  const cb=$('#consent_accepted');
+  if(cb) cb.focus();
+}
+function presentRegClientErrors(checked){
+  const bad=checked.first;
+  if(!bad) return false;
+  // Mirrors api.portal_register_ui.registration_client_error_plan
+  if(checked.consentMissing && bad==='consent_accepted'){
+    showRegStep(2);
+    focusConsentCheckbox();
+    flash(CONSENT_REQUIRED_MSG,true);
+    return true;
+  }
+  if(REG_STEP1_IDS.indexOf(bad)>=0) showRegStep(1);
+  else showRegStep(2);
+  const el=document.getElementById(bad);
+  if(el) el.focus();
+  if(checked.consentMissing){
+    flash('لطفاً خطاهای فرم را برطرف کنید. '+CONSENT_REQUIRED_MSG,true);
+  }else{
+    flash('لطفاً خطاهای فرم را برطرف کنید.',true);
+  }
+  return true;
+}
 let sending=false;
 $('#regForm').addEventListener('submit',async e=>{
   e.preventDefault(); if(sending)return;
-  clearErrs(UI_IDS.concat(['birth_date']));
-  const bad=localCheck();
-  if(bad){
-    if(['full_name','national_code','birth_year','birth_month','birth_day','mobile'].indexOf(bad)>=0) showRegStep(1);
-    else showRegStep(2);
-    document.getElementById(bad).focus();flash('لطفاً خطاهای فرم را برطرف کنید.',true);return;
-  }
+  clearErrs(UI_IDS.concat(['birth_date','consent_accepted']));
+  const checked=localCheck();
+  if(presentRegClientErrors(checked)) return;
   sending=true;
   await withBtn($('#regBtn'),'در حال ثبت…',async()=>{
     const birth_date=[$('#birth_year').value,$('#birth_month').value.padStart(2,'0'),$('#birth_day').value.padStart(2,'0')].join('/');
@@ -423,10 +484,12 @@ $('#regForm').addEventListener('submit',async e=>{
     fd.append('national_id',DIGITS($('#national_code').value.trim()));
     fd.append('birth_date',DIGITS(birth_date));
     fd.append('phone',DIGITS($('#mobile').value.trim()));
-    fd.append('sms_service_consent',$('#sms_service_consent').checked ? 'true' : 'false');
     fd.append('mri_link',$('#mri_url').value.trim());
     fd.append('ortho_doctor',$('#orthopedist').value.trim());
     fd.append('website',$('#website').value);
+    fd.append('consent_accepted',$('#consent_accepted').checked?'1':'0');
+    fd.append('consent_version',$('#consent_version').value);
+    fd.append('sms_service_consent',$('#sms_service_consent').checked ? 'true' : 'false');
     sessionStorage.setItem('asa_booking_note',$('#note').value.trim());
     if(fileInput&&fileInput.files[0]) fd.append('med_photo',fileInput.files[0]);
     const r=await api('/api/portal/register',{method:'POST',body:fd});
@@ -437,19 +500,28 @@ $('#regForm').addEventListener('submit',async e=>{
         if(document.getElementById(mapped)){markErr(mapped,err.fields[k]);f=f||mapped;}}
         if(f)document.getElementById(f).focus();}
       if(err.code==='already_registered'){flash(err.message,true);setTimeout(()=>location.href='/booking/login',2200);}
+      else if(err.code==='consent_required'||err.code==='consent_version_mismatch'){
+        markErr('consent_accepted', err.code==='consent_required' ? CONSENT_REQUIRED_MSG : (err.message||'نسخه رضایت‌نامه معتبر نیست.'));
+        showRegStep(2);
+        focusConsentCheckbox();
+        flash(err.code==='consent_required' ? CONSENT_REQUIRED_MSG : (err.message||'نسخه رضایت‌نامه معتبر نیست.'),true);
+      }
       else flash((err.message||'ثبت نشد.')+(err.trace_id?' (کد: '+err.trace_id+')':''),true);
       return;
     }
     sessionStorage.removeItem(DRAFT_KEY);
     const smsStatus = !r.data.sms_consent
       ? 'ثبت شد ✓ پیامک خدماتی برای این شماره فعال نشد چون رضایت دریافت آن ثبت نشده است.'
-      : (r.data.sms_sent ? 'ثبت شد ✓ پیامک تأیید برای شما ارسال شد' : 'ثبت شد ✓ ارسال پیامک با مشکل روبه‌رو شد؛ ثبت‌نام شما انجام شده است.');
+      : (r.data.sms_sent ? 'ثبت شد ✓ پیامک تأیید برای شما ارسال شد' : 'ثبت شد ✓ (ارسال پیامک با تأخیر انجام می‌شود)');
     flash(r.data.mri_warning ? 'ثبت شد؛ '+r.data.mri_warning : smsStatus, !!r.data.mri_warning);
     setTimeout(()=>location.href=r.data.redirect||'/booking/reserve',1300);
   });
   sending=false;
 });
-"""
+""".replace(
+    "__CONSENT_REQUIRED_MSG__",
+    REGISTRATION_CONSENT_REQUIRED_MSG.replace("\\", "\\\\").replace("'", "\\'"),
+)
 
 
 # ==========================================================================
@@ -586,7 +658,7 @@ RESERVE_BODY = """
       </button>
     </div>
     <p class="hint" style="text-align:center;margin-top:10px">
-      پس از ثبت، پیامک تأیید با کد پیگیری برای شما ارسال می‌شود.
+      پس از ثبت، در صورت فعال بودن پیامک عملیاتی، تأیید با کد پیگیری ارسال می‌شود.
     </p>
   </div>
   <div style="margin-top:16px">
@@ -847,7 +919,7 @@ DONE_BODY = """
 <div class="pcard ticket">
   <div class="mark"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></div>
   <h1 class="ptitle">نوبت شما ثبت شد</h1>
-  <p class="psub" id="doneSub">پیامک تأیید به شماره‌ی شما ارسال شد.</p>
+  <p class="psub" id="doneSub">نوبت شما ثبت شد؛ در صورت فعال بودن پیامک، تأیید به شماره‌ی شما می‌رسد.</p>
 
   <div id="dLoading"><div class="skel" style="height:80px"></div></div>
   <div id="dError" class="state error hidden"></div>
@@ -863,7 +935,7 @@ DONE_BODY = """
 
   <p class="psub" style="margin-top:26px">
     جزیره قشم، میدان ولایت (ساعت)، ساختمان محسنین، طبقه دوم<br>
-    دو ساعت قبل از نوبت، پیامک یادآوری برای شما ارسال می‌شود؛
+    در صورت فعال بودن یادآوری پیامکی، حدود دو ساعت قبل از نوبت اطلاع‌رسانی می‌شود؛
     با ارسال عدد <b>۱</b> حضور خود را قطعی کنید.
   </p>
   <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:8px">

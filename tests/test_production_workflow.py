@@ -23,6 +23,34 @@ def patient(client):
     return response.json()
 
 
+def test_legal_pages_and_footer_links_exist():
+    root = Path(__file__).resolve().parent.parent
+    site = root / "site"
+    privacy = site / "privacy.html"
+    terms = site / "terms.html"
+    assert privacy.is_file() and terms.is_file()
+    privacy_text = privacy.read_text(encoding="utf-8")
+    terms_text = terms.read_text(encoding="utf-8")
+    assert "حریم خصوصی" in privacy_text
+    assert "خانم دکتر رستمی‌راد" in privacy_text
+    assert "تا زمانی که مطب فیزیوتراپی آسا فیزیو فعالیت می‌کند" in privacy_text
+    assert "پس از تعطیلی مطب نیز اطلاعات و سوابق بیماران محرمانه باقی می‌مانند" in privacy_text
+    assert "مدت نگهداری یا زمان حذف پس از تعطیلی در این متن اعلام نشده است" in privacy_text
+    assert "کتبی و حضوری" in privacy_text
+    assert "مجاز به استفاده مستقل" in privacy_text
+    assert "واگذاری" in privacy_text
+    assert "پیامک‌های نوبت‌دهی و اطلاع‌رسانی برای بیماران ضروری هستند" in privacy_text
+    assert "قوانین استفاده" in terms_text
+    assert "نیازی به تأیید تلفنی از سوی کلینیک نیست" in terms_text
+    assert "پیامک فقط برای اطلاع‌رسانی" in terms_text
+    assert "بابت لغو نوبت هزینه‌ای دریافت نمی‌شود" in terms_text
+    assert "حداقل ۳ ساعت" in terms_text
+    for page in sorted(site.glob("*.html")):
+        text = page.read_text(encoding="utf-8")
+        assert 'href="privacy.html"' in text, page.name
+        assert 'href="terms.html"' in text, page.name
+
+
 def test_static_source_booking_ctas_go_to_portal():
     """Primary deploy is same-origin FastAPI (NetAram VPS / Render preview).
     Every «رزرو نوبت» CTA must open the real patient portal at /booking."""

@@ -121,6 +121,14 @@ POLICIES: dict[str, TablePolicy] = {
         delete="system",
         note="Session plumbing. Not reachable from any HTTP role.",
     ),
+    "patient_consent_events": TablePolicy(
+        select="staff",
+        insert="system",
+        update="system",
+        delete="owner",
+        note="Portal registration consent audit (version + text hash + time). "
+        "Written only via patients.register; staff may read for compliance review.",
+    ),
     "appointments": TablePolicy(
         select="staff",
         insert="system",

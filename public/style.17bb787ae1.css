@@ -349,13 +349,8 @@ form{display:grid;gap:14px}
 .field textarea:focus+label,.field textarea:not(:placeholder-shown)+label,
 .field select:focus+label,.field select:valid+label{top:5px;font-size:.7rem;color:var(--teal)}
 .note{font-size:.8rem;color:var(--muted)}
-.map{margin-top:20px;border-radius:18px;overflow:hidden;border:1px solid var(--line);position:relative;height:190px;
-  background:radial-gradient(circle at 60% 40%,#0e3a5e,#04121f);display:grid;place-items:center}
-.map .pin{position:relative;width:20px;height:20px;border-radius:50%;background:var(--teal);box-shadow:0 0 0 0 rgba(45,212,191,.6);animation:ping 2s infinite}
-.map .isle{position:absolute;inset:0;opacity:.35;
-  background:radial-gradient(closest-side,rgba(45,212,191,.5),transparent 70%) 30% 70%/44% 55% no-repeat,
-             radial-gradient(closest-side,rgba(56,189,248,.35),transparent 70%) 72% 34%/38% 46% no-repeat;filter:blur(6px)}
-.map b{position:absolute;bottom:14px;inset-inline-start:16px;font-size:.85rem;color:#d6f2fb}
+.map-container{margin-top:20px;border-radius:18px;overflow:hidden;border:1px solid var(--line);position:relative;width:100%;height:320px;background:#04121f}
+.map-container iframe{display:block;width:100%;height:100%;min-height:320px;border:0}
 
 /* ===================== CTA BANNER ===================== */
 .cta{position:relative;border-radius:34px;padding:56px 44px;text-align:center;overflow:hidden;
@@ -547,6 +542,15 @@ footer{margin-top:90px;padding:60px 0 26px;border-top:1px solid var(--line);
   .nav-cta .btn svg{display:none}
   .brand-tx span{display:none}
 }
+/* Touch targets + horizontal safety for phone widths used in delivery QA */
+@media(max-width:430px){
+  .burger{min-width:44px;min-height:44px}
+  .nav-cta .btn,.btn{min-height:44px}
+  .menu>a{min-height:44px;display:flex;align-items:center}
+  .wrap{width:min(94%,var(--maxw));padding-inline:2px}
+  .hero-txt{font-size:.95rem}
+  .pcard,.cta{max-width:100%}
+}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition-duration:.01ms!important}}
 
 /* RTL alignment for the contact information panel only */
@@ -579,4 +583,24 @@ footer{margin-top:90px;padding:60px 0 26px;border-top:1px solid var(--line);
 
 .contact-info-panel .info svg {
   margin-inline-start: 0;
+}
+
+/* ===================== LEGAL PAGES ===================== */
+.legal{max-width:880px;margin-inline:auto;line-height:1.95;color:var(--muted);font-size:.98rem}
+.legal h3{color:var(--ink);margin:1.6em 0 .55em;font-size:1.12rem;font-weight:800}
+.legal p{margin:0 0 .9em}
+.legal ul{padding-inline-start:1.25rem;margin:.35em 0 1.1em;display:grid;gap:.45em}
+.legal li{padding-inline-start:.15rem}
+.legal a{color:var(--glow);text-decoration:underline;text-underline-offset:3px}
+.legal-callout{margin:1.1em 0 1.3em;padding:1rem 1.15rem;border-radius:16px;border:1px solid rgba(94,234,212,.35);
+  background:linear-gradient(145deg,rgba(45,212,191,.12),rgba(6,26,46,.55))}
+.legal-callout p{margin:0;color:var(--ink);font-weight:600;line-height:1.9}
+.needs-confirm{margin:1.25em 0;padding:1rem 1.15rem;border-radius:16px;border:1px solid rgba(251,191,36,.35);
+  border-inline-start:3px solid #fbbf24;background:rgba(251,191,36,.08)}
+.needs-confirm b{display:block;color:var(--ink);margin-bottom:.55em}
+.needs-confirm ul{margin:.2em 0 0}
+.legal-meta{font-size:.86rem;opacity:.85;margin-top:1.5em}
+@media (max-width:720px){
+  .legal{font-size:.94rem}
+  .legal-callout,.needs-confirm{padding:.85rem 1rem;border-radius:14px}
 }

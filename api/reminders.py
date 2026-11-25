@@ -53,13 +53,20 @@ def run_once(lead_min: int | None = None) -> dict[str, int]:
         if not p:
             continue
         patient = p[0]
-        # claim first: only the winner of the UPDATE may send (crash- and race-safe)
+        # Atomic claim: still booked, never reminded, and the slot we are about to
+        # describe has not been moved. Cancel/reschedule between due-scan and here
+        # must make this UPDATE change 0 rows so no SMS goes out. Two workers racing
+        # the same row also collapse to a single winner via confirm_sent_at IS NULL.
+        # If SMS fails, release the claim so a later tick (or cron) can retry.
         claimed = repo.update(
             SYSTEM,
             "appointments",
             {"confirm_sent_at": _now_utc()},
-            where="id = ? AND confirm_sent_at IS NULL",
-            params=[a["id"]],
+            where=(
+                "id = ? AND status = 'booked' AND confirm_sent_at IS NULL "
+                "AND slot_date = ? AND slot_time = ?"
+            ),
+            params=[a["id"], a["slot_date"], a["slot_time"]],
         )
         if claimed == 0:
             continue
@@ -74,6 +81,18 @@ def run_once(lead_min: int | None = None) -> dict[str, int]:
             sent += 1
         else:
             failed += 1
+            repo.update(
+                SYSTEM,
+                "appointments",
+                {"confirm_sent_at": None},
+                where="id = ? AND confirm_sent_at IS NOT NULL",
+                params=[a["id"]],
+            )
+            warn(
+                "reminder.send_failed_claim_released",
+                appointment_id=a["id"],
+                phone=fingerprint(patient["phone"]),
+            )
     if due:
         cache.purge("admin:appointments")
         info("reminder.tick", due=len(due), sent=sent, failed=failed)

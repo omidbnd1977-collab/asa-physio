@@ -89,7 +89,8 @@ def _send_smsir(booking: dict) -> None:
     # Same SMS.ir credentials as patient SMS (SMS_API_KEY + SMS_SENDER line).
     if not settings.SMS_API_KEY:
         raise RuntimeError("SMS_API_KEY is empty")
-    sms.send_smsir(admin, render(booking))
+    # kind= is required by the central SMS.ir gate; not a patient kind.
+    sms.send_smsir(admin, render(booking), kind=sms.NOTIFY_BOOKING_ADMIN_KIND)
 
 
 PROVIDERS = {"file": _send_file, "webhook": _send_webhook, "smsir": _send_smsir}

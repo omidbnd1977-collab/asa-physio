@@ -18,6 +18,8 @@ EXPECTED_PAGES = (
     "gallery.html",
     "faq.html",
     "contact.html",
+    "privacy.html",
+    "terms.html",
 )
 
 EXPECTED_ASSETS = (

@@ -88,12 +88,13 @@ class TestSmsIrKindAllowlist:
             "admin_appointment",
             appointment_id=aid,
         )
-        assert ok is True and mid
+        assert ok is False and mid  # file-sink only — not a live SMS.ir delivery
         assert calls == []  # no HTTP to SMS.ir
         assert out.is_file() and out.read_text(encoding="utf-8")
         row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
-        assert row["status"] == "sent"
+        assert row["status"] == "logged"
         assert row["provider"] == "file"
+        assert "not allowlisted" in row["last_error"]
 
     def test_admin_appointment_allowlisted_uses_verify_template_753761(self, monkeypatch):
         monkeypatch.setattr(settings, "SMS_PROVIDER", "smsir")
@@ -189,12 +190,89 @@ class TestSmsIrKindAllowlist:
             patient_id=pid,
             appointment_id=aid,
         )
-        assert ok is True and mid
+        assert ok is False and mid  # local sink only — not live SMS.ir
         assert calls == [], f"{kind} must not call SMS.ir"
         assert out.is_file()
         row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
         assert row["provider"] == "file"
+        assert row["status"] == "logged"
         assert row["kind"] == kind
+        assert "not allowlisted" in row["last_error"]
+
+    @pytest.mark.parametrize("kind", sorted(sms.PATIENT_SMS_KINDS))
+    def test_patient_kinds_use_smsir_when_allowlisted(self, monkeypatch, tmp_path, kind: str):
+        """Operational patient kinds hit Verify when explicitly allowlisted (HTTP mocked)."""
+        monkeypatch.setattr(settings, "SMS_PROVIDER", "smsir")
+        monkeypatch.setattr(
+            settings,
+            "SMS_IR_ALLOWED_KINDS",
+            "admin_appointment,booked,confirm_request,cancelled,rescheduled",
+        )
+        monkeypatch.setattr(settings, "SMS_API_KEY", "test-key-not-real")
+        monkeypatch.setattr(settings, "SMS_SENDER", "3000000000")
+        out = tmp_path / "sms-out.txt"
+        monkeypatch.setattr(settings, "SMS_FILE", out)
+
+        calls: list[str] = []
+
+        def fake_post(url, **kwargs):
+            calls.append(url)
+            return _verify_ok()
+
+        monkeypatch.setattr(sms.httpx, "post", fake_post)
+
+        assert kind in sms.sms_ir_allowed_kinds()
+        assert sms.kind_may_use_smsir(kind) is True
+
+        pid = _insert_patient_phone("09125556677")
+        aid = _insert_booked_appt(pid)
+        mid, ok = sms.send_now(
+            "09125556677",
+            "patient sms body",
+            kind,
+            patient_id=pid,
+            appointment_id=aid,
+        )
+        assert ok is True and mid
+        assert calls == ["https://api.sms.ir/v1/send/verify"]
+        row = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[mid], limit=1)[0]
+        assert row["provider"] == "smsir"
+        assert row["kind"] == kind
+
+    def test_env_listing_only_patient_kinds_enables_those_kinds(self, monkeypatch):
+        monkeypatch.setattr(
+            settings,
+            "SMS_IR_ALLOWED_KINDS",
+            "booked,confirm_request,cancelled,rescheduled",
+        )
+        assert sms.sms_ir_allowed_kinds() == sms.PATIENT_SMS_KINDS
+        assert sms.kind_may_use_smsir("admin_appointment") is False
+        for kind in sms.PATIENT_SMS_KINDS:
+            assert sms.kind_may_use_smsir(kind) is True
+
+    def test_non_hard_allowed_kind_blocked_even_if_listed_in_env(self, monkeypatch):
+        monkeypatch.setattr(settings, "SMS_IR_ALLOWED_KINDS", "admin_appointment,custom,registered")
+        assert sms.sms_ir_allowed_kinds() == frozenset({"admin_appointment"})
+        assert sms.kind_may_use_smsir("custom") is False
+        assert sms.kind_may_use_smsir("registered") is False
+        assert sms.kind_may_use_smsir("admin_appointment") is True
+
+    def test_send_smsir_for_message_rejects_custom_despite_env(self, monkeypatch):
+        monkeypatch.setattr(
+            settings,
+            "SMS_IR_ALLOWED_KINDS",
+            "admin_appointment,booked,custom",
+        )
+        with pytest.raises(RuntimeError, match="not allowlisted|not permitted"):
+            sms.send_smsir_for_message(
+                {
+                    "kind": "custom",
+                    "phone": "09121112233",
+                    "body": "promo",
+                    "patient_id": None,
+                    "appointment_id": None,
+                }
+            )
 
     def test_send_smsir_for_message_rejects_non_allowlisted_kind(self, monkeypatch):
         monkeypatch.setattr(settings, "SMS_IR_ALLOWED_KINDS", "admin_appointment")
