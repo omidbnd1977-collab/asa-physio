@@ -258,7 +258,7 @@ REGISTER_BODY = """
     <div class="field">
       <input type="url" id="mri_url" name="mri_url" placeholder=" " maxlength="500" dir="ltr" style="text-align:left">
       <label for="mri_url">لینک MRI <span class="muted">(اختیاری)</span></label>
-      <p class="hint">فعلاً فقط لینک MRI دریافت می‌شود؛ آپلود مستقیم در فرم ثبت‌نام وجود ندارد.</p>
+      <p class="hint">می‌توانید لینک MRI بدهید یا فایل را در کادر زیر بارگذاری کنید.</p>
       <p class="err-msg" id="e-mri_url"></p>
     </div>
 
@@ -268,12 +268,20 @@ REGISTER_BODY = """
       <p class="err-msg" id="e-orthopedist"></p>
     </div>
 
-    <label class="filebox" id="fileBox" for="meds_photo">
-      <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5M12 3v12"/></svg>
-      <b id="fileLabel">ارسال عکس داروهای مصرفی</b>
-      <span id="fileHint">عکس یا PDF — حداکثر ۲ مگابایت (اختیاری)</span>
-      <input type="file" id="meds_photo" name="meds_photo" accept="image/jpeg,image/png,image/webp,application/pdf">
-    </label>
+    <div class="grid2" style="margin-top:16px">
+      <label class="filebox" id="mriBox" for="mri_file">
+        <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 15l5-5 4 4 3-3 6 6"/><circle cx="9" cy="8" r="1.4"/></svg>
+        <b id="mriLabel">ارسال تصاویر MRI</b>
+        <span id="mriHint">عکس، PDF، DICOM یا ZIP — حداکثر ۵۰ مگابایت (اختیاری)</span>
+        <input type="file" id="mri_file" name="mri_file" accept=".dcm,.dicom,.ima,.zip,application/dicom,application/zip,image/jpeg,image/png,image/webp,application/pdf">
+      </label>
+      <label class="filebox" id="fileBox" for="meds_photo">
+        <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5M12 3v12"/></svg>
+        <b id="fileLabel">ارسال عکس داروهای مصرفی</b>
+        <span id="fileHint">عکس یا PDF — حداکثر ۲ مگابایت (اختیاری)</span>
+        <input type="file" id="meds_photo" name="meds_photo" accept="image/jpeg,image/png,image/webp,application/pdf">
+      </label>
+    </div>
     <p class="hint" id="fileDraftHint" style="margin-top:8px">به‌دلیل محدودیت مرورگر، فایل انتخاب‌شده در پیش‌نویس ذخیره نمی‌شود؛ اگر صفحه را ترک کنید باید دوباره انتخاب شود.</p>
 
     <div class="field" style="margin-top:16px">
@@ -361,16 +369,16 @@ function showRegStep(n){
   // Keep draft field values in sync; step is never restored on reload.
   saveDraft();
 }
-function wireFile(inputId,boxId,labelId,hintId,idleLabel){
+function wireFile(inputId,boxId,labelId,hintId,idleLabel,maxBytes=2*1024*1024,helpText='عکس یا PDF — حداکثر ۲ مگابایت (اختیاری)'){
   const inp=document.getElementById(inputId), box=document.getElementById(boxId);
   if(!inp) return inp;
   inp.addEventListener('change',()=>{
     const f=inp.files[0];
     if(!f){box.classList.remove('has');
       document.getElementById(labelId).textContent=idleLabel;
-      document.getElementById(hintId).textContent='عکس یا PDF — حداکثر ۲ مگابایت (اختیاری)';
+      document.getElementById(hintId).textContent=helpText;
       return;}
-    if(f.size>2*1024*1024){inp.value='';flash('حجم عکس داروها نباید بیشتر از ۲ مگابایت باشد.',true);return;}
+    if(f.size>maxBytes){inp.value='';flash('حجم فایل بیشتر از حد مجاز است.',true);return;}
     box.classList.add('has');
     document.getElementById(labelId).textContent='✓ '+f.name;
     document.getElementById(hintId).textContent=faDigits((f.size/1024).toFixed(0))+' کیلوبایت — برای تغییر کلیک کنید';
@@ -378,6 +386,7 @@ function wireFile(inputId,boxId,labelId,hintId,idleLabel){
   return inp;
 }
 const fileInput=wireFile('meds_photo','fileBox','fileLabel','fileHint','ارسال عکس داروهای مصرفی');
+const mriInput=wireFile('mri_file','mriBox','mriLabel','mriHint','ارسال تصاویر MRI',50*1024*1024,'عکس، PDF، DICOM یا ZIP — حداکثر ۵۰ مگابایت (اختیاری)');
 function nidValid(v){
   if(!/^\d{10}$/.test(v)||/^(\d)\1{9}$/.test(v))return false;
   let s=0; for(let i=0;i<9;i++)s+=+v[i]*(10-i);
@@ -420,7 +429,7 @@ $('#regNextBtn').onclick=()=>{
 $('#regBackBtn').onclick=()=>{
   saveDraft();
   if(REG_STEP===2){ showRegStep(1); return; }
-  const hasFile = fileInput && fileInput.files && fileInput.files[0];
+  const hasFile = (fileInput && fileInput.files && fileInput.files[0]) || (mriInput && mriInput.files && mriInput.files[0]);
   if(hasFile && !confirm('فایل انتخاب‌شده با ترک صفحه از بین می‌رود (محدودیت مرورگر). ادامه می‌دهید؟')) return;
   location.href='/booking';
 };
@@ -483,6 +492,7 @@ $('#regForm').addEventListener('submit',async e=>{
     fd.append('consent_version',$('#consent_version').value);
     sessionStorage.setItem('asa_booking_note',$('#note').value.trim());
     if(fileInput&&fileInput.files[0]) fd.append('med_photo',fileInput.files[0]);
+    if(mriInput&&mriInput.files[0]) fd.append('mri_file',mriInput.files[0]);
     const r=await api('/api/portal/register',{method:'POST',body:fd});
     if(!r.ok){
       const err=r.error;
@@ -592,6 +602,7 @@ $('#loginForm').addEventListener('submit',async e=>{
 RESERVE_BODY = """
 <div class="pcard">
   <h1 class="ptitle">انتخاب تاریخ و ساعت مراجعه</h1>
+  <p class="hint" style="margin:0 0 16px"><a href="/api/portal/mri/viewer" style="color:var(--glow)">باز کردن نمایشگر MRI پرونده ←</a></p>
   <p class="psub">
     کلینیک هر روز از ساعت <b>۱۶:۰۰ تا ۲۲:۰۰</b> فعال است و هر نوبت ۹۰ دقیقه است.
     ساعت‌هایی که کم‌رنگ هستند پر شده‌اند و قابل انتخاب نیستند.

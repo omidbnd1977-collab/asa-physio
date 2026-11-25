@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import io
 import pathlib
 import secrets
+import zipfile
 
 from fastapi import UploadFile
 
@@ -31,6 +33,95 @@ MAGIC = {
     b"%PDF-": "pdf",
 }
 
+# MRI ZIP limits — injected into the private viewer so browser checks stay identical.
+MRI_ZIP_MAX_ENTRIES = 1000
+MRI_ZIP_MAX_UNCOMPRESSED = 500 * 1024 * 1024
+MRI_ZIP_MAX_RATIO = 100  # compressed:uncompressed ceiling against zip bombs
+_ZIP_ENCRYPT_FLAG = 0x1
+_ZIP_UNIX_SYMLINK = 0o120000
+_ZIP_ALLOWED_COMPRESS = {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
+
+
+def _zip_entry_path_ok(name: str) -> bool:
+    path = name.replace("\\", "/")
+    if not path or path.startswith("/") or path.startswith("../") or "/../" in f"/{path}/":
+        return False
+    if ".." in pathlib.PurePosixPath(path).parts:
+        return False
+    # Reject Windows drive paths (e.g. C:/...).
+    return not (len(path) >= 2 and path[1] == ":" and path[0].isalpha())
+
+
+def _zip_entry_is_symlink(info: zipfile.ZipInfo) -> bool:
+    # Unix mode lives in the high 16 bits of external_attr when create_system == 3.
+    if info.create_system != 3:
+        return False
+    mode = (info.external_attr >> 16) & 0o170000
+    return mode == _ZIP_UNIX_SYMLINK
+
+
+def _validate_mri_zip(raw: bytes) -> None:
+    """Reject Zip Slip, encryption, symlinks, bombs — using central-directory sizes only."""
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(raw))
+    except zipfile.BadZipFile as exc:
+        raise BadRequest(
+            "فایل ZIP معتبر نیست.",
+            fields={"mri_file": "ZIP نامعتبر"},
+        ) from exc
+    with zf:
+        infos = [i for i in zf.infolist() if not i.is_dir()]
+        if len(infos) > MRI_ZIP_MAX_ENTRIES:
+            raise BadRequest(
+                "تعداد فایل‌های داخل ZIP بیش از حد مجاز است.",
+                fields={"mri_file": "ZIP بیش از حد شلوغ است"},
+            )
+        total = 0
+        for info in infos:
+            name = info.filename.replace("\\", "/")
+            if not _zip_entry_path_ok(name):
+                raise BadRequest(
+                    "مسیر فایل داخل ZIP مجاز نیست.",
+                    fields={"mri_file": "مسیر ZIP نامعتبر"},
+                )
+            if info.flag_bits & _ZIP_ENCRYPT_FLAG:
+                raise BadRequest(
+                    "ZIP رمزگذاری‌شده پشتیبانی نمی‌شود.",
+                    fields={"mri_file": "ZIP رمزگذاری‌شده"},
+                )
+            if _zip_entry_is_symlink(info):
+                raise BadRequest(
+                    "پیوند نمادین داخل ZIP مجاز نیست.",
+                    fields={"mri_file": "symlink غیرمجاز"},
+                )
+            if info.compress_type not in _ZIP_ALLOWED_COMPRESS:
+                raise BadRequest(
+                    "روش فشرده‌سازی ZIP پشتیبانی نمی‌شود.",
+                    fields={"mri_file": "compress غیرمجاز"},
+                )
+            # Central-directory sizes must be present and non-negative before any extract.
+            if not isinstance(info.file_size, int) or not isinstance(info.compress_size, int):
+                raise BadRequest(
+                    "metadata فایل ZIP نامعتبر است.",
+                    fields={"mri_file": "ZIP بدون اندازه معتبر"},
+                )
+            if info.file_size < 0 or info.compress_size < 0:
+                raise BadRequest(
+                    "فایل ZIP معتبر نیست.",
+                    fields={"mri_file": "ZIP نامعتبر"},
+                )
+            if info.compress_size > 0 and info.file_size > info.compress_size * MRI_ZIP_MAX_RATIO:
+                raise BadRequest(
+                    "نسبت فشرده‌سازی ZIP بیش از حد مجاز است.",
+                    fields={"mri_file": "ZIP مشکوک"},
+                )
+            total += info.file_size
+            if total > MRI_ZIP_MAX_UNCOMPRESSED:
+                raise BadRequest(
+                    "حجم بازشده ZIP بیش از حد مجاز است.",
+                    fields={"mri_file": "ZIP بیش از حد بزرگ است"},
+                )
+
 
 def _now() -> dt.datetime:
     return dt.datetime.now(dt.UTC)
@@ -50,22 +141,42 @@ def save_bytes(raw: bytes, prefix: str, *, max_bytes: int | None = None) -> str:
         raise PayloadTooLarge(f"حجم فایل بیشتر از {limit // (1024 * 1024)} مگابایت است.")
     if not raw:
         return ""
+    # Detect supported formats from their actual signatures; never trust filenames.
     kind = None
-    for magic, name in MAGIC.items():
-        if raw.startswith(magic):
-            kind = name
-            break
+    if raw.startswith(b"PK\x03\x04"):
+        kind = "zip"
+    elif len(raw) >= 132 and raw[128:132] == b"DICM":
+        kind = "dicom"
+    else:
+        for magic, name in MAGIC.items():
+            if raw.startswith(magic):
+                kind = name
+                break
     if kind == "webp" and raw[8:12] != b"WEBP":
         kind = None
-    if kind not in ALLOWED_IMAGE and kind != "pdf":
+    # DICOM/ZIP are accepted only for the MRI field, never for medication photos.
+    if kind in {"dicom", "zip"} and not prefix.startswith("mri-"):
+        kind = None
+    if kind not in ALLOWED_IMAGE and kind not in {"pdf", "dicom", "zip"}:
+        field = "mri_file" if prefix.startswith("mri-") else "med_photo"
         raise BadRequest(
-            "فقط عکس (JPG، PNG، WEBP) یا فایل PDF قابل ارسال است.",
-            fields={"med_photo": "نوع فایل مجاز نیست"},
+            "فقط عکس (JPG، PNG، WEBP)، PDF، فایل DICOM یا ZIP حاوی تصاویر MRI قابل ارسال است.",
+            fields={field: "نوع فایل مجاز نیست"},
         )
-    ext = {"jpeg": ".jpg", "png": ".png", "webp": ".webp", "pdf": ".pdf"}[kind]
+    if kind == "zip":
+        _validate_mri_zip(raw)
+    ext = {
+        "jpeg": ".jpg",
+        "png": ".png",
+        "webp": ".webp",
+        "pdf": ".pdf",
+        "dicom": ".dcm",
+        "zip": ".zip",
+    }[kind]
     name = f"{prefix}-{hashlib.sha256(raw).hexdigest()[:16]}{ext}"
     settings.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     (settings.UPLOAD_DIR / name).write_bytes(raw)
+    # Never log filenames or DICOM tags — only kind + size fingerprint.
     info("upload.saved", kind=kind, bytes=len(raw))
     return name
 
