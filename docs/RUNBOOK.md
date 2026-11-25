@@ -19,8 +19,11 @@ make serve                        # اجرا روی PORT
 |---|---|
 | انتشار | `make deploy ENV=production` |
 | بازگشت به نسخه‌ی قبل | `make rollback` |
-| پشتیبان‌گیری | `make backup` |
-| بازیابی | `ops/restore.sh data/backups/asa-<stamp>.db.gz` |
+| پشتیبان‌گیری | `make backup` (باندل DB+uploads در `data/backups/asa-<stamp>/`) |
+| بازیابی آزمایشی | `ops/restore.sh data/backups/asa-<stamp>` |
+| Promote روی Production | **اول توقف دستی سرویس** → بررسی restore آزمایشی → `--promote` → بررسی → **راه‌اندازی دستی سرویس**. Promote روی DB در حال استفاده ممنوع است؛ اسکریپت‌ها stop/start نمی‌کنند. |
+| بازیابی روی مسیر زنده | پس از توقف سرویس و بررسی: `ops/restore.sh data/backups/asa-<stamp> <dir> --promote` |
+| جزئیات Backup/Restore | `docs/BACKUP-RESTORE.md` |
 | تست‌ها | `make test` |
 | سنجش گلوگاه | `make loadtest` |
 

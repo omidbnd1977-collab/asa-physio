@@ -21,8 +21,10 @@ deploy:          ## one-command deploy (ENV=staging|production)
 	ops/deploy.sh $(or $(ENV),staging)
 rollback:        ## roll back to the previous release
 	ops/rollback.sh
-backup:          ## take a verified backup
+backup:          ## take a verified backup bundle (DB + uploads)
 	ops/backup.sh
+restore:         ## restore bundle to experimental dir (DEST=... optional)
+	ops/restore.sh $(BACKUP) $(DEST)
 loadtest:        ## measure the bottleneck
 	python3 ops/loadtest.py
 seed:            ## create the first admin user
