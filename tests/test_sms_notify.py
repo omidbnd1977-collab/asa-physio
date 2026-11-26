@@ -910,11 +910,13 @@ class TestSmsIrVerifyTemplates:
                 "appointment_id": appt["id"],
             }
         )
-        # Reschedule reuses booked Verify template so DATE/TIME/CODE are present.
-        assert tid == 371089
+        # Dedicated reschedule template; booked mapping stays 371089 alone.
+        assert tid == sms.SMSIR_TEMPLATE_RESCHEDULED == 400294
+        assert sms.VERIFY_TEMPLATES["booked"] == sms.SMSIR_TEMPLATE_BOOKED == 371089
         by_name = {p["name"]: p["value"] for p in params}
         assert by_name["FULLNAME"] == "بیمار ساختگی"
         assert "DATE" in by_name and "TIME" in by_name and by_name["CODE"] == appt["public_id"]
+        assert set(by_name) == {"FULLNAME", "DATE", "TIME", "CODE"}
 
         _, ok = sms.send_now(
             "09121110002",
