@@ -380,27 +380,41 @@ class SmsInboundIn(BaseModel):
 
 
 class SmsIrDivertIn(BaseModel):
-    """SMS.ir «انتقال دریافتی‌ها به URL» query/form fields (aliases allowed)."""
+    """SMS.ir «انتقال دریافتی‌ها به URL» query/form fields (aliases allowed).
 
-    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+    Official SMS.ir placeholders: ``from=$FROM$``, ``to=$TO$``, ``text=$TEXT$``,
+    ``date=$DATETIME$``. Legacy aliases (``mobile`` / ``messageText`` / …) remain.
+    """
+
+    model_config = ConfigDict(
+        extra="ignore",
+        str_strip_whitespace=True,
+        populate_by_name=True,
+    )
 
     mobile: str | None = Field(default=None, max_length=20)
     Mobile: str | None = Field(default=None, max_length=20)
     phone: str | None = Field(default=None, max_length=20)
+    # Official divert key is ``from`` (Python keyword → attribute ``from_``).
+    from_: str | None = Field(default=None, alias="from", max_length=20)
     messageText: str | None = Field(default=None, max_length=300)
     MessageText: str | None = Field(default=None, max_length=300)
     message: str | None = Field(default=None, max_length=300)
     body: str | None = Field(default=None, max_length=300)
+    text: str | None = Field(default=None, max_length=300)
+    # Optional official keys; not required for attendance matching.
+    to: str | None = Field(default=None, max_length=20)
+    date: str | None = Field(default=None, max_length=40)
     receiveReturnId: str | None = Field(default=None, max_length=64)
     ReceiveReturnId: str | None = Field(default=None, max_length=64)
     provider_msg_id: str | None = Field(default=None, max_length=64)
 
     def resolved_phone(self) -> str:
-        raw = self.mobile or self.Mobile or self.phone or ""
+        raw = self.mobile or self.Mobile or self.phone or self.from_ or ""
         return BookingIn._phone(raw)
 
     def resolved_body(self) -> str:
-        raw = self.messageText or self.MessageText or self.message or self.body or ""
+        raw = self.messageText or self.MessageText or self.message or self.body or self.text or ""
         return clean_text(raw, max_len=300)
 
     def resolved_provider_msg_id(self) -> str | None:
