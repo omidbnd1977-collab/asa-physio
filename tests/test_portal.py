@@ -1225,11 +1225,43 @@ class TestDoctorPanel:
         )
         assert r.status_code == 200, r.text
         assert r.json()["sms_sent"]
+        assert r.json()["sms_status"] == "sent"
         sms = repo.select(SYSTEM, "sms_messages", where="kind = 'rescheduled'")[0]
         assert "16:00" in sms["body"] and "20:30" in sms["body"]
         g = owner_client.get("/api/portal/slots?date=" + tomorrow()).json()
         assert next(s for s in g["slots"] if s["time"] == "16:00")["free"] == 10
         assert next(s for s in g["slots"] if s["time"] == "20:30")["free"] == 9
+
+    def test_reschedule_without_sms_consent_sends_nothing(self, owner_client, client):
+        from api import repo
+        from api.policies import SYSTEM
+
+        r = client.post(
+            "/api/portal/register",
+            data=reg_form(national_id=NID_C, sms_service_consent="false"),
+            files={"med_photo": ("m.png", io.BytesIO(PNG), "image/png")},
+        )
+        assert r.status_code == 201, r.text
+        book = client.post(
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
+        ).json()
+        moved = owner_client.patch(
+            f"/api/admin/appointments/{book['code']}/move",
+            json={"slot_date": tomorrow(), "slot_time": "20:30", "notify": True},
+        )
+        assert moved.status_code == 200, moved.text
+        assert moved.json()["sms_sent"] is False
+        assert moved.json()["sms_status"] == "suppressed"
+        pid = repo.select(SYSTEM, "patients", where="national_id = ?", params=[NID_C])[0]["id"]
+        assert (
+            repo.count(
+                SYSTEM,
+                "sms_messages",
+                where="patient_id = ? AND kind = 'rescheduled'",
+                params=[pid],
+            )
+            == 0
+        )
 
     def test_a_failed_reschedule_leaves_the_original_intact(self, owner_client, patient):
         from api import repo, scheduling
@@ -1615,9 +1647,128 @@ class TestDoctorPanel:
         )
         assert r.status_code == 201, r.text
         assert r.json()["sms_sent"]
+        assert r.json()["sms_status"] == "sent"
         appt = repo.select(SYSTEM, "appointments", where="kind = 'followup'")[0]
         assert appt["booked_by"] == "staff" and appt["slot_time"] == "19:00"
-        assert repo.select(SYSTEM, "sms_messages", where="kind = 'followup'")
+        # Live path reuses allowlisted kind `booked` (no dedicated followup template).
+        sms_rows = repo.select(
+            SYSTEM,
+            "sms_messages",
+            where="patient_id = ? AND kind = 'booked' AND appointment_id = ?",
+            params=[p["id"], appt["id"]],
+        )
+        assert len(sms_rows) == 1
+        assert "19:00" in sms_rows[0]["body"]
+        assert "جلسه بعدی" in sms_rows[0]["body"]
+
+    def test_next_session_without_sms_consent_sends_nothing(self, owner_client, client):
+        from api import repo
+        from api.policies import SYSTEM
+
+        r = client.post(
+            "/api/portal/register",
+            data=reg_form(national_id=NID_C, sms_service_consent="false"),
+            files={"med_photo": ("m.png", io.BytesIO(PNG), "image/png")},
+        )
+        assert r.status_code == 201, r.text
+        p = repo.select(SYSTEM, "patients", where="national_id = ?", params=[NID_C])[0]
+        follow = owner_client.post(
+            f"/api/admin/patients/{p['public_id']}/followup",
+            json={"slot_date": tomorrow(), "slot_time": "19:00", "notify": True},
+        )
+        assert follow.status_code == 201, follow.text
+        assert follow.json()["sms_sent"] is False
+        assert follow.json()["sms_status"] == "suppressed"
+        assert (
+            repo.count(
+                SYSTEM,
+                "sms_messages",
+                where="patient_id = ? AND kind = 'booked'",
+                params=[p["id"]],
+            )
+            == 0
+        )
+
+    def test_manual_remind_with_consent_sends_confirm_request(self, owner_client, patient):
+        from api import repo
+        from api.policies import SYSTEM
+
+        book = owner_client.post(
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
+        ).json()
+        code = book["code"]
+        r = owner_client.post(f"/api/admin/appointments/{code}/remind")
+        assert r.status_code == 200, r.text
+        assert r.json()["sms_sent"] is True
+        assert r.json()["sms_status"] == "sent"
+        rows = repo.select(SYSTEM, "sms_messages", where="kind = 'confirm_request'")
+        assert len(rows) == 1
+        patient_row = repo.select(SYSTEM, "patients")[0]
+        assert rows[0]["phone"] == patient_row["phone"]
+        assert rows[0]["patient_id"] == patient_row["id"]
+        # Duplicate click is blocked (claim still held after successful send).
+        again = owner_client.post(f"/api/admin/appointments/{code}/remind")
+        assert again.status_code == 409
+
+    def test_manual_remind_without_consent_is_honest(self, owner_client, client):
+        from api import repo
+        from api.policies import SYSTEM
+
+        r = client.post(
+            "/api/portal/register",
+            data=reg_form(national_id=NID_C, sms_service_consent="false"),
+            files={"med_photo": ("m.png", io.BytesIO(PNG), "image/png")},
+        )
+        assert r.status_code == 201, r.text
+        book = client.post(
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "17:30"}
+        ).json()
+        remind = owner_client.post(f"/api/admin/appointments/{book['code']}/remind")
+        assert remind.status_code == 200, remind.text
+        assert remind.json()["sms_sent"] is False
+        assert remind.json()["sms_status"] == "suppressed"
+        assert remind.json()["sms_detail"] == "service_sms_consent_required"
+        pid = repo.select(SYSTEM, "patients", where="national_id = ?", params=[NID_C])[0]["id"]
+        assert (
+            repo.count(
+                SYSTEM,
+                "sms_messages",
+                where="patient_id = ? AND kind = 'confirm_request'",
+                params=[pid],
+            )
+            == 0
+        )
+        appt = repo.select(SYSTEM, "appointments", where="public_id = ?", params=[book["code"]])[0]
+        assert appt["confirm_sent_at"] is None  # claim released for retry
+
+    def test_manual_remind_reports_logged_when_kind_not_allowlisted(
+        self, owner_client, patient, monkeypatch
+    ):
+        from api import repo, sms
+        from api.config import settings
+        from api.policies import SYSTEM
+
+        monkeypatch.setattr(settings, "SMS_PROVIDER", "smsir")
+        monkeypatch.setattr(settings, "SMS_IR_ALLOWED_KINDS", "admin_appointment")
+        monkeypatch.setattr(settings, "SMS_API_KEY", "panel-key")
+        monkeypatch.setattr(settings, "SMS_SENDER", "300000000000")
+        calls: list[str] = []
+
+        def fake_post(*_a, **_k):
+            calls.append("hit")
+            raise AssertionError("sms.ir HTTP must not be called for non-allowlisted kind")
+
+        monkeypatch.setattr(sms.httpx, "post", fake_post)
+        book = owner_client.post(
+            "/api/portal/appointments", json={"slot_date": tomorrow(), "slot_time": "16:00"}
+        ).json()
+        r = owner_client.post(f"/api/admin/appointments/{book['code']}/remind")
+        assert r.status_code == 200, r.text
+        assert r.json()["sms_sent"] is False
+        assert r.json()["sms_status"] == "logged"
+        assert calls == []
+        row = repo.select(SYSTEM, "sms_messages", where="kind = 'confirm_request'")[0]
+        assert row["status"] == "logged" and row["provider"] == "file"
 
     def test_staff_writes_need_csrf(self, owner_client, patient):
         book = owner_client.post(

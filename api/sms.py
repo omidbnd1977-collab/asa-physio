@@ -8,6 +8,7 @@ it costs anything and recorded *after* it succeeds.
 from __future__ import annotations
 
 import datetime as dt
+from typing import Any
 
 import httpx
 
@@ -179,7 +180,10 @@ VERIFY_TEMPLATES: dict[str, int] = {
     "booked": SMSIR_TEMPLATE_BOOKED,
     "confirm_request": SMSIR_TEMPLATE_CONFIRM,
     "cancelled": SMSIR_TEMPLATE_STATUS,
-    "rescheduled": SMSIR_TEMPLATE_STATUS,
+    # Reschedule must carry the new DATE/TIME. Template 730888 (STATUS) only has
+    # FULLNAME in the panel mapping from Issue #27, so we reuse the known booked
+    # Verify template (371089) — no new template id is invented.
+    "rescheduled": SMSIR_TEMPLATE_BOOKED,
 }
 
 # Operational patient SMS kinds (confirm / remind / cancel / reschedule).
@@ -308,7 +312,18 @@ def build_verify_parameters(kind: str, *, patient: dict, appt: dict | None) -> l
             verify_param("DATE", date_s),
             verify_param("TIME", time_s),
         ]
-    if kind in {"cancelled", "rescheduled"}:
+    if kind == "rescheduled":
+        # New slot only — same DATE/TIME/CODE shape as booked (template 371089).
+        if not appt:
+            raise RuntimeError("rescheduled verify requires appointment row")
+        date_s, time_s = appointment_date_time(appt)
+        return [
+            verify_param("FULLNAME", name),
+            verify_param("DATE", date_s),
+            verify_param("TIME", time_s),
+            verify_param("CODE", str(appt.get("public_id") or "")),
+        ]
+    if kind == "cancelled":
         return [verify_param("FULLNAME", name)]
     raise RuntimeError(f"no SMS.ir verify mapping for kind {kind!r}")
 
@@ -810,6 +825,33 @@ def send_now(
     if not mid:
         return 0, False
     return mid, deliver(mid)
+
+
+def describe_send(message_id: int, sent: bool) -> dict[str, Any]:
+    """Honest API fields for staff UI — never includes phone or patient PII."""
+    if not message_id:
+        return {
+            "sms_sent": False,
+            "sms_id": 0,
+            "sms_status": "suppressed",
+            "sms_detail": "service_sms_consent_required",
+        }
+    rows = repo.select(SYSTEM, "sms_messages", where="id = ?", params=[message_id], limit=1)
+    if not rows:
+        return {
+            "sms_sent": bool(sent),
+            "sms_id": message_id,
+            "sms_status": "unknown",
+            "sms_detail": "",
+        }
+    row = rows[0]
+    detail = str(row.get("last_error") or "").strip()[:200]
+    return {
+        "sms_sent": bool(sent),
+        "sms_id": message_id,
+        "sms_status": str(row.get("status") or ""),
+        "sms_detail": detail,
+    }
 
 
 def retry_failed(limit: int = 20) -> dict[str, int]:

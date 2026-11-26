@@ -341,15 +341,21 @@ async def move(
         kind="rescheduled",
         appointment_id=new["id"],
     )
-    sent = False
+    sms_meta: dict[str, Any] = {
+        "sms_sent": False,
+        "sms_id": 0,
+        "sms_status": "skipped",
+        "sms_detail": "notify_disabled",
+    }
     if data.notify:
-        _, sent = sms.send_now(
+        mid, sent = sms.send_now(
             patient["phone"],
             sms.body_rescheduled(patient["full_name"], old_when, new_when),
             "rescheduled",
             patient_id=patient["id"],
             appointment_id=new["id"],
         )
+        sms_meta = sms.describe_send(mid, sent)
     cache.purge("admin:appointments")
     moved_at = _now()
     audit.record(
@@ -374,10 +380,16 @@ async def move(
             "moved_at": moved_at,
         },
     )
-    info("doctor.moved", from_id=old["public_id"], to_id=new["public_id"], sms_sent=sent)
+    info(
+        "doctor.moved",
+        from_id=old["public_id"],
+        to_id=new["public_id"],
+        sms_sent=sms_meta["sms_sent"],
+        sms_status=sms_meta["sms_status"],
+    )
     return {
         "ok": True,
-        "sms_sent": sent,
+        **sms_meta,
         "code": new["public_id"],
         "old": old_when,
         "new": new_when,
@@ -411,9 +423,16 @@ async def followup(
         kind="followup",
         appointment_id=appt["id"],
     )
-    sent = welcomed = False
+    welcomed = False
+    sms_meta: dict[str, Any] = {
+        "sms_sent": False,
+        "sms_id": 0,
+        "sms_status": "skipped",
+        "sms_detail": "notify_disabled",
+    }
     if data.notify:
         if gap:
+            # welcome_back is outside SMSIR_HARD_ALLOWED_KINDS — local sink only.
             _, welcomed = sms.send_now(
                 patient["phone"],
                 sms.body_welcome_back(patient["full_name"], when, gap),
@@ -421,13 +440,17 @@ async def followup(
                 patient_id=patient["id"],
                 appointment_id=appt["id"],
             )
-        _, sent = sms.send_now(
+        # Next-session notify reuses allowlisted kind `booked` + Verify template
+        # 371089 (FULLNAME/DATE/TIME/CODE). Kind `followup` has no panel template
+        # and is not in SMSIR_HARD_ALLOWED_KINDS — inventing one is forbidden.
+        mid, sent = sms.send_now(
             patient["phone"],
             sms.body_followup(patient["full_name"], when),
-            "followup",
+            "booked",
             patient_id=patient["id"],
             appointment_id=appt["id"],
         )
+        sms_meta = sms.describe_send(mid, sent)
     from . import notify
 
     # Manager alert is independent of patient-notify toggle; failures never undo the booking.
@@ -457,7 +480,7 @@ async def followup(
     cache.purge("admin:appointments")
     return {
         "ok": True,
-        "sms_sent": sent,
+        **sms_meta,
         "welcomed_back": welcomed,
         "gap_days": gap,
         "code": appt["public_id"],
@@ -550,14 +573,16 @@ async def remind(public_id: str, request: Request) -> dict[str, Any]:
     )
     if claimed == 0:
         raise Conflict("یادآور تأیید حضور قبلاً برای این نوبت ثبت شده است.")
-    _, sent = sms.send_now(
+    mid, sent = sms.send_now(
         p[0]["phone"],
         sms.body_confirm(p[0]["full_name"], scheduling.describe(appt)),
         "confirm_request",
         patient_id=p[0]["id"],
         appointment_id=appt["id"],
     )
+    sms_meta = sms.describe_send(mid, sent)
     if not sent:
+        # Release claim so a later retry (or allowlist/consent fix) can resend.
         repo.update(
             SYSTEM,
             "appointments",
@@ -566,7 +591,13 @@ async def remind(public_id: str, request: Request) -> dict[str, Any]:
             params=[appt["id"]],
         )
     cache.purge("admin:appointments")
-    return {"ok": True, "sms_sent": sent}
+    info(
+        "doctor.remind",
+        appointment_id=appt["id"],
+        sms_sent=sms_meta["sms_sent"],
+        sms_status=sms_meta["sms_status"],
+    )
+    return {"ok": True, **sms_meta}
 
 
 # --------------------------------------------------------------------------

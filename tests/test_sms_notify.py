@@ -910,8 +910,11 @@ class TestSmsIrVerifyTemplates:
                 "appointment_id": appt["id"],
             }
         )
-        assert tid == 730888
-        assert params == [{"name": "FULLNAME", "value": "بیمار ساختگی"}]
+        # Reschedule reuses booked Verify template so DATE/TIME/CODE are present.
+        assert tid == 371089
+        by_name = {p["name"]: p["value"] for p in params}
+        assert by_name["FULLNAME"] == "بیمار ساختگی"
+        assert "DATE" in by_name and "TIME" in by_name and by_name["CODE"] == appt["public_id"]
 
         _, ok = sms.send_now(
             "09121110002",

@@ -1501,10 +1501,21 @@ function setApptStatus(id,status,btn,notify){
     loadAppts(); if(ROLE==='owner') loadMetrics();
   });
 }
+function smsToast(okLabel, data){
+  if(data && data.sms_sent){ toast(okLabel+' ✓'); return; }
+  const st=(data&&data.sms_status)||'';
+  const detail=(data&&data.sms_detail)||'';
+  if(st==='suppressed') toast('رضایت پیامکی بیمار فعال نیست؛ پیامک ارسال نشد.',false);
+  else if(st==='logged') toast('ارسال زنده انجام نشد (خارج از allowlist یا sink محلی).',false);
+  else if(st==='failed') toast('ارسال ناموفق'+(detail?': '+detail:''),false);
+  else if(st==='skipped') toast('پیامک ارسال نشد (اعلان خاموش بود).',false);
+  else toast('ارسال نشد'+(detail?': '+detail:''),false);
+}
 function remindOne(id,btn){
   return withBtn(btn,'…',async()=>{
     const r=await api('/api/admin/appointments/'+id+'/remind',{method:'POST'});
-    toast(r.ok?(r.data.sms_sent?'یادآوری ارسال شد ✓':'ارسال نشد'):r.error.message,r.ok&&r.data.sms_sent);
+    if(!r.ok) return toast(r.error.message,false);
+    smsToast('یادآوری ارسال شد', r.data);
     loadAppts();
   });
 }
@@ -1584,8 +1595,9 @@ $('#dlgOk').onclick=async function(){
     }
     if(!r.ok) return toast(r.error.message,false);
     dlg.close();
-    toast((DLG_MODE==='move'?'زمان تغییر کرد':'جلسه بعدی ثبت شد')+
-          (r.data.sms_sent?' و پیامک رفت ✓':''));
+    const base=DLG_MODE==='move'?'زمان تغییر کرد':'جلسه بعدی ثبت شد';
+    if(r.data.sms_sent) toast(base+' و پیامک رفت ✓');
+    else { toast(base+' ✓'); smsToast('پیامک', r.data); }
     loadAppts(); loadPatients();
   });
 };
