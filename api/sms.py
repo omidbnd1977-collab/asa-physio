@@ -174,16 +174,15 @@ SMSIR_TEMPLATE_ADMIN_NEW = 753761  # FULLNAME PHONE DATE TIME CODE → manager
 SMSIR_TEMPLATE_BOOKED = 371089  # FULLNAME DATE TIME CODE → patient
 SMSIR_TEMPLATE_CONFIRM = 666137  # FULLNAME DATE TIME → patient (reply 1/2)
 SMSIR_TEMPLATE_STATUS = 730888  # FULLNAME → patient (status change)
+# Dedicated reschedule Verify template (panel-confirmed). Booked stays 371089.
+SMSIR_TEMPLATE_RESCHEDULED = 400294  # FULLNAME DATE TIME CODE → patient
 
 VERIFY_TEMPLATES: dict[str, int] = {
     "admin_appointment": SMSIR_TEMPLATE_ADMIN_NEW,
     "booked": SMSIR_TEMPLATE_BOOKED,
     "confirm_request": SMSIR_TEMPLATE_CONFIRM,
     "cancelled": SMSIR_TEMPLATE_STATUS,
-    # Reschedule must carry the new DATE/TIME. Template 730888 (STATUS) only has
-    # FULLNAME in the panel mapping from Issue #27, so we reuse the known booked
-    # Verify template (371089) — no new template id is invented.
-    "rescheduled": SMSIR_TEMPLATE_BOOKED,
+    "rescheduled": SMSIR_TEMPLATE_RESCHEDULED,
 }
 
 # Operational patient SMS kinds (confirm / remind / cancel / reschedule).
@@ -313,7 +312,9 @@ def build_verify_parameters(kind: str, *, patient: dict, appt: dict | None) -> l
             verify_param("TIME", time_s),
         ]
     if kind == "rescheduled":
-        # New slot only — same DATE/TIME/CODE shape as booked (template 371089).
+        # New appointment row only. Parameter names must match the panel template
+        # keys (currently same shape as booked: FULLNAME / DATE / TIME / CODE).
+        # If the approved reschedule template uses different keys, update here only.
         if not appt:
             raise RuntimeError("rescheduled verify requires appointment row")
         date_s, time_s = appointment_date_time(appt)
