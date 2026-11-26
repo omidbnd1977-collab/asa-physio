@@ -945,9 +945,10 @@ async def sms_inbound_smsir(request: Request, inbound_token: str) -> dict[str, A
 
     Divert URL shape (path token, no query secret)::
 
-        /api/sms/inbound/smsir/<SMS_INBOUND_SECRET>?mobile=…&messageText=…&receiveReturnId=…
+        /api/sms/inbound/smsir/<SMS_INBOUND_SECRET>?from=$FROM$&to=$TO$&text=$TEXT$&date=$DATETIME$
 
-    Does not activate any real webhook by itself.
+    Legacy ``mobile`` / ``messageText`` query names remain accepted. Does not
+    activate any real webhook by itself.
     """
     # Reject legacy ?secret= so credentials are not accepted from the query string.
     if "secret" in request.query_params:

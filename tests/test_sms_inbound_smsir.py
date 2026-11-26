@@ -285,6 +285,99 @@ class TestSmsIrDivertEndpoint:
         assert repo.select(SYSTEM, "appointments")[0]["attendance"] == "coming"
         assert len(repo.select(SYSTEM, "sms_inbound")) == 1
 
+    def test_official_from_text_confirm_one(self, client, patient, monkeypatch):
+        """SMS.ir official divert: from=$FROM$&text=$TEXT$ (+ optional to/date)."""
+        from api import repo
+        from api.config import settings
+        from api.policies import SYSTEM
+
+        monkeypatch.setattr(settings, "SMS_INBOUND_SECRET", "s3cret")
+        _book(client)
+        _mark_confirm_sent()
+        r = client.get(
+            _divert_url(),
+            params={
+                "from": "9121112233",
+                "to": "3000",
+                "text": "1",
+                "date": "1403/01/01 12:00:00",
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["handled"] == "confirmed"
+        assert repo.select(SYSTEM, "appointments")[0]["attendance"] == "coming"
+
+    def test_official_from_text_decline_two(self, client, patient, monkeypatch):
+        from api import repo
+        from api.config import settings
+        from api.policies import SYSTEM
+
+        monkeypatch.setattr(settings, "SMS_INBOUND_SECRET", "s3cret")
+        _book(client)
+        _mark_confirm_sent()
+        r = client.get(
+            _divert_url(),
+            params={"from": "9121112233", "text": "2"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["handled"] == "declined"
+        assert repo.select(SYSTEM, "appointments")[0]["attendance"] == "not_coming"
+
+    def test_official_from_text_without_confirm_stays_ignored(self, client, patient, monkeypatch):
+        from api import repo
+        from api.config import settings
+        from api.policies import SYSTEM
+
+        monkeypatch.setattr(settings, "SMS_INBOUND_SECRET", "s3cret")
+        _book(client)  # no confirm_sent_at → handle_inbound, handled=ignored
+        r = client.get(
+            _divert_url(),
+            params={"from": "9121112233", "text": "1"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["handled"] == "ignored"
+        assert repo.select(SYSTEM, "appointments")[0]["attendance"] == "unknown"
+
+    def test_legacy_mobile_messageText_still_works(self, client, patient, monkeypatch):
+        from api import repo
+        from api.config import settings
+        from api.policies import SYSTEM
+
+        monkeypatch.setattr(settings, "SMS_INBOUND_SECRET", "s3cret")
+        _book(client)
+        _mark_confirm_sent()
+        r = client.get(
+            _divert_url(),
+            params={"mobile": "9121112233", "messageText": "1", "receiveReturnId": "legacy-1"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["handled"] == "confirmed"
+        assert repo.select(SYSTEM, "appointments")[0]["attendance"] == "coming"
+
+    def test_empty_from_rejected(self, client, monkeypatch):
+        from api.config import settings
+
+        monkeypatch.setattr(settings, "SMS_INBOUND_SECRET", "s3cret")
+        r = client.get(_divert_url(), params={"from": "", "text": "1"})
+        assert r.status_code == 400
+
+    def test_missing_phone_fields_rejected(self, client, monkeypatch):
+        from api.config import settings
+
+        monkeypatch.setattr(settings, "SMS_INBOUND_SECRET", "s3cret")
+        r = client.get(_divert_url(), params={"text": "1"})
+        assert r.status_code == 400
+
+    def test_official_params_wrong_token_still_forbidden(self, client, monkeypatch):
+        from api.config import settings
+
+        monkeypatch.setattr(settings, "SMS_INBOUND_SECRET", "s3cret")
+        r = client.get(
+            _divert_url("wrong-token"),
+            params={"from": "9121112233", "text": "1"},
+        )
+        assert r.status_code == 403
+
     def test_divert_invalid_mobile_rejected(self, client, monkeypatch):
         from api.config import settings
 
