@@ -12,7 +12,8 @@ automatic confirmation reminder. It does **not** contain secrets.
 | ~2h before slot | `confirm_request` | `reminders.run_once` / background loop / cron |
 | Staff cancel + notify | `cancelled` | Doctor status patch with `notify=true` |
 | Patient self-cancel | `cancelled` | Portal cancel (best-effort; cancel never rolls back) |
-| Staff reschedule + notify | `rescheduled` | Doctor move with notify |
+| Staff reschedule + notify | `rescheduled` | Doctor move with notify; Verify reuses **booked** template `371089` (DATE/TIME/CODE) because status template `730888` only has FULLNAME |
+| Staff next session + notify | `booked` | Doctor followup reuses allowlisted `booked` + template `371089` (kind `followup` is not hard-allowed and has no panel template) |
 | Registration welcome | `registered` | Queued but **not** live on SMS.ir (hard ceiling) |
 
 Live SMS.ir traffic is allowed only for kinds in:
@@ -92,6 +93,9 @@ Without inbound, `confirm_request` still sends; attendance will not auto-update.
 
 1. Valid SMS.ir API key and line number (panel).
 2. Verify templates already mapped in code (booked / confirm / status / admin).
+   Note: live **reschedule** and **next-session** patient SMS both use the booked
+   Verify template (`371089`) so DATE/TIME reach the patient; a dedicated
+   multi-param “changed/followup” panel template is not configured in code.
 3. Admin notification mobile number.
 4. Inbound divert URL + shared secret.
 5. Explicit approval to leave the webhook sink and enable `REMINDER_BACKGROUND=1`.
